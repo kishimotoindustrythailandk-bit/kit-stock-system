@@ -9,7 +9,7 @@
     {
       "binding": "DB",
       "database_name": "kit-stock-db",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "database_id": "501d0e19-8572-4a8c-ad19-1d2b1346d7d9",
       "migrations_dir": "drizzle"
     }
   ],
