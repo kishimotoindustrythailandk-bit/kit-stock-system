@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vinext build",
-    "deploy": "vinext-cloudflare deploy",
+    "deploy": "vinext deploy",
     "test": "npm run lint && npm run build",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
