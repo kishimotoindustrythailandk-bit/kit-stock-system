@@ -71,7 +71,7 @@ export async function hashPin(pin: string, saltHex?: string) {
     ["deriveBits"],
   );
   const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", hash: "SHA-256", salt, iterations: 160_000 },
+    { name: "PBKDF2", hash: "SHA-256", salt, iterations: 100_000 },
     key,
     256,
   );
