@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1784026649572,
+      "tag": "0000_dark_nemesis",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1784028516914,
+      "tag": "0001_organic_mongoose",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1784082856803,
+      "tag": "0002_condemned_santa_claus",
+      "breakpoints": true
+    }
+  ]
+}
