@@ -2,6 +2,8 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import JsBarcode from "jsbarcode";
+import QRCode from "qrcode";
 
 type Part = {
   id: number;
@@ -119,6 +121,53 @@ function ProductArtwork({ small = false, imageUrl = "" }: { small?: boolean; ima
   );
 }
 
+type BoxTag = {
+  index: number;
+  tagId: string;
+  qty: number;
+  boxType: "full" | "partial";
+};
+
+function PrintableTag({ order, tag }: { order: WorkOrder; tag: BoxTag }) {
+  const [qrDataUrl, setQrDataUrl] = useState("");
+  const barcodeRef = useRef<SVGSVGElement>(null);
+
+  useEffect(() => {
+    void QRCode.toDataURL(tag.tagId, { width: 220, margin: 1, errorCorrectionLevel: "M" }).then(setQrDataUrl);
+    if (barcodeRef.current) {
+      JsBarcode(barcodeRef.current, tag.tagId, {
+        format: "CODE128",
+        displayValue: false,
+        height: 32,
+        margin: 0,
+        width: 1.15,
+      });
+    }
+  }, [tag.tagId]);
+
+  return (
+    <article className={`a4-tag ${tag.boxType}`}>
+      <header><div><span>DELIVERY BOX TAG / ใบติดบ๊อคงาน</span><strong>{tag.boxType === "full" ? "FULL / บ๊อคเต็ม" : "PARTIAL / บ๊อคเศษ"}</strong></div><b>{String(tag.index).padStart(2, "0")}/{String(order.totalPackingQty).padStart(2, "0")}</b></header>
+      <div className="a4-tag-main">
+        <div className="a4-tag-product">
+          {order.imageUrl ? <img src={order.imageUrl} alt={order.partNo} /> : <div className="a4-no-image">NO IMAGE</div>}
+          <div><span>Part No.</span><strong>{order.partNo}</strong><span>Part Name</span><b>{order.partName}</b></div>
+        </div>
+        <div className="a4-tag-qr">{qrDataUrl && <img src={qrDataUrl} alt={`QR ${tag.tagId}`} />}</div>
+      </div>
+      <div className="a4-tag-grid">
+        <div><span>Customer</span><strong>{order.customer}</strong></div>
+        <div><span>Quantity</span><strong>{formatNumber(tag.qty)} PCS</strong></div>
+        <div><span>Lot No.</span><strong>{order.lotNo}</strong></div>
+        <div><span>Delivery</span><strong>{order.deliveryDate} {order.deliveryTime}</strong></div>
+        <div><span>Work Order</span><strong>{order.orderNo}</strong></div>
+        <div><span>Box No.</span><strong>BOX-{String(tag.index).padStart(4, "0")}</strong></div>
+      </div>
+      <div className="a4-tag-barcode"><svg ref={barcodeRef} /><small>{tag.tagId}</small></div>
+    </article>
+  );
+}
+
 export default function StockApp({
   user,
   signOutPath,
@@ -149,6 +198,7 @@ export default function StockApp({
   const [modalSaving, setModalSaving] = useState(false);
   const [modalError, setModalError] = useState("");
   const [receiveNotice, setReceiveNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [tagPrintOpen, setTagPrintOpen] = useState(false);
   const tagInputRef = useRef<HTMLInputElement>(null);
 
   async function loadData() {
@@ -212,6 +262,20 @@ export default function StockApp({
     () => activeOrder ? data.receipts.find((receipt) => receipt.workOrderId === activeOrder.id) : undefined,
     [activeOrder, data.receipts],
   );
+
+  const printableTags = useMemo<BoxTag[]>(() => {
+    if (!activeOrder) return [];
+    return Array.from({ length: activeOrder.totalPackingQty }, (_, offset) => {
+      const index = offset + 1;
+      const isPartial = activeOrder.partialQty > 0 && index === activeOrder.totalPackingQty;
+      return {
+        index,
+        tagId: `${activeOrder.partNo}|${activeOrder.lotNo}|BOX-${String(index).padStart(4, "0")}`,
+        qty: isPartial ? activeOrder.partialQty : activeOrder.packingStandard,
+        boxType: isPartial ? "partial" : "full",
+      };
+    });
+  }, [activeOrder]);
 
   function openOrder(event?: FormEvent) {
     event?.preventDefault();
@@ -598,7 +662,7 @@ export default function StockApp({
                 </article>
 
                 <article className="panel delivery-label">
-                  <div className="delivery-title"><div><span>DELIVERY QR CODE LABEL</span><h3>ใบติดงานส่ง</h3></div><div className="qr-mini">▦</div></div>
+                  <div className="delivery-title"><div><span>DELIVERY QR CODE LABEL</span><h3>ใบติดงานส่ง</h3></div><div className="delivery-title-actions"><button type="button" onClick={() => setTagPrintOpen(true)}>พิมพ์ Tag A4</button><div className="qr-mini">▦</div></div></div>
                   <div className="delivery-fields">
                     <div><span>Customer</span><strong>{activeOrder.customer}</strong></div>
                     <div><span>Packing Standard</span><strong>{activeOrder.packingStandard} ชิ้น/{activeOrder.containerType}</strong></div>
@@ -806,6 +870,22 @@ export default function StockApp({
               <div className="modal-actions"><button type="button" className="secondary" onClick={() => setOrderModalOpen(false)}>ยกเลิก</button><button type="submit" disabled={modalSaving}>{modalSaving ? "กำลังบันทึก…" : "สร้างใบส่งงาน"}</button></div>
             </form>
           </section>
+        </div>
+      )}
+
+      {tagPrintOpen && activeOrder && (
+        <div className="tag-print-modal" role="dialog" aria-modal="true" aria-label="พิมพ์ Tag A4">
+          <div className="tag-print-toolbar">
+            <div><strong>พิมพ์ Tag A4</strong><span>{activeOrder.orderNo} • {printableTags.length} Tag • 8 Tag/หน้า</span></div>
+            <div><button type="button" className="secondary" onClick={() => setTagPrintOpen(false)}>ปิด</button><button type="button" onClick={() => window.print()}>พิมพ์ A4</button></div>
+          </div>
+          <div className="tag-print-preview">
+            {Array.from({ length: Math.ceil(printableTags.length / 8) }, (_, pageIndex) => (
+              <section className="a4-tag-sheet" key={pageIndex}>
+                {printableTags.slice(pageIndex * 8, pageIndex * 8 + 8).map((tag) => <PrintableTag key={tag.tagId} order={activeOrder} tag={tag} />)}
+              </section>
+            ))}
+          </div>
         </div>
       )}
 

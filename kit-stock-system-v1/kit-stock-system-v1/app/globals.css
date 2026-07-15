@@ -315,6 +315,34 @@ td small { color: #96a2af; font-size: 8px; margin-top: 3px; max-width: 230px; ov
 .part-card button { margin-top: 14px; width: 100%; background: #edf5fb; color: #236da9; }
 .mobile-nav { display: none; }
 
+.delivery-title-actions { display: flex; align-items: center; gap: 10px; }
+.delivery-title-actions > button { border: 0; border-radius: 9px; padding: 8px 12px; background: #0e6fae; color: white; font-size: 9px; font-weight: 900; }
+.tag-print-modal { position: fixed; inset: 0; z-index: 200; overflow: auto; background: #dfe7ed; }
+.tag-print-toolbar { position: sticky; top: 0; z-index: 3; min-height: 72px; padding: 13px 24px; display: flex; justify-content: space-between; align-items: center; background: #0b3459; color: white; box-shadow: 0 5px 20px #001b3233; }
+.tag-print-toolbar strong, .tag-print-toolbar span { display: block; }.tag-print-toolbar strong { font-size: 18px; }.tag-print-toolbar span { margin-top: 2px; color: #bdd5e7; font-size: 10px; }
+.tag-print-toolbar > div:last-child { display: flex; gap: 8px; }.tag-print-toolbar button { border: 0; border-radius: 9px; padding: 10px 16px; background: #138bd0; color: white; font-weight: 900; }.tag-print-toolbar button.secondary { background: #dce8f0; color: #234b6b; }
+.tag-print-preview { padding: 24px; display: grid; gap: 24px; }
+.a4-tag-sheet { width: 210mm; min-height: 297mm; margin: auto; padding: 10mm; display: grid; grid-template-columns: repeat(2, 1fr); grid-auto-rows: 65.75mm; gap: 4mm; align-content: start; background: white; box-shadow: 0 12px 45px #18354e2b; break-after: page; page-break-after: always; }
+.a4-tag { height: 65.75mm; overflow: hidden; border: .45mm solid #123d61; border-radius: 2mm; color: #0c2941; background: white; break-inside: avoid; page-break-inside: avoid; }
+.a4-tag > header { min-height: 10mm; padding: 1.6mm 2.2mm; display: flex; justify-content: space-between; align-items: center; background: #0b3d64; color: white; }
+.a4-tag.partial > header { background: #9b5800; }.a4-tag > header span, .a4-tag > header strong { display: block; }.a4-tag > header span { font-size: 2.2mm; font-weight: 900; }.a4-tag > header strong { margin-top: .6mm; color: #8ed9ff; font-size: 2.6mm; }.a4-tag.partial > header strong { color: #ffe39b; }.a4-tag > header b { font-size: 5mm; }
+.a4-tag-main { height: 20mm; display: grid; grid-template-columns: 1fr 20mm; border-bottom: .25mm solid #b9c9d5; }
+.a4-tag-product { min-width: 0; padding: 1.7mm 2mm; display: grid; grid-template-columns: 19mm 1fr; gap: 2mm; align-items: center; }.a4-tag-product > img, .a4-no-image { width: 19mm; height: 16.5mm; object-fit: contain; background: #edf3f7; border-radius: 1mm; }.a4-no-image { display: grid; place-items: center; color: #8294a3; font-size: 2mm; }.a4-tag-product span, .a4-tag-product strong, .a4-tag-product b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.a4-tag-product span { color: #63788a; font-size: 2mm; }.a4-tag-product strong { font-size: 3.8mm; }.a4-tag-product b { font-size: 2.4mm; }
+.a4-tag-qr { padding: 1mm; display: grid; place-items: center; border-left: .25mm solid #c4d1da; }.a4-tag-qr img { width: 17.5mm; height: 17.5mm; }
+.a4-tag-grid { min-height: 20mm; display: grid; grid-template-columns: 1fr 1fr; }.a4-tag-grid > div { min-width: 0; padding: .9mm 1.8mm; border-right: .2mm solid #d4dee5; border-bottom: .2mm solid #d4dee5; }.a4-tag-grid > div:nth-child(even) { border-right: 0; }.a4-tag-grid span, .a4-tag-grid strong { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }.a4-tag-grid span { color: #718291; font-size: 1.8mm; }.a4-tag-grid strong { font-size: 2.4mm; }
+.a4-tag-barcode { height: 14mm; padding: 1mm 2mm .8mm; display: grid; place-items: center; }.a4-tag-barcode svg { width: 100%; height: 8mm; }.a4-tag-barcode small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: monospace; font-size: 1.8mm; letter-spacing: .15mm; }
+
+@media print {
+  @page { size: A4 portrait; margin: 0; }
+  body * { visibility: hidden !important; }
+  .tag-print-modal, .tag-print-modal * { visibility: visible !important; }
+  .tag-print-modal { position: absolute; inset: 0; overflow: visible; background: white; }
+  .tag-print-toolbar { display: none !important; }
+  .tag-print-preview { padding: 0; display: block; }
+  .a4-tag-sheet { width: 210mm; min-height: 297mm; margin: 0; padding: 10mm; box-shadow: none; }
+  .a4-tag { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+}
+
 .modal-backdrop { position: fixed; inset: 0; z-index: 90; padding: 18px; display: grid; place-items: center; background: #061c33a8; backdrop-filter: blur(7px); }
 .modal-card { width: min(560px, 100%); max-height: calc(100vh - 36px); overflow: auto; border-radius: 23px; background: white; box-shadow: 0 30px 80px #00152d66; }
 .modal-wide { width: min(700px, 100%); }
