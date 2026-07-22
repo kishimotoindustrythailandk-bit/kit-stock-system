@@ -111,6 +111,15 @@ export const deliveryTagReceipts = sqliteTable("delivery_tag_receipts", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+export const partImages = sqliteTable("part_images", {
+  materialCode: text("material_code").primaryKey(),
+  objectKey: text("object_key").notNull(),
+  originalName: text("original_name").notNull().default(""),
+  contentType: text("content_type").notNull().default("image/jpeg"),
+  updatedByName: text("updated_by_name").notNull().default(""),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
 export const appUsers = sqliteTable("app_users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   employeeCode: text("employee_code").notNull().unique(),

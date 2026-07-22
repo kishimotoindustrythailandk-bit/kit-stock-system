@@ -200,7 +200,13 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .tag-result header p { color: #687791; font-size: 11px; }
 .tag-result header h3 { margin-top: 4px; font-size: 22px; }
 .tag-main { display: flex; align-items: center; gap: 14px; padding: 17px 0; }
-.part-placeholder { display: grid; place-items: center; width: 74px; height: 74px; color: var(--blue); background: linear-gradient(135deg, #f2f7ff, #e5effc); border: 1px solid #d9e5f4; border-radius: 11px; font-size: 36px; }
+.part-photo, .part-photo-fallback { display: grid; place-items: center; width: 104px; height: 104px; flex: 0 0 auto; overflow: hidden; color: var(--blue); background: linear-gradient(135deg, #f8fbff, #e8f1fd); border: 1px solid #d9e5f4; border-radius: 12px; }
+.part-photo img { width: 100%; height: 100%; object-fit: contain; background: #fff; }
+.part-photo-fallback { grid-template-rows: auto auto; align-content: center; gap: 3px; }
+.part-photo-fallback span { font-size: 34px; }
+.part-photo-fallback small { color: #8090a8; font-size: 9px; }
+.part-photo.compact, .part-photo-fallback.compact { width: 64px; height: 64px; border-radius: 9px; }
+.part-photo-fallback.compact span { font-size: 24px; }
 .tag-main small, .tag-main b, .tag-main p { display: block; margin: 0; }
 .tag-main small { color: #7d8aa2; font-size: 9px; }
 .tag-main b { font-size: 19px; }
@@ -273,6 +279,18 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .setting-row input:checked + i::after { transform: translateX(17px); }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .save-row { display: flex; justify-content: flex-end; margin-top: 18px; }
+.part-image-upload { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(260px, 1.2fr) auto; align-items: end; gap: 12px; padding: 16px; background: #f5f9ff; border: 1px solid #dae8f8; border-radius: 12px; }
+.part-image-upload label { display: grid; gap: 7px; }
+.part-image-upload label > span { color: #42516a; font-size: 10px; font-weight: 700; }
+.part-image-upload input { min-height: 45px; padding: 0 12px; border: 1px solid #d8e2ef; border-radius: 9px; background: #fff; }
+.part-image-upload input[type="file"] { padding: 9px 10px; }
+.part-image-help { margin: 9px 2px 15px; color: #71809a; font-size: 10px; }
+.part-image-list { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.part-image-list article { display: grid; grid-template-columns: 64px 1fr auto; align-items: center; gap: 12px; padding: 11px; border: 1px solid var(--line); border-radius: 11px; background: #fff; }
+.part-image-list article b, .part-image-list article p, .part-image-list article small { display: block; margin: 0; }
+.part-image-list article p { margin: 3px 0; color: #5f6f88; font-size: 10px; }
+.part-image-list article small { color: #8290a5; font-size: 9px; }
+.inline-loading { padding: 28px; color: #71809a; text-align: center; }
 .access-pill { padding: 7px 10px; color: var(--blue); background: #eef5ff; border-radius: 8px; font-size: 10px; }
 .user-cell { display: flex; align-items: center; gap: 9px; }
 .user-cell span { display: grid; place-items: center; width: 30px; height: 30px; color: #fff; background: var(--blue); border-radius: 50%; font-weight: 700; }
@@ -429,3 +447,5 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .scan-mode button.active { color: #fff; border-color: var(--blue); background: var(--blue); box-shadow: 0 8px 20px rgba(10, 93, 218, .2); }
 .scan-saved { margin: 14px 18px 18px; padding: 13px 15px; color: #19844b; border: 1px solid #bce7cf; border-radius: 9px; background: #effbf4; font-weight: 700; }
 @media (max-width: 620px) { .user-form-grid { grid-template-columns: 1fr; } .user-form-grid .wide { grid-column: auto; } .user-modal { padding: 18px; } }
+@media (max-width: 900px) { .part-image-upload { grid-template-columns: 1fr; } .part-image-list { grid-template-columns: 1fr; } }
+@media (max-width: 520px) { .part-photo, .part-photo-fallback { width: 88px; height: 88px; } .part-image-list article { grid-template-columns: 58px 1fr; } .part-image-list article > button { grid-column: 1 / -1; } }

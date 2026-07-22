@@ -74,6 +74,7 @@ type TagPreview = {
 type ImportRow = Omit<DueLine, "id" | "importId" | "status" | "scannedQty" | "tagCount"> & { sourceKey: string };
 type DuePayload = { dues: DueLine[]; imports: DueImport[]; scans: DueScan[]; receipts: DueReceipt[]; error?: string };
 type SystemUser = { id: number; employeeCode: string; displayName: string; email: string; role: string; active: boolean; createdAt?: string };
+type PartImageMapping = { materialCode: string; originalName: string; contentType: string; updatedByName: string; updatedAt: string; materialDescription?: string };
 type UserForm = { id?: number; employeeCode: string; displayName: string; email: string; role: "dispatcher" | "inspector"; pin: string; active: boolean };
 const EMPTY_USER: UserForm = { employeeCode: "", displayName: "", email: "", role: "dispatcher", pin: "", active: true };
 
@@ -184,6 +185,12 @@ function Empty({ title = "ยังไม่มีข้อมูล", text = "�
   return <div className="empty"><span>▦</span><strong>{title}</strong><p>{text}</p></div>;
 }
 
+function PartImage({ materialCode, compact = false }: { materialCode: string; compact?: boolean }) {
+  const [failedCode, setFailedCode] = useState("");
+  if (failedCode === materialCode) return <div className={`part-photo-fallback ${compact ? "compact" : ""}`}><span>◈</span><small>ยังไม่มีรูป</small></div>;
+  return <div className={`part-photo ${compact ? "compact" : ""}`}><img src={`/api/part-images?materialCode=${encodeURIComponent(materialCode)}`} alt={`รูปชิ้นงาน ${materialCode}`} onError={() => setFailedCode(materialCode)} /></div>;
+}
+
 export default function DeliveryControlApp({ user, signOutPath }: { user: { id: number; employeeCode: string; displayName: string; email: string; role: string }; signOutPath: string }) {
   const [page, setPage] = useState<PageKey>("dashboard");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -212,6 +219,11 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [userSaving, setUserSaving] = useState(false);
   const [userForm, setUserForm] = useState<UserForm>(EMPTY_USER);
   const [userEditorOpen, setUserEditorOpen] = useState(false);
+  const [partImages, setPartImages] = useState<PartImageMapping[]>([]);
+  const [partImagesLoading, setPartImagesLoading] = useState(false);
+  const [partImageCode, setPartImageCode] = useState("");
+  const [partImageFile, setPartImageFile] = useState<File | null>(null);
+  const [partImageSaving, setPartImageSaving] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const tagInput = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -265,6 +277,53 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     } finally {
       setUsersLoading(false);
     }
+  }
+
+  async function loadPartImages() {
+    if (user.role !== "admin") return;
+    setPartImagesLoading(true);
+    try {
+      const response = await fetch("/api/part-images", { cache: "no-store" });
+      const data = await response.json() as { images?: PartImageMapping[]; error?: string };
+      if (!response.ok) throw new Error(data.error || "โหลดรายการรูปไม่สำเร็จ");
+      setPartImages(data.images || []);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "โหลดรายการรูปไม่สำเร็จ" });
+    } finally {
+      setPartImagesLoading(false);
+    }
+  }
+
+  async function uploadPartImage(event: FormEvent) {
+    event.preventDefault();
+    if (!partImageCode.trim() || !partImageFile) return;
+    setPartImageSaving(true);
+    setNotice(null);
+    try {
+      const form = new FormData();
+      form.set("materialCode", partImageCode.trim().toUpperCase());
+      form.set("image", partImageFile);
+      const response = await fetch("/api/part-images", { method: "POST", body: form });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || "อัปโหลดรูปไม่สำเร็จ");
+      setNotice({ type: "success", text: `บันทึกรูป ${partImageCode.trim().toUpperCase()} แล้ว รูปจะแสดงทันทีเมื่อสแกน` });
+      setPartImageCode("");
+      setPartImageFile(null);
+      await loadPartImages();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "อัปโหลดรูปไม่สำเร็จ" });
+    } finally {
+      setPartImageSaving(false);
+    }
+  }
+
+  async function deletePartImage(materialCode: string) {
+    if (!window.confirm(`ลบรูปของ ${materialCode} ใช่หรือไม่?`)) return;
+    const response = await fetch("/api/part-images", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ materialCode }) });
+    const data = await response.json() as { error?: string };
+    if (!response.ok) return setNotice({ type: "error", text: data.error || "ลบรูปไม่สำเร็จ" });
+    setNotice({ type: "success", text: `ลบรูป ${materialCode} แล้ว` });
+    await loadPartImages();
   }
 
   async function saveUser(event: FormEvent) {
@@ -493,6 +552,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   function go(next: PageKey) {
     setPage(next);
     if (next === "users") void loadUsers();
+    if (next === "settings") void loadPartImages();
     setMenuOpen(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -610,7 +670,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         <section className="tag-result">
           <header><div><p>ข้อมูล Tag และ Due</p><h3>{tagPreview ? tagPreview.due.materialCode : "รอการสแกน"}</h3></div><span className={`status ${tagPreview ? "completed" : "pending"}`}>{tagPreview ? "ข้อมูลตรงกัน" : "ยังไม่มี Tag"}</span></header>
           {tagPreview ? <>
-            <div className="tag-main"><div className="part-placeholder">◈</div><div><small>PART / MATERIAL</small><b>{tagPreview.due.materialCode}</b><p>{tagPreview.due.materialDescription || "ไม่ระบุรายละเอียด"}</p></div></div>
+            <div className="tag-main"><PartImage materialCode={tagPreview.due.materialCode} /><div><small>PART / MATERIAL</small><b>{tagPreview.due.materialCode}</b><p>{tagPreview.due.materialDescription || "ไม่ระบุรายละเอียด"}</p></div></div>
             <div className="detail-grid"><div><small>FAC / Line</small><b>{tagPreview.due.fact} / {tagPreview.due.line || "—"}</b></div><div><small>DO / Seq</small><b>{tagPreview.due.doNo} / {tagPreview.due.seq}</b></div><div><small>แผนส่งวัน / เวลา</small><b>{formatDate(tagPreview.due.deliveryDate)} {tagPreview.due.deliveryTime}</b></div><div><small>Tag ID</small><b>{tagPreview.tag.tagId}</b></div><div><small>Location</small><b>{tagPreview.tag.location || "—"}</b></div><div><small>จำนวนใน Tag</small><b>{fmt(tagPreview.tag.qty)} {tagPreview.tag.unit}</b></div></div>
             <div className="cut-summary"><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><span><b>{progress}%</b>{scanMode === "receive" ? "ยอดส่งออกปัจจุบัน" : "หลังตัดยอด"}</span></div><div className="cut-numbers"><p><span>แผนทั้งหมด</span><b>{fmt(tagPreview.due.reqQty)}</b></p><p><span>ส่งออกแล้ว</span><b>{fmt(tagPreview.due.scannedQty)}</b></p><p className="current"><span>จำนวน Tag</span><b>{fmt(tagPreview.tag.qty)}</b></p><p><span>คงเหลือ</span><b>{fmt(tagPreview.due.remainingAfter)}</b></p></div></div>
             <div className="scan-saved">✓ {scanMode === "receive" ? "บันทึกรับเข้างานเรียบร้อย รอผู้ตรวจสแกนส่งออก" : "บันทึกส่งออกและตัดยอด Due เรียบร้อย"}</div>
@@ -653,7 +713,21 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
 
   function renderSettings() {
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
-    return <><Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.0.0</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>⌗</span><b>{fmt(payload.scans.length)}</b><small>Tag ล่าสุด</small></p></div></div></Card><div className="settings-grid"><Card title="ตั้งค่าการตัดยอด"><Toggle keyName="partial" title="อนุญาตให้ตัดยอดบางส่วน" text="Tag หนึ่งใบสามารถตัดยอดไม่ครบ Due ได้" /><Toggle keyName="confirm" title="ยืนยันก่อนตัดยอดทุกครั้ง" text="แสดงยอดก่อนและหลังให้ตรวจสอบก่อนบันทึก" /></Card><Card title="ตั้งค่าการสแกน"><Toggle keyName="autoFocus" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" title="เสียงแจ้งเตือนเมื่อสำเร็จ" text="เปิดเสียงยืนยันหลังตัดยอดเรียบร้อย" /></Card></div><Card title="รูปแบบการแสดงผล"><div className="form-grid"><label><span>ภาษา</span><select><option>ภาษาไทย</option></select></label><label><span>เขตเวลา</span><select><option>(GMT+07:00) Bangkok, Thailand</option></select></label><label><span>รูปแบบวันที่</span><select><option>DD/MM/YYYY</option></select></label><label><span>หน่วยเริ่มต้น</span><select><option>ชิ้น (PC)</option></select></label></div><div className="save-row"><button className="button primary" onClick={saveSettings}>▣ บันทึกการตั้งค่า</button></div></Card></>;
+    return <>
+      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.3.0</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
+      <Card title="รูปชิ้นงานสำหรับหน้าสแกน" action={<button className="button secondary" onClick={() => void loadPartImages()}>↻ รีเฟรช</button>}>
+        <form className="part-image-upload" onSubmit={uploadPartImage}>
+          <label><span>Material / Part No. *</span><input list="part-material-codes" value={partImageCode} onChange={(e) => setPartImageCode(e.target.value.toUpperCase())} placeholder="เช่น ABC-1234" required /></label>
+          <datalist id="part-material-codes">{[...new Set(payload.dues.map((due) => due.materialCode))].sort().map((code) => <option key={code} value={code} />)}</datalist>
+          <label className="part-file"><span>ไฟล์รูป *</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setPartImageFile(e.target.files?.[0] || null)} required /></label>
+          <button className="button primary" disabled={partImageSaving || !partImageCode.trim() || !partImageFile}>{partImageSaving ? "กำลังอัปโหลด…" : "⇧ บันทึกรูปชิ้นงาน"}</button>
+        </form>
+        <p className="part-image-help">รองรับ JPG, PNG และ WebP ขนาดไม่เกิน 5 MB · หากอัปโหลด Material Code เดิม ระบบจะแทนที่รูปเก่า</p>
+        {partImagesLoading ? <div className="inline-loading">กำลังโหลดรูปชิ้นงาน…</div> : partImages.length ? <div className="part-image-list">{partImages.map((item) => <article key={item.materialCode}><PartImage materialCode={item.materialCode} compact /><div><b>{item.materialCode}</b><p>{item.materialDescription || item.originalName}</p><small>แก้ไขโดย {item.updatedByName || "Admin"} · {formatDateTime(item.updatedAt)}</small></div><button className="tiny-button danger-outline" onClick={() => void deletePartImage(item.materialCode)}>ลบรูป</button></article>)}</div> : <Empty title="ยังไม่มีรูปชิ้นงาน" text="เลือก Material Code และอัปโหลดรูป รูปจะแสดงทันทีหลังสแกน Tag" />}
+      </Card>
+      <div className="settings-grid"><Card title="ตั้งค่าการตัดยอด"><Toggle keyName="partial" title="อนุญาตให้ตัดยอดบางส่วน" text="Tag หนึ่งใบสามารถตัดยอดไม่ครบ Due ได้" /><Toggle keyName="confirm" title="ยืนยันก่อนตัดยอดทุกครั้ง" text="แสดงยอดก่อนและหลังให้ตรวจสอบก่อนบันทึก" /></Card><Card title="ตั้งค่าการสแกน"><Toggle keyName="autoFocus" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" title="เสียงแจ้งเตือนเมื่อสำเร็จ" text="เปิดเสียงยืนยันหลังตัดยอดเรียบร้อย" /></Card></div>
+      <Card title="รูปแบบการแสดงผล"><div className="form-grid"><label><span>ภาษา</span><select><option>ภาษาไทย</option></select></label><label><span>เขตเวลา</span><select><option>(GMT+07:00) Bangkok, Thailand</option></select></label><label><span>รูปแบบวันที่</span><select><option>DD/MM/YYYY</option></select></label><label><span>หน่วยเริ่มต้น</span><select><option>ชิ้น (PC)</option></select></label></div><div className="save-row"><button className="button primary" onClick={saveSettings}>▣ บันทึกการตั้งค่า</button></div></Card>
+    </>;
   }
 
   function renderUsers() {
@@ -671,7 +745,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
       <nav>{NAV.filter((item) => user.role === "admin" || ["dashboard", "scan", "history"].includes(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.0.0</span></div></div>
+      <div className="sidebar-bottom"><div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.3.0</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
