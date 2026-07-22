@@ -224,6 +224,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [partImageCode, setPartImageCode] = useState("");
   const [partImageFile, setPartImageFile] = useState<File | null>(null);
   const [partImageSaving, setPartImageSaving] = useState(false);
+  const [deletingImportId, setDeletingImportId] = useState<number | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const tagInput = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -482,6 +483,31 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     }
   }
 
+  async function deleteImport(item: DueImport, confirmActivity = false) {
+    if (!confirmActivity && !window.confirm(`ลบข้อมูลที่นำเข้าจากไฟล์ ${item.fileName} จำนวน ${fmt(item.rowCount)} รายการ ใช่หรือไม่?`)) return;
+    setDeletingImportId(item.id);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/due-import", {
+        method: "DELETE", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: item.id, confirmActivity }),
+      });
+      const data = await response.json() as { error?: string; requiresConfirmation?: boolean; scanCount?: number; receiptCount?: number };
+      if (response.status === 409 && data.requiresConfirmation) {
+        const confirmed = window.confirm(`คำเตือน: ชุดนี้มีประวัติรับเข้า ${fmt(data.receiptCount || 0)} รายการ และส่งออก ${fmt(data.scanCount || 0)} รายการ\n\nหากลบ ประวัติสแกนของชุดนี้จะถูกลบด้วย ต้องการดำเนินการต่อหรือไม่?`);
+        if (confirmed) { await deleteImport(item, true); return; }
+        return;
+      }
+      if (!response.ok) throw new Error(data.error || "ลบข้อมูลนำเข้าไม่สำเร็จ");
+      setNotice({ type: "success", text: `ลบข้อมูลจาก ${item.fileName} แล้ว ${fmt(item.rowCount)} รายการ` });
+      await loadDue();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ลบข้อมูลนำเข้าไม่สำเร็จ" });
+    } finally {
+      setDeletingImportId(null);
+    }
+  }
+
   async function processTag(value?: string | FormEvent) {
     const event = typeof value === "object" ? value : undefined;
     event?.preventDefault();
@@ -571,6 +597,61 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     URL.revokeObjectURL(url);
   }
 
+  function reportFileName(extension: string) {
+    const scope = [filterDate || "all-dates", filterFact === "ALL" ? "all-fac" : filterFact, filterTime === "ALL" ? "all-times" : filterTime.replace(":", "-")].join("_");
+    return `KIT-delivery-report_${scope}.${extension}`;
+  }
+
+  function reportTableRows() {
+    return [
+      ["วันที่ส่งงาน", "เวลา", "FAC", "Line", "Shop", "DO No.", "Seq", "Material / Part No.", "รายละเอียด", "แผน (ชิ้น)", "ส่งแล้ว (ชิ้น)", "คงเหลือ (ชิ้น)", "สถานะ"],
+      ...filtered.map((due) => [due.deliveryDate, due.deliveryTime, due.fact, due.line, due.shop, due.doNo, due.seq, due.materialCode, due.materialDescription, due.reqQty, due.scannedQty, Math.max(due.reqQty - due.scannedQty, 0), stateLabel(due)]),
+    ];
+  }
+
+  function exportReportCsv() {
+    const csv = reportTableRows().map((row) => row.map((cell) => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = reportFileName("csv");
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setNotice({ type: "success", text: `ส่งออกรายงาน CSV แล้ว ${fmt(filtered.length)} รายการ` });
+  }
+
+  async function exportReportExcel() {
+    try {
+      const xlsx = await import("xlsx");
+      const workbook = xlsx.utils.book_new();
+      const summarySheet = xlsx.utils.aoa_to_sheet([
+        ["KIT Delivery Due Control — สรุปรายงาน"],
+        ["วันที่ส่งงาน", filterDate ? formatDate(filterDate) : "ทุกวันที่"],
+        ["FAC", filterFact === "ALL" ? "ทั้งหมด" : filterFact],
+        ["เวลา", filterTime === "ALL" ? "ทั้งหมด" : filterTime],
+        ["จำนวนรายการ", summary.items], ["แผนทั้งหมด (ชิ้น)", summary.plan], ["ส่งแล้ว (ชิ้น)", summary.sent],
+        ["ครบตามแผน", summary.completed], ["คงเหลือ", summary.partial + summary.pending], ["เกิน Due", summary.over],
+      ]);
+      const detailSheet = xlsx.utils.aoa_to_sheet(reportTableRows());
+      detailSheet["!cols"] = [12, 8, 12, 12, 12, 24, 8, 24, 36, 14, 14, 14, 16].map((wch) => ({ wch }));
+      xlsx.utils.book_append_sheet(workbook, summarySheet, "สรุปรายงาน");
+      xlsx.utils.book_append_sheet(workbook, detailSheet, "รายละเอียด Due");
+      xlsx.writeFile(workbook, reportFileName("xlsx"));
+      setNotice({ type: "success", text: `ส่งออกรายงาน Excel แล้ว ${fmt(filtered.length)} รายการ` });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ส่งออก Excel ไม่สำเร็จ" });
+    }
+  }
+
+  function exportReportPdf() {
+    const popup = window.open("", "_blank", "width=1200,height=850");
+    if (!popup) return setNotice({ type: "error", text: "เบราว์เซอร์บล็อกหน้าต่างรายงาน กรุณาอนุญาต Pop-up แล้วลองใหม่" });
+    const escape = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character] || character);
+    const rows = filtered.map((due) => `<tr><td>${escape(formatDate(due.deliveryDate))}</td><td>${escape(due.deliveryTime)}</td><td>${escape(due.fact)} / ${escape(due.line || "—")}</td><td>${escape(due.materialCode)}<small>${escape(due.materialDescription)}</small></td><td>${fmt(due.reqQty)}</td><td>${fmt(due.scannedQty)}</td><td>${fmt(Math.max(due.reqQty - due.scannedQty, 0))}</td><td>${escape(stateLabel(due))}</td></tr>`).join("");
+    popup.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>KIT Delivery Report</title><style>@page{size:A4 landscape;margin:12mm}body{font:12px Arial,sans-serif;color:#132647}header{display:flex;justify-content:space-between;border-bottom:3px solid #075fd7;padding-bottom:12px}h1{margin:0;color:#075fd7}.scope{color:#64748b}.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:14px 0}.metrics div{padding:10px;border:1px solid #dbe5f2;border-radius:8px}.metrics b{display:block;font-size:20px}table{width:100%;border-collapse:collapse}th{background:#eaf3ff;color:#123765}th,td{padding:7px;border:1px solid #dbe3ed;text-align:left}td:nth-last-child(-n+4){text-align:right}small{display:block;color:#718096;margin-top:3px}footer{margin-top:10px;color:#718096;text-align:right}@media print{button{display:none}}</style></head><body><header><div><h1>KIT Delivery Due Control</h1><b>รายงานสถานะการส่งงาน</b></div><div class="scope">วันที่ ${escape(filterDate ? formatDate(filterDate) : "ทุกวันที่")} · FAC ${escape(filterFact === "ALL" ? "ทั้งหมด" : filterFact)} · เวลา ${escape(filterTime === "ALL" ? "ทั้งหมด" : filterTime)}</div></header><section class="metrics"><div>รายการทั้งหมด<b>${fmt(summary.items)}</b></div><div>แผนทั้งหมด<b>${fmt(summary.plan)}</b></div><div>ส่งแล้ว<b>${fmt(summary.sent)}</b></div><div>ครบตามแผน<b>${fmt(summary.completed)}</b></div><div>คงเหลือ<b>${fmt(summary.partial + summary.pending)}</b></div></section><table><thead><tr><th>วันที่</th><th>เวลา</th><th>FAC / Line</th><th>Material / Part No.</th><th>แผน</th><th>ส่งแล้ว</th><th>คงเหลือ</th><th>สถานะ</th></tr></thead><tbody>${rows || '<tr><td colspan="8">ไม่พบข้อมูลตามตัวกรอง</td></tr>'}</tbody></table><footer>สร้างรายงาน ${escape(new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date()))}</footer><script>window.onload=()=>setTimeout(()=>window.print(),300)<\/script></body></html>`);
+    popup.document.close();
+  }
+
   function saveSettings() {
     window.localStorage.setItem("kit-due-settings", JSON.stringify(settings));
     setNotice({ type: "success", text: "บันทึกการตั้งค่าบนอุปกรณ์นี้แล้ว" });
@@ -651,7 +732,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <Card title="รายการแผนส่งงาน" action={<span className="result-count">แสดง {fmt(filtered.length)} รายการ</span>}><DueTable rows={filtered} /></Card>
       <div className="split-grid">
         <Card title="สรุปแผนส่งงานตาม FAC"><div className="fac-cards">{facStats.length ? facStats.map((item) => <div key={item.fact}><b>{item.fact}</b><strong>{fmt(item.items)} รายการ</strong><small><i className="green" /> ครบ {item.completed} <i className="orange" /> คงเหลือ {item.remaining}</small></div>) : <Empty />}</div></Card>
-        <Card title="ประวัตินำเข้า Excel">{payload.imports.length ? <div className="mini-list">{payload.imports.slice(0, 4).map((item) => <div key={item.id}><span>XL</span><p><b>{item.fileName}</b><small>{fmt(item.rowCount)} รายการ · โดย {item.importedByName}</small></p><time>{formatDateTime(item.createdAt)}</time></div>)}</div> : <Empty />}</Card>
+        <Card title="ประวัตินำเข้า Excel">{payload.imports.length ? <div className="mini-list">{payload.imports.map((item) => <div key={item.id}><span>XL</span><p><b>{item.fileName}</b><small>{fmt(item.rowCount)} รายการ · {fmt(item.totalQty)} ชิ้น · โดย {item.importedByName}</small></p><div className="import-history-actions"><time>{formatDateTime(item.createdAt)}</time><button className="tiny-button danger-outline" disabled={deletingImportId === item.id} onClick={() => void deleteImport(item)}>{deletingImportId === item.id ? "กำลังลบ…" : "ลบข้อมูล"}</button></div></div>)}</div> : <Empty />}</Card>
       </div>
     </>;
   }
@@ -695,6 +776,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const maxFac = Math.max(...facStats.map((item) => item.items), 1);
     return <>
       <Card><Filters /></Card>
+      <Card title="ส่งออกรายงานตามตัวกรองปัจจุบัน"><div className="report-export-actions"><div><b>{fmt(filtered.length)} รายการ</b><small>{filterDate ? formatDate(filterDate) : "ทุกวันที่"} · {filterFact === "ALL" ? "ทุก FAC" : filterFact} · {filterTime === "ALL" ? "ทุกเวลา" : filterTime}</small></div><button className="export-button excel" onClick={() => void exportReportExcel()}><span>▦</span><b>Excel</b><small>.xlsx</small></button><button className="export-button pdf" onClick={exportReportPdf}><span>▤</span><b>PDF</b><small>พิมพ์ / บันทึก</small></button><button className="export-button csv" onClick={exportReportCsv}><span>≡</span><b>CSV</b><small>.csv</small></button></div></Card>
       <div className="metrics five"><MetricCard tone="blue" icon="◈" label="แผนทั้งหมด" value={fmt(summary.items)} suffix="รายการ" /><MetricCard tone="green" icon="✓" label="ครบตามแผน" value={fmt(summary.completed)} suffix="รายการ" /><MetricCard tone="orange" icon="◷" label="คงเหลือ" value={fmt(summary.partial + summary.pending)} suffix="รายการ" /><MetricCard tone="red" icon="!" label="เกิน Due" value={fmt(summary.over)} suffix="รายการ" /><MetricCard tone="purple" icon="□" label="ส่งแล้วรวม" value={fmt(summary.sent)} suffix="ชิ้น" /></div>
       <div className="report-grid">
         <Card title="สัดส่วนสถานะการส่งงาน"><div className="donut-layout"><div className="donut" style={{ "--complete": `${completePct * 3.6}deg` } as React.CSSProperties}><span><b>{summary.items}</b>รายการ</span></div><div className="legend"><p><i className="green" />ครบตามแผน <b>{summary.completed}</b></p><p><i className="orange" />คงเหลือ <b>{summary.partial + summary.pending}</b></p><p><i className="red" />เกิน Due <b>{summary.over}</b></p></div></div></Card>
@@ -714,7 +796,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   function renderSettings() {
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <>
-      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.3.0</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
+      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.5.0</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
       <Card title="รูปชิ้นงานสำหรับหน้าสแกน" action={<button className="button secondary" onClick={() => void loadPartImages()}>↻ รีเฟรช</button>}>
         <form className="part-image-upload" onSubmit={uploadPartImage}>
           <label><span>Material / Part No. *</span><input list="part-material-codes" value={partImageCode} onChange={(e) => setPartImageCode(e.target.value.toUpperCase())} placeholder="เช่น ABC-1234" required /></label>
@@ -745,7 +827,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
       <nav>{NAV.filter((item) => user.role === "admin" || ["dashboard", "scan", "history"].includes(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.3.0</span></div></div>
+      <div className="sidebar-bottom"><div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.5.0</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">

@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { getCurrentUser } from "../../cloudflare-auth";
 import { getDb } from "../../../db";
 import { deliveryDueLines, deliveryImports } from "../../../db/schema";
+import { getRuntimeEnv } from "../../../runtime/env";
 
 type ImportRow = {
   sourceKey?: string;
@@ -99,5 +100,45 @@ export async function POST(request: Request) {
     return Response.json({
       error: duplicate ? "มีรายการ Due นี้อยู่ในระบบแล้ว กรุณาตรวจสอบไฟล์ที่เคยนำเข้า" : message,
     }, { status: duplicate ? 409 : 500 });
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
+    if (user.role !== "admin") return Response.json({ error: "เฉพาะ Admin เท่านั้นที่ลบข้อมูลนำเข้าได้" }, { status: 403 });
+    const body = await request.json() as { id?: number; confirmActivity?: boolean };
+    const importId = Number(body.id);
+    if (!Number.isInteger(importId) || importId <= 0) return Response.json({ error: "ไม่พบชุดข้อมูลนำเข้า" }, { status: 400 });
+    const { DB } = getRuntimeEnv();
+    if (!DB) return Response.json({ error: "ไม่พบการเชื่อมต่อ D1" }, { status: 500 });
+    const target = await DB.prepare(`
+      SELECT id, file_name AS fileName, row_count AS rowCount, total_qty AS totalQty
+      FROM delivery_imports WHERE id = ?1 LIMIT 1
+    `).bind(importId).first<{ id: number; fileName: string; rowCount: number; totalQty: number }>();
+    if (!target) return Response.json({ error: "ไม่พบชุดข้อมูลนี้ หรืออาจถูกลบไปแล้ว" }, { status: 404 });
+    const activity = await DB.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM delivery_tag_scans s INNER JOIN delivery_due_lines d ON d.id = s.due_line_id WHERE d.import_id = ?1) AS scanCount,
+        (SELECT COUNT(*) FROM delivery_tag_receipts r INNER JOIN delivery_due_lines d ON d.id = r.due_line_id WHERE d.import_id = ?1) AS receiptCount
+    `).bind(importId).first<{ scanCount: number; receiptCount: number }>();
+    const scanCount = Number(activity?.scanCount || 0);
+    const receiptCount = Number(activity?.receiptCount || 0);
+    if ((scanCount > 0 || receiptCount > 0) && !body.confirmActivity) {
+      return Response.json({
+        error: "ชุดข้อมูลนี้มีประวัติการสแกน กรุณายืนยันการลบอีกครั้ง",
+        requiresConfirmation: true, scanCount, receiptCount,
+      }, { status: 409 });
+    }
+    await DB.batch([
+      DB.prepare("DELETE FROM delivery_tag_scans WHERE due_line_id IN (SELECT id FROM delivery_due_lines WHERE import_id = ?1)").bind(importId),
+      DB.prepare("DELETE FROM delivery_tag_receipts WHERE due_line_id IN (SELECT id FROM delivery_due_lines WHERE import_id = ?1)").bind(importId),
+      DB.prepare("DELETE FROM delivery_due_lines WHERE import_id = ?1").bind(importId),
+      DB.prepare("DELETE FROM delivery_imports WHERE id = ?1").bind(importId),
+    ]);
+    return Response.json({ success: true, deleted: target, scanCount, receiptCount });
+  } catch (error) {
+    return Response.json({ error: error instanceof Error ? error.message : "ลบข้อมูลนำเข้าไม่สำเร็จ" }, { status: 500 });
   }
 }
