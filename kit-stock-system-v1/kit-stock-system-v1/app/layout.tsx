@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "KIT Stock Verification",
-  description: "ระบบตรวจสอบบ๊อคงานด้วยบาร์โค้ดและรูปถ่ายยืนยัน",
+  title: "KIT Delivery Due Control",
+  description: "ระบบนำเข้าแผนส่งงานและตัดยอด Due ด้วย QR Tag",
   other: { "codex-preview": "development" },
   icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
 };

@@ -6,7 +6,7 @@ export function getDb() {
   const { DB } = getRuntimeEnv();
   if (!DB) {
     throw new Error(
-      "Cloudflare D1 binding `DB` is unavailable. Check the D1 binding in wrangler.jsonc."
+      "Cloudflare D1 binding `DB` is unavailable. Create the database and add binding `DB` in wrangler.jsonc."
     );
   }
 

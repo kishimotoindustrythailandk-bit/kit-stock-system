@@ -55,25 +55,63 @@ export const receipts = sqliteTable("receipts", {
   receivedAt: text("received_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
-export const employees = sqliteTable("employees", {
+export const deliveryImports = sqliteTable("delivery_imports", {
   id: integer("id").primaryKey({ autoIncrement: true }),
-  employeeCode: text("employee_code").notNull().unique(),
-  fullName: text("full_name").notNull(),
-  role: text("role").notNull().default("viewer"),
-  pinHash: text("pin_hash").notNull(),
-  pinSalt: text("pin_salt").notNull(),
-  active: integer("active", { mode: "boolean" }).notNull().default(true),
-  mustChangePin: integer("must_change_pin", { mode: "boolean" }).notNull().default(false),
-  failedAttempts: integer("failed_attempts").notNull().default(0),
-  lockedUntil: text("locked_until"),
-  lastLoginAt: text("last_login_at"),
+  importToken: text("import_token").notNull().unique(),
+  fileName: text("file_name").notNull(),
+  rowCount: integer("row_count").notNull(),
+  totalQty: integer("total_qty").notNull(),
+  importedByName: text("imported_by_name").notNull(),
+  importedByEmail: text("imported_by_email").notNull(),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
-export const employeeSessions = sqliteTable("employee_sessions", {
+export const deliveryDueLines = sqliteTable("delivery_due_lines", {
   id: integer("id").primaryKey({ autoIncrement: true }),
-  sessionHash: text("session_hash").notNull().unique(),
-  employeeId: integer("employee_id").notNull().references(() => employees.id),
+  importId: integer("import_id").notNull().references(() => deliveryImports.id, { onDelete: "cascade" }),
+  sourceKey: text("source_key").notNull().unique(),
+  doNo: text("do_no").notNull(),
+  seq: integer("seq").notNull(),
+  materialCode: text("material_code").notNull(),
+  materialDescription: text("material_description").notNull().default(""),
+  site: text("site").notNull().default(""),
+  fact: text("fact").notNull(),
+  line: text("line").notNull().default(""),
+  shop: text("shop").notNull().default(""),
+  reqQty: integer("req_qty").notNull(),
+  deliveryDate: text("delivery_date").notNull(),
+  deliveryTime: text("delivery_time").notNull(),
+  status: text("status").notNull().default("pending"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const deliveryTagScans = sqliteTable("delivery_tag_scans", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  dueLineId: integer("due_line_id").notNull().references(() => deliveryDueLines.id, { onDelete: "cascade" }),
+  tagId: text("tag_id").notNull().unique(),
+  rawPayload: text("raw_payload").notNull(),
+  qty: integer("qty").notNull(),
+  unit: text("unit").notNull().default("PC"),
+  location: text("location").notNull().default(""),
+  scannedByName: text("scanned_by_name").notNull(),
+  scannedByEmail: text("scanned_by_email").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const appUsers = sqliteTable("app_users", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  employeeCode: text("employee_code").notNull().unique(),
+  displayName: text("display_name").notNull(),
+  email: text("email").notNull().default(""),
+  role: text("role").notNull().default("staff"),
+  pinHash: text("pin_hash").notNull(),
+  active: integer("active", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const appSessions = sqliteTable("app_sessions", {
+  id: text("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => appUsers.id, { onDelete: "cascade" }),
   expiresAt: text("expires_at").notNull(),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
