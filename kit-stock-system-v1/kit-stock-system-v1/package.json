@@ -1,5 +1,5 @@
 {
-  "name": "kit-stock-verification",
+  "name": "kit-stock-system-cloudflare",
   "version": "0.1.0",
   "private": true,
   "engines": {
@@ -8,29 +8,26 @@
   "scripts": {
     "dev": "vite",
     "build": "vinext build",
-    "deploy": "vinext deploy",
-    "test": "npm run lint && npm run build",
+    "preview": "npm run build && wrangler dev --config dist/server/wrangler.json",
+    "deploy": "npm run build && wrangler deploy --config dist/server/wrangler.json",
+    "db:upgrade": "wrangler d1 execute DB --remote --file=database-upgrade-due.sql",
+    "test": "npm run build && node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate",
-    "cf:types": "wrangler types"
+    "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
-    "jsbarcode": "^3.12.3",
     "next": "16.2.6",
-    "qrcode": "^1.5.4",
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
     "@tailwindcss/postcss": "4.2.1",
-    "@types/jsbarcode": "^3.11.4",
     "@types/node": "22.19.19",
-    "@types/qrcode": "^1.5.6",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
-    "@vinext/cloudflare": "1.0.0-beta.1",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
     "drizzle-kit": "0.31.10",
@@ -44,5 +41,5 @@
     "wrangler": "4.92.0"
   },
   "type": "module",
-  "displayName": "KIT Stock Verification"
+  "displayName": "KIT Delivery Due Control"
 }

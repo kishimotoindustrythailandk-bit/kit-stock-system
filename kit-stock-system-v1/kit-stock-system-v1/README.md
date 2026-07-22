@@ -1,55 +1,75 @@
-# KIT Stock Verification
+# KIT Delivery Due Control — ชุดอัปเกรดทับระบบเก่า
 
-ระบบตรวจสอบ Tag และจำนวนงานสำหรับ Kishimoto Industry (Thailand)
+ชุดนี้ทำสำหรับ Worker เดิมชื่อ `kit-stock-system` โดยเฉพาะ
 
-## ความสามารถหลัก
+URL เดิม:
 
-- เข้าสู่ระบบด้วยรหัสพนักงานและ PIN 6 หลัก
-- แยกสิทธิ์ Admin, ผู้ส่งงาน, ผู้ตรวจ, ผู้รับงาน และผู้ดูข้อมูล
-- Part Master พร้อมรูปสินค้าและจำนวนมาตรฐานต่อบ๊อค
-- ใบงานมี Customer, Part No., Part Name, Delivery Qty/Date/Time, Sender และข้อมูล Packing
-- ตรวจ Tag ว่าตรงกับ Part และใบงานหรือไม่
-- แยกบ๊อคเต็ม/บ๊อคเศษและตรวจยอดรวมให้ตรงใบงาน
-- บังคับถ่ายรูปหลักฐานทุกบ๊อคและเก็บรูปใน Cloudflare R2
-- บันทึกชื่อผู้ตรวจและผู้รับงานจากบัญชีที่ Login
-- ประวัติการตรวจย้อนหลัง
-
-## Cloudflare ที่ต้องมี
-
-- Workers subdomain: `kishimot0-th.workers.dev`
-- D1 database: `kit-stock-db`
-- R2 bucket: `kit-stock-images`
-
-## ตั้งค่าก่อน Deploy
-
-1. เปิด Cloudflare > Storage & databases > D1 > `kit-stock-db`
-2. คัดลอกค่า **Database ID**
-3. เปิดไฟล์ `wrangler.jsonc` และแทนที่ `REPLACE_WITH_D1_DATABASE_ID`
-4. เปิดหน้า Console ของ D1 แล้วรันไฟล์ `database-setup.sql` หนึ่งครั้ง
-5. เชื่อม repository นี้ใน Cloudflare Workers & Pages
-6. ใช้ Build/Deploy command: `npm run deploy`
-7. เพิ่ม Secret ชื่อ `SETUP_KEY` โดยตั้งเป็นข้อความสุ่มอย่างน้อย 16 ตัวอักษร ห้ามบันทึก Secret ลง GitHub
-8. Deploy แล้วเปิด `https://kit-stock.kishimot0-th.workers.dev/setup`
-9. กรอก Setup Key เพื่อสร้าง Admin คนแรก แล้วเข้าสู่ระบบที่ `/login`
-
-## ข้อมูลจาก KIT-QR.xlsx
-
-ไฟล์ที่ได้รับเป็นแบบฟอร์ม `DELIVERY QR CODE LABEL` ซึ่งอ้างอิงข้อมูลจากชีตภายนอก ไม่ใช่รายการ Part Master จริง ระบบจึงรองรับและแสดงช่องทั้งหมดตามแบบฟอร์ม ได้แก่ Customer, Part No., Part Name, Delivery Qty/Date/Time, Sender, Inspector, Packing Standard/Count, Full packing Qty, Partial Qty และ Total packing Qty ส่วนรายการ Part จริงเพิ่มได้ในหน้า Part Master หลัง Login
-
-## ความปลอดภัย
-
-- PIN ไม่เก็บเป็นข้อความธรรมดา แต่เก็บค่า hash พร้อม salt
-- ใส่ PIN ผิดครบ 5 ครั้งจะล็อกบัญชี 15 นาที
-- Session หมดอายุภายใน 12 ชั่วโมง
-- รูปใน R2 เปิดผ่านระบบเฉพาะผู้ที่ Login แล้ว
-- ห้าม commit `.env`, `.dev.vars`, PIN หรือ `SETUP_KEY`
-
-## ตรวจระบบสำหรับผู้พัฒนา
-
-```bash
-npm ci
-npm run lint
-npm run build
+```text
+https://kit-stock-system.kishimoto-th.workers.dev
 ```
 
-พัฒนาในเครื่องด้วย `npm run dev` และใช้ `.dev.vars` สำหรับ `SETUP_KEY` เท่านั้น
+## สิ่งที่ชุดอัปเกรดจะทำ
+
+- เปลี่ยนหน้าเว็บเก่าเป็นระบบ Delivery Due Control ใหม่
+- ใช้ Binding เดิมชื่อ `DB` และ `BUCKET`
+- เก็บ D1 Database และ R2 Bucket เดิมไว้
+- ไม่ลบตารางหรือข้อมูลของระบบ Stock เก่า
+- เพิ่มตาราง Due, QR Tag, ผู้ใช้งาน และ Session ที่ระบบใหม่ต้องใช้
+- เพิ่ม Due 706 รายการ รวม 69,385 ชิ้น โดยป้องกันข้อมูลซ้ำ
+
+## สำคัญก่อนวางไฟล์ทับ
+
+เก็บไฟล์ Cloudflare เดิมต่อไปนี้ไว้ ห้ามลบ:
+
+- `wrangler.jsonc` หรือ `wrangler.json` หรือ `wrangler.toml`
+- `.git` หากทำงานผ่าน GitHub บนเครื่อง
+
+ไฟล์ `wrangler.overlay.example.jsonc` เป็นเพียงตัวอย่าง ไม่ต้องนำไปแทนไฟล์ Wrangler เดิม เพราะไฟล์เดิมมีรหัสเชื่อม D1/R2 ของบริษัทอยู่แล้ว
+
+## ถ้าอัปโหลดผ่าน GitHub ตามภาพ
+
+Repository ของคุณคือ `kishimotoindustrythailandk-bit/kit-stock-system`
+
+1. แตก ZIP นี้บนคอมพิวเตอร์
+2. เข้าโฟลเดอร์ชั้นในสุดของระบบเก่าที่มี `app`, `db`, `public`, `worker` และ `package.json`
+3. วางไฟล์จาก ZIP ทับโฟลเดอร์นั้น และเลือก **Replace files**
+4. อย่าสร้างโฟลเดอร์ `kit-stock-system-v1` ซ้อนเพิ่มอีกชั้น
+5. Upload/Commit ไฟล์ที่แก้ไขกลับไปยังตำแหน่งเดิมใน GitHub
+6. Cloudflare จะ Build และ Deploy ทับ Worker `kit-stock-system` โดย URL เดิมไม่เปลี่ยน
+
+หลังโค้ด Deploy แล้ว ต้องอัปเกรด D1 หนึ่งครั้งด้วยไฟล์ `database-upgrade-due.sql` ผ่าน D1 Console หรือใช้วิธีติดตั้งบนเครื่องด้านล่าง
+
+## วิธีแนะนำ: อัปเกรดจากคอมพิวเตอร์ Windows
+
+วิธีนี้จะอัปเกรด D1 และ Deploy ให้ครบอัตโนมัติ
+
+1. สำรองโฟลเดอร์ระบบเก่าไว้หนึ่งชุด
+2. วางไฟล์จาก ZIP ทับโฟลเดอร์ระบบเก่า
+3. ดับเบิลคลิก `INSTALL-WINDOWS.bat`
+4. Login Cloudflare เมื่อเบราว์เซอร์เปิด
+5. ตั้ง PIN ใหม่สำหรับรหัสพนักงาน `ADMIN`
+
+ตัวติดตั้งจะใช้ Binding เดิม ไม่สร้าง D1 หรือ R2 ใหม่
+
+## อัปเกรดด้วยคำสั่งเอง
+
+```bash
+npm install
+npx wrangler login
+npm run db:upgrade
+npm run deploy
+npx wrangler secret put INITIAL_ADMIN_PIN --config dist/server/wrangler.json
+```
+
+## เข้าสู่ระบบใหม่
+
+- รหัสพนักงาน: `ADMIN`
+- PIN: ค่าที่ตั้งตอนใช้คำสั่ง `INITIAL_ADMIN_PIN`
+
+## สำรองข้อมูลก่อนอัปเกรด
+
+แนะนำให้เปิด Cloudflare > Storage & databases > D1 > ฐานข้อมูลเดิม > Backups และสร้าง Backup ก่อน แม้ไฟล์อัปเกรดนี้ไม่มีคำสั่งลบข้อมูล
+
+## ไฟล์ข้อมูลต้นฉบับ
+
+โฟลเดอร์ `source-files` มี Excel ต้นทางสองไฟล์และ PDF Tag ตัวอย่าง ไฟล์ PDF ไม่ถูกนำไปตัดยอดอัตโนมัติ
