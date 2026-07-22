@@ -73,3 +73,5 @@ npx wrangler secret put INITIAL_ADMIN_PIN --config dist/server/wrangler.json
 ## ไฟล์ข้อมูลต้นฉบับ
 
 โฟลเดอร์ `source-files` มี Excel ต้นทางสองไฟล์และ PDF Tag ตัวอย่าง ไฟล์ PDF ไม่ถูกนำไปตัดยอดอัตโนมัติ
+
+Deployment refresh 22/07/2026
