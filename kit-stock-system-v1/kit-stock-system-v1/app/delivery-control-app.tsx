@@ -344,17 +344,38 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { disp
     setImporting(true);
     setNotice(null);
     try {
-      const response = await fetch("/api/due-import", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ importToken: `${file.name}|${file.size}|${file.lastModified}`, fileName: file.name, rows: previewRows }),
-      });
-      const result = await response.json() as { error?: string; rowCount?: number; totalQty?: number };
-      if (!response.ok) throw new Error(result.error || "นำเข้าไฟล์ไม่สำเร็จ");
+      // Each request stays below both D1's 100-bind limit per statement and
+      // the Workers Free plan's 50 D1-query limit per invocation.
+      const requestBatchSize = 280;
+      const batchCount = Math.ceil(previewRows.length / requestBatchSize);
+      const baseToken = `${file.name}|${file.size}|${file.lastModified}`;
+      for (let batchIndex = 0; batchIndex < batchCount; batchIndex += 1) {
+        const rows = previewRows.slice(
+          batchIndex * requestBatchSize,
+          (batchIndex + 1) * requestBatchSize,
+        );
+        setNotice({
+          type: "success",
+          text: `กำลังนำเข้าข้อมูลชุดที่ ${batchIndex + 1}/${batchCount} กรุณารอสักครู่`,
+        });
+        const response = await fetch("/api/due-import", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            importToken: `${baseToken}|batch:${batchIndex + 1}/${batchCount}`,
+            fileName: batchCount > 1 ? `${file.name} (${batchIndex + 1}/${batchCount})` : file.name,
+            rows,
+          }),
+        });
+        const result = await response.json() as { error?: string };
+        if (!response.ok) throw new Error(result.error || `นำเข้าข้อมูลชุดที่ ${batchIndex + 1} ไม่สำเร็จ`);
+      }
+      const importedRowCount = previewRows.length;
+      const importedTotalQty = previewRows.reduce((sum, row) => sum + row.reqQty, 0);
       setFile(null);
       setPreviewRows([]);
       if (fileInput.current) fileInput.current.value = "";
-      setNotice({ type: "success", text: `นำเข้า Due สำเร็จ ${fmt(result.rowCount || 0)} รายการ รวม ${fmt(result.totalQty || 0)} ชิ้น` });
+      setNotice({ type: "success", text: `นำเข้า Due สำเร็จ ${fmt(importedRowCount)} รายการ รวม ${fmt(importedTotalQty)} ชิ้น` });
       await loadDue();
     } catch (caught) {
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "นำเข้าไฟล์ไม่สำเร็จ" });
