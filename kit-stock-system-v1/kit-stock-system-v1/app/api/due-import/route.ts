@@ -66,19 +66,10 @@ export async function POST(request: Request) {
     });
 
     const db = getDb();
-    const duplicate = await db.select({
-      id: deliveryImports.id,
-      rowCount: deliveryImports.rowCount,
-      totalQty: deliveryImports.totalQty,
-    }).from(deliveryImports)
+    const duplicate = await db.select({ id: deliveryImports.id }).from(deliveryImports)
       .where(eq(deliveryImports.importToken, importToken)).limit(1);
     if (duplicate.length) {
-      return Response.json({
-        importId: duplicate[0].id,
-        rowCount: duplicate[0].rowCount,
-        totalQty: duplicate[0].totalQty,
-        alreadyImported: true,
-      });
+      return Response.json({ error: "ไฟล์นี้ถูกนำเข้าแล้ว ระบบจึงไม่บันทึกซ้ำ" }, { status: 409 });
     }
 
     const totalQty = normalized.reduce((sum, row) => sum + row.reqQty, 0);
@@ -92,13 +83,9 @@ export async function POST(request: Request) {
     }).returning();
     importId = created.id;
 
-    // D1 permits at most 100 bound parameters per SQL statement. Drizzle binds
-    // 14 values for each row in this table, so seven rows (98 parameters) is
-    // the largest safe multi-row insert.
-    const insertBatchSize = 7;
-    for (let offset = 0; offset < normalized.length; offset += insertBatchSize) {
+    for (let offset = 0; offset < normalized.length; offset += 80) {
       await db.insert(deliveryDueLines).values(
-        normalized.slice(offset, offset + insertBatchSize).map((row) => ({ ...row, importId })),
+        normalized.slice(offset, offset + 80).map((row) => ({ ...row, importId })),
       );
     }
 
