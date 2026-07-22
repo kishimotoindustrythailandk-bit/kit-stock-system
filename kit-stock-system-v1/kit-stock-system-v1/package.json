@@ -11,6 +11,7 @@
     "preview": "npm run build && wrangler dev --config dist/server/wrangler.json",
     "deploy": "npm run build && wrangler deploy --config dist/server/wrangler.json",
     "db:upgrade": "wrangler d1 execute DB --remote --file=database-upgrade-due.sql",
+    "db:upgrade:v22": "wrangler d1 execute DB --remote --file=database-upgrade-v2.2-users-scan.sql",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate"

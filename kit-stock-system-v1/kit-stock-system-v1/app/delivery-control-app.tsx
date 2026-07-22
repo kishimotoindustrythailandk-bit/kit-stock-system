@@ -48,6 +48,7 @@ type DueImport = {
   importedByName: string;
   createdAt: string;
 };
+type DueReceipt = { id: number; dueLineId: number; tagId: string; qty: number; unit: string; location: string; receivedByName: string; createdAt: string; materialCode: string; fact: string };
 
 type TagPreview = {
   tag: {
@@ -71,7 +72,10 @@ type TagPreview = {
 };
 
 type ImportRow = Omit<DueLine, "id" | "importId" | "status" | "scannedQty" | "tagCount"> & { sourceKey: string };
-type DuePayload = { dues: DueLine[]; imports: DueImport[]; scans: DueScan[]; error?: string };
+type DuePayload = { dues: DueLine[]; imports: DueImport[]; scans: DueScan[]; receipts: DueReceipt[]; error?: string };
+type SystemUser = { id: number; employeeCode: string; displayName: string; email: string; role: string; active: boolean; createdAt?: string };
+type UserForm = { id?: number; employeeCode: string; displayName: string; email: string; role: "dispatcher" | "inspector"; pin: string; active: boolean };
+const EMPTY_USER: UserForm = { employeeCode: "", displayName: "", email: "", role: "dispatcher", pin: "", active: true };
 
 const NAV: Array<{ key: PageKey; label: string; icon: string }> = [
   { key: "dashboard", label: "หน้าหลัก", icon: "⌂" },
@@ -180,10 +184,10 @@ function Empty({ title = "ยังไม่มีข้อมูล", text = "�
   return <div className="empty"><span>▦</span><strong>{title}</strong><p>{text}</p></div>;
 }
 
-export default function DeliveryControlApp({ user, signOutPath }: { user: { displayName: string; email: string }; signOutPath: string }) {
+export default function DeliveryControlApp({ user, signOutPath }: { user: { id: number; employeeCode: string; displayName: string; email: string; role: string }; signOutPath: string }) {
   const [page, setPage] = useState<PageKey>("dashboard");
   const [menuOpen, setMenuOpen] = useState(false);
-  const [payload, setPayload] = useState<DuePayload>({ dues: [], imports: [], scans: [] });
+  const [payload, setPayload] = useState<DuePayload>({ dues: [], imports: [], scans: [], receipts: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -194,7 +198,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { disp
   const [rawTag, setRawTag] = useState("");
   const [tagPreview, setTagPreview] = useState<TagPreview | null>(null);
   const [checkingTag, setCheckingTag] = useState(false);
-  const [confirmingCut, setConfirmingCut] = useState(false);
+  const [adminScanMode, setAdminScanMode] = useState<"receive" | "dispatch">("receive");
   const [filterDate, setFilterDate] = useState("");
   const [filterFact, setFilterFact] = useState("ALL");
   const [filterTime, setFilterTime] = useState("ALL");
@@ -203,6 +207,11 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { disp
   const [cameraError, setCameraError] = useState("");
   const [selectedScan, setSelectedScan] = useState<DueScan | null>(null);
   const [settings, setSettings] = useState({ partial: true, confirm: true, sound: true, autoFocus: true });
+  const [systemUsers, setSystemUsers] = useState<SystemUser[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [userSaving, setUserSaving] = useState(false);
+  const [userForm, setUserForm] = useState<UserForm>(EMPTY_USER);
+  const [userEditorOpen, setUserEditorOpen] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const tagInput = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -243,6 +252,57 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { disp
     return () => window.clearTimeout(timer);
   }, []);
 
+  async function loadUsers() {
+    if (user.role !== "admin") return;
+    setUsersLoading(true);
+    try {
+      const response = await fetch("/api/users", { cache: "no-store" });
+      const data = await response.json() as { users?: SystemUser[]; error?: string };
+      if (!response.ok) throw new Error(data.error || "โหลดผู้ใช้งานไม่สำเร็จ");
+      setSystemUsers(data.users || []);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "โหลดผู้ใช้งานไม่สำเร็จ" });
+    } finally {
+      setUsersLoading(false);
+    }
+  }
+
+  async function saveUser(event: FormEvent) {
+    event.preventDefault();
+    setUserSaving(true);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/users", {
+        method: userForm.id ? "PATCH" : "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(userForm),
+      });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || "บันทึกผู้ใช้งานไม่สำเร็จ");
+      setNotice({ type: "success", text: userForm.id ? "แก้ไขผู้ใช้งานเรียบร้อย" : "เพิ่มผู้ใช้งานเรียบร้อย สามารถเข้าสู่ระบบได้ทันที" });
+      setUserForm(EMPTY_USER);
+      setUserEditorOpen(false);
+      await loadUsers();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "บันทึกผู้ใช้งานไม่สำเร็จ" });
+    } finally {
+      setUserSaving(false);
+    }
+  }
+
+  function editUser(target: SystemUser) {
+    setUserForm({ id: target.id, employeeCode: target.employeeCode, displayName: target.displayName, email: target.email, role: target.role as "dispatcher" | "inspector", pin: "", active: target.active });
+    setUserEditorOpen(true);
+  }
+
+  async function toggleUser(target: SystemUser) {
+    const response = await fetch("/api/users", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: target.id, active: !target.active }) });
+    const data = await response.json() as { error?: string };
+    if (!response.ok) return setNotice({ type: "error", text: data.error || "เปลี่ยนสถานะไม่สำเร็จ" });
+    setNotice({ type: "success", text: `${target.active ? "ระงับ" : "เปิดใช้"}บัญชี ${target.employeeCode} แล้ว` });
+    await loadUsers();
+  }
+
   useEffect(() => {
     if (!cameraOpen) return;
     let stream: MediaStream | null = null;
@@ -268,7 +328,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { disp
               setRawTag(value);
               setTagPreview(null);
               setCameraOpen(false);
-              setNotice({ type: "success", text: "อ่าน QR สำเร็จ กรุณากดตรวจสอบ Tag" });
+              void processTag(value);
               return;
             }
           } catch { /* keep scanning */ }
@@ -285,7 +345,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { disp
       window.clearTimeout(timer);
       stream?.getTracks().forEach((track) => track.stop());
     };
-  }, [cameraOpen]);
+  }, [cameraOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function parseExcel(event: ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0] ?? null;
@@ -363,9 +423,11 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { disp
     }
   }
 
-  async function checkTag(event?: FormEvent) {
+  async function processTag(value?: string | FormEvent) {
+    const event = typeof value === "object" ? value : undefined;
     event?.preventDefault();
-    if (!rawTag.trim()) return;
+    const scannedValue = typeof value === "string" ? value.trim() : rawTag.trim();
+    if (!scannedValue || checkingTag) return;
     setCheckingTag(true);
     setTagPreview(null);
     setNotice(null);
@@ -373,41 +435,19 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { disp
       const response = await fetch("/api/due", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ rawPayload: rawTag.trim(), preview: true }),
+        body: JSON.stringify({ rawPayload: scannedValue, operation: user.role === "admin" ? adminScanMode : undefined }),
       });
-      const result = await response.json() as TagPreview & { error?: string };
-      if (!response.ok) throw new Error(result.error || "ตรวจสอบ Tag ไม่สำเร็จ");
+      const result = await response.json() as TagPreview & { action?: string; error?: string };
+      if (!response.ok) throw new Error(result.error || "บันทึก Tag ไม่สำเร็จ");
       setTagPreview(result);
-      setNotice({ type: "success", text: "ตรวจสอบ Tag สำเร็จ ข้อมูลตรงกับ Due กรุณาตรวจยอดก่อนยืนยัน" });
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบ Tag ไม่สำเร็จ" });
-    } finally {
-      setCheckingTag(false);
-    }
-  }
-
-  async function confirmCut() {
-    if (!tagPreview || !rawTag.trim()) return;
-    setConfirmingCut(true);
-    setNotice(null);
-    try {
-      const response = await fetch("/api/due", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ rawPayload: rawTag.trim() }),
-      });
-      const result = await response.json() as { error?: string; due?: DueLine & { remainingQty: number } };
-      if (!response.ok) throw new Error(result.error || "ตัดยอด Tag ไม่สำเร็จ");
-      const due = result.due!;
-      setNotice({ type: "success", text: `ตัดยอด ${due.materialCode} สำเร็จ ส่งแล้ว ${fmt(due.scannedQty)}/${fmt(due.reqQty)} ชิ้น เหลือ ${fmt(due.remainingQty)} ชิ้น` });
       setRawTag("");
-      setTagPreview(null);
+      setNotice({ type: "success", text: result.action === "received" ? `รับเข้า Tag ${result.tag.tagId} สำเร็จ โดย ${user.displayName}` : `ส่งออกและตัด Due ${result.due.materialCode} สำเร็จ เหลือ ${fmt(result.due.remainingAfter)} ชิ้น` });
       await loadDue();
       window.setTimeout(() => tagInput.current?.focus(), 100);
     } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตัดยอด Tag ไม่สำเร็จ" });
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "บันทึก Tag ไม่สำเร็จ" });
     } finally {
-      setConfirmingCut(false);
+      setCheckingTag(false);
     }
   }
 
@@ -452,6 +492,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { disp
 
   function go(next: PageKey) {
     setPage(next);
+    if (next === "users") void loadUsers();
     setMenuOpen(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -557,26 +598,27 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { disp
 
   function renderScan() {
     const progress = tagPreview ? Math.min(100, Math.round((tagPreview.due.projectedQty / tagPreview.due.reqQty) * 100)) : 0;
+    const scanMode = user.role === "admin" ? adminScanMode : user.role === "dispatcher" ? "receive" : "dispatch";
     return <>
+      {user.role === "admin" && <Card title="โหมดทดสอบของ Admin"><div className="scan-mode"><button className={adminScanMode === "receive" ? "active" : ""} onClick={() => setAdminScanMode("receive")}>⇥ ผู้จัดงาน — รับเข้า</button><button className={adminScanMode === "dispatch" ? "active" : ""} onClick={() => setAdminScanMode("dispatch")}>⌗ ผู้ตรวจงาน — ส่งออก/ตัด Due</button></div></Card>}
       <div className="scan-layout">
         <section className="scanner-card">
-          <div className="scanner-title"><div><h3>สแกน QR Tag</h3><p>ใช้เครื่องยิง กล้อง หรือกรอกรหัส Tag ด้วยตนเอง</p></div><button className="camera-button" onClick={() => setCameraOpen(true)}>▣ เปิดกล้อง</button></div>
-          <div className="scanner-visual"><div className="scan-frame"><span className="qr-symbol">▦</span><b>พร้อมรับ QR Tag</b><small>วาง QR ให้อยู่ในกรอบ หรือยิง Tag ได้ทันที</small><i /></div></div>
-          <form className="manual-scan" onSubmit={checkTag}><label><span>รหัส Tag / ข้อมูลจาก QR</span><input ref={tagInput} value={rawTag} onChange={(e) => { setRawTag(e.target.value); setTagPreview(null); }} placeholder="สแกนหรือวางข้อมูล Tag ที่นี่" autoComplete="off" /></label><button className="button primary" disabled={!rawTag.trim() || checkingTag}>{checkingTag ? "กำลังตรวจสอบ…" : "⌕ ตรวจสอบ Tag"}</button></form>
+          <div className="scanner-title"><div><h3>{scanMode === "receive" ? "สแกนรับงานเข้าระบบ" : "สแกนส่งออกและตัด Due"}</h3><p>สแกนแล้วระบบบันทึกและแสดงข้อมูลทันที</p></div><button className="camera-button" onClick={() => setCameraOpen(true)}>▣ เปิดกล้อง</button></div>
+          <div className="scanner-visual"><div className="scan-frame"><span className="qr-symbol">▦</span><b>{checkingTag ? "กำลังบันทึก…" : "พร้อมรับ QR Tag"}</b><small>วาง QR ให้อยู่ในกรอบ หรือยิง Tag ได้ทันที</small><i /></div></div>
+          <form className="manual-scan" onSubmit={processTag}><label><span>รหัส Tag / ข้อมูลจาก QR</span><input ref={tagInput} value={rawTag} onChange={(e) => { setRawTag(e.target.value); setTagPreview(null); }} placeholder="ยิง Tag แล้วกด Enter หรือวางข้อมูลที่นี่" autoComplete="off" /></label><button className="button primary" disabled={!rawTag.trim() || checkingTag}>{checkingTag ? "กำลังบันทึก…" : scanMode === "receive" ? "บันทึกรับเข้า" : "บันทึกส่งออก"}</button></form>
         </section>
         <section className="tag-result">
           <header><div><p>ข้อมูล Tag และ Due</p><h3>{tagPreview ? tagPreview.due.materialCode : "รอการสแกน"}</h3></div><span className={`status ${tagPreview ? "completed" : "pending"}`}>{tagPreview ? "ข้อมูลตรงกัน" : "ยังไม่มี Tag"}</span></header>
           {tagPreview ? <>
             <div className="tag-main"><div className="part-placeholder">◈</div><div><small>PART / MATERIAL</small><b>{tagPreview.due.materialCode}</b><p>{tagPreview.due.materialDescription || "ไม่ระบุรายละเอียด"}</p></div></div>
             <div className="detail-grid"><div><small>FAC / Line</small><b>{tagPreview.due.fact} / {tagPreview.due.line || "—"}</b></div><div><small>DO / Seq</small><b>{tagPreview.due.doNo} / {tagPreview.due.seq}</b></div><div><small>แผนส่งวัน / เวลา</small><b>{formatDate(tagPreview.due.deliveryDate)} {tagPreview.due.deliveryTime}</b></div><div><small>Tag ID</small><b>{tagPreview.tag.tagId}</b></div><div><small>Location</small><b>{tagPreview.tag.location || "—"}</b></div><div><small>จำนวนใน Tag</small><b>{fmt(tagPreview.tag.qty)} {tagPreview.tag.unit}</b></div></div>
-            <div className="cut-summary"><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><span><b>{progress}%</b>หลังตัดยอด</span></div><div className="cut-numbers"><p><span>แผนทั้งหมด</span><b>{fmt(tagPreview.due.reqQty)}</b></p><p><span>ส่งแล้วก่อนหน้า</span><b>{fmt(tagPreview.due.scannedQty)}</b></p><p className="current"><span>Tag นี้</span><b>+{fmt(tagPreview.tag.qty)}</b></p><p><span>คงเหลือหลังตัด</span><b>{fmt(tagPreview.due.remainingAfter)}</b></p></div></div>
-            {tagPreview.due.projectedStatus === "over" && <div className="inline-warning">! จำนวนหลังตัดยอดจะเกิน Due กรุณาตรวจสอบก่อนยืนยัน</div>}
-            <div className="confirm-row"><button className="button secondary" onClick={() => { setTagPreview(null); setRawTag(""); }}>ยกเลิก Tag นี้</button><button className="button success" disabled={confirmingCut} onClick={confirmCut}>{confirmingCut ? "กำลังตัดยอด…" : "✓ ยืนยันตัดยอด"}</button></div>
-          </> : <Empty title="สแกน Tag เพื่อเริ่มตัดยอด" text="ระบบจะตรวจสอบ DO, Material, Seq, วันที่, Line และ Shop กับ Due ก่อนให้ยืนยัน" />}
+            <div className="cut-summary"><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><span><b>{progress}%</b>{scanMode === "receive" ? "ยอดส่งออกปัจจุบัน" : "หลังตัดยอด"}</span></div><div className="cut-numbers"><p><span>แผนทั้งหมด</span><b>{fmt(tagPreview.due.reqQty)}</b></p><p><span>ส่งออกแล้ว</span><b>{fmt(tagPreview.due.scannedQty)}</b></p><p className="current"><span>จำนวน Tag</span><b>{fmt(tagPreview.tag.qty)}</b></p><p><span>คงเหลือ</span><b>{fmt(tagPreview.due.remainingAfter)}</b></p></div></div>
+            <div className="scan-saved">✓ {scanMode === "receive" ? "บันทึกรับเข้างานเรียบร้อย รอผู้ตรวจสแกนส่งออก" : "บันทึกส่งออกและตัดยอด Due เรียบร้อย"}</div>
+          </> : <Empty title={scanMode === "receive" ? "รอผู้จัดงานสแกนรับเข้า" : "รอผู้ตรวจงานสแกนส่งออก"} text="ข้อมูล Tag และ Due จะแสดงทันทีหลังสแกนสำเร็จ ไม่ต้องกดตรวจสอบ Tag" />}
         </section>
       </div>
-      <Card title="รายการสแกนและตัดยอดล่าสุด" action={<button className="text-button" onClick={() => go("history")}>ดูประวัติทั้งหมด →</button>}>
-        {payload.scans.length ? <div className="table-wrap"><table><thead><tr><th>วัน / เวลา</th><th>FAC / Line</th><th>Part No.</th><th>Tag ID</th><th className="num">จำนวนที่ตัด</th><th>สถานะ</th><th>ผู้สแกน</th></tr></thead><tbody>{payload.scans.slice(0, 8).map((scan) => <tr key={scan.id}><td>{formatDateTime(scan.createdAt)}</td><td><b>{scan.fact}</b></td><td><b>{scan.materialCode}</b></td><td>{scan.tagId}</td><td className="num sent"><b>{fmt(scan.qty)} {scan.unit}</b></td><td><span className="status completed">สำเร็จ</span></td><td>{scan.scannedByName}</td></tr>)}</tbody></table></div> : <Empty text="เมื่อยืนยันตัดยอด รายการจะแสดงที่นี่" />}
+      <Card title={scanMode === "receive" ? "รายการรับเข้าล่าสุด" : "รายการส่งออกและตัดยอดล่าสุด"} action={<button className="text-button" onClick={() => go("history")}>ดูประวัติทั้งหมด →</button>}>
+        {scanMode === "receive" ? (payload.receipts?.length ? <div className="table-wrap"><table><thead><tr><th>วัน / เวลา</th><th>FAC</th><th>Part No.</th><th>Tag ID</th><th className="num">จำนวน</th><th>ผู้จัดงาน</th></tr></thead><tbody>{payload.receipts.slice(0, 8).map((item) => <tr key={item.id}><td>{formatDateTime(item.createdAt)}</td><td><b>{item.fact}</b></td><td><b>{item.materialCode}</b></td><td>{item.tagId}</td><td className="num sent"><b>{fmt(item.qty)} {item.unit}</b></td><td>{item.receivedByName}</td></tr>)}</tbody></table></div> : <Empty text="เมื่อผู้จัดงานสแกนรับเข้า รายการจะแสดงที่นี่" />) : (payload.scans.length ? <div className="table-wrap"><table><thead><tr><th>วัน / เวลา</th><th>FAC</th><th>Part No.</th><th>Tag ID</th><th className="num">จำนวนที่ตัด</th><th>ผู้ตรวจ</th></tr></thead><tbody>{payload.scans.slice(0, 8).map((scan) => <tr key={scan.id}><td>{formatDateTime(scan.createdAt)}</td><td><b>{scan.fact}</b></td><td><b>{scan.materialCode}</b></td><td>{scan.tagId}</td><td className="num sent"><b>{fmt(scan.qty)} {scan.unit}</b></td><td>{scan.scannedByName}</td></tr>)}</tbody></table></div> : <Empty text="เมื่อผู้ตรวจสแกนส่งออก รายการจะแสดงที่นี่" />)}
       </Card>
     </>;
   }
@@ -615,7 +657,10 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { disp
   }
 
   function renderUsers() {
-    return <><Card title="ภาพรวมผู้ใช้งาน" action={<span className="access-pill">จัดเก็บสิทธิ์บน Cloudflare D1</span>}><div className="metrics four compact"><MetricCard tone="blue" icon="♙" label="ผู้ใช้งานทั้งหมด" value="1" suffix="คน" /><MetricCard tone="green" icon="✓" label="ใช้งานปกติ" value="1" suffix="คน" /><MetricCard tone="orange" icon="◷" label="รออนุมัติ" value="0" suffix="คน" /><MetricCard tone="red" icon="×" label="ถูกระงับ" value="0" suffix="คน" /></div></Card><Card title="ผู้ใช้งานระบบ"><div className="table-wrap"><table><thead><tr><th>ผู้ใช้งาน</th><th>อีเมล</th><th>บทบาท</th><th>แผนก / FAC</th><th>สถานะ</th><th>การเข้าถึง</th></tr></thead><tbody><tr><td><div className="user-cell"><span>{user.displayName.slice(0, 1).toUpperCase()}</span><b>{user.displayName}</b></div></td><td>{user.email || "—"}</td><td><span className="role-pill">ผู้ดูแลระบบ</span></td><td>ระบบกลาง</td><td><span className="status completed">ใช้งานปกติ</span></td><td>Cloudflare</td></tr></tbody></table></div></Card><div className="split-grid"><Card title="บทบาทผู้ใช้งาน"><div className="role-list"><p><span>♙</span><b>ผู้ดูแลระบบ</b><em>1 คน</em></p><p><span>▣</span><b>หัวหน้างาน</b><em>0 คน</em></p><p><span>⌗</span><b>พนักงานจัดส่ง</b><em>0 คน</em></p></div></Card><Card title="การควบคุมสิทธิ์"><div className="permission-note"><span>◆</span><div><b>เข้าสู่ระบบด้วยรหัสพนักงานและ PIN</b><p>ข้อมูลผู้ใช้งานและ Session จัดเก็บในฐานข้อมูล Cloudflare D1 โดย PIN เริ่มต้นของผู้ดูแลถูกเก็บเป็น Cloudflare Secret</p></div></div></Card></div></>;
+    const active = systemUsers.filter((item) => item.active).length;
+    const dispatchers = systemUsers.filter((item) => item.role === "dispatcher").length;
+    const inspectors = systemUsers.filter((item) => item.role === "inspector").length;
+    return <><Card title="ภาพรวมผู้ใช้งาน" action={<button className="button primary" onClick={() => { setUserForm(EMPTY_USER); setUserEditorOpen(true); }}>＋ เพิ่มผู้ใช้งาน</button>}><div className="metrics four compact"><MetricCard tone="blue" icon="♙" label="ผู้ใช้งานทั้งหมด" value={fmt(systemUsers.length)} suffix="คน" /><MetricCard tone="green" icon="✓" label="ใช้งานปกติ" value={fmt(active)} suffix="คน" /><MetricCard tone="orange" icon="⇥" label="ผู้จัดงาน" value={fmt(dispatchers)} suffix="คน" /><MetricCard tone="purple" icon="⌗" label="ผู้ตรวจงาน" value={fmt(inspectors)} suffix="คน" /></div></Card><Card title="ผู้ใช้งานระบบ" action={<button className="button secondary" onClick={() => void loadUsers()}>↻ รีเฟรช</button>}>{usersLoading ? <div className="loading-state"><span /><p>กำลังโหลดผู้ใช้งาน…</p></div> : <div className="table-wrap"><table><thead><tr><th>รหัส / ผู้ใช้งาน</th><th>อีเมล</th><th>บทบาท</th><th>สถานะ</th><th>จัดการ</th></tr></thead><tbody>{systemUsers.map((item) => <tr key={item.id}><td><div className="user-cell"><span>{item.displayName.slice(0, 1).toUpperCase()}</span><div><b>{item.displayName}</b><small>{item.employeeCode}</small></div></div></td><td>{item.email || "—"}</td><td><span className="role-pill">{item.role === "admin" ? "ผู้ดูแลระบบ" : item.role === "dispatcher" ? "ผู้จัดงาน (รับเข้า)" : "ผู้ตรวจงาน (ส่งออก)"}</span></td><td><span className={`status ${item.active ? "completed" : "over"}`}>{item.active ? "ใช้งานปกติ" : "ระงับ"}</span></td><td>{item.role === "admin" ? <span className="muted">บัญชีหลัก</span> : <div className="user-actions"><button className="tiny-button" onClick={() => editUser(item)}>แก้ไข / PIN</button><button className={`tiny-button ${item.active ? "danger-outline" : ""}`} onClick={() => void toggleUser(item)}>{item.active ? "ระงับ" : "เปิดใช้"}</button></div>}</td></tr>)}</tbody></table></div>}</Card><div className="split-grid"><Card title="สิทธิ์ตามบทบาท"><div className="role-list"><p><span>⇥</span><b>ผู้จัดงาน</b><em>สแกนรับงานเข้าระบบ</em></p><p><span>⌗</span><b>ผู้ตรวจงาน</b><em>สแกนส่งออกและตัด Due</em></p></div></Card><Card title="ความปลอดภัย"><div className="permission-note"><span>◆</span><div><b>PIN 6 หลักเก็บแบบ Hash</b><p>Admin ตั้งหรือรีเซ็ต PIN ได้ แต่ระบบไม่แสดง PIN เดิม และการระงับบัญชีจะยกเลิก Session ของผู้ใช้งานทันที</p></div></div></Card></div></>;
   }
 
   const pageContent: Record<PageKey, () => ReactNode> = { dashboard: renderDashboard, plan: renderPlan, scan: renderScan, exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
@@ -625,12 +670,12 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { disp
     <aside className={`control-sidebar ${menuOpen ? "open" : ""}`}>
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
-      <nav>{NAV.map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
+      <nav>{NAV.filter((item) => user.role === "admin" || ["dashboard", "scan", "history"].includes(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
       <div className="sidebar-bottom"><div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.0.0</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
-      <header className="control-topbar"><button className="menu-button" onClick={() => setMenuOpen(true)}>☰</button><div><h1>{activeNav.label}</h1><p>หน้าหลัก <span>›</span> {PAGE_SUBTITLE[page]}</p></div><div className="top-user"><button className="notification">♧<i>{notice ? "1" : "0"}</i></button><span className="user-avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div><b>{user.displayName}</b><small>ผู้ดูแลระบบ</small></div><a href={signOutPath}>ออกจากระบบ</a></div></header>
+      <header className="control-topbar"><button className="menu-button" onClick={() => setMenuOpen(true)}>☰</button><div><h1>{activeNav.label}</h1><p>หน้าหลัก <span>›</span> {PAGE_SUBTITLE[page]}</p></div><div className="top-user"><button className="notification">♧<i>{notice ? "1" : "0"}</i></button><span className="user-avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div><b>{user.displayName}</b><small>{user.role === "admin" ? "ผู้ดูแลระบบ" : user.role === "dispatcher" ? "ผู้จัดงาน" : "ผู้ตรวจงาน"}</small></div><a href={signOutPath}>ออกจากระบบ</a></div></header>
       <div className="control-content">
         {notice && <div className={`toast ${notice.type}`}><span>{notice.type === "success" ? "✓" : "!"}</span><p>{notice.text}</p><button onClick={() => setNotice(null)}>×</button></div>}
         {error && <div className="toast error"><span>!</span><p>{error}</p><button onClick={() => void loadDue()}>ลองใหม่</button></div>}
@@ -638,5 +683,6 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { disp
       </div>
     </main>
     {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>สแกน QR Tag ด้วยกล้อง</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className="camera-view"><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div>{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
+    {userEditorOpen && <div className="modal-backdrop"><form className="user-modal" onSubmit={saveUser}><header><div><h3>{userForm.id ? "แก้ไขผู้ใช้งาน" : "เพิ่มผู้ใช้งาน"}</h3><p>กำหนดผู้จัดงานหรือผู้ตรวจงานได้หลายคน</p></div><button type="button" onClick={() => setUserEditorOpen(false)}>×</button></header><div className="user-form-grid"><label><span>รหัสพนักงาน *</span><input value={userForm.employeeCode} onChange={(e) => setUserForm((current) => ({ ...current, employeeCode: e.target.value.toUpperCase() }))} placeholder="เช่น DISP001" required /></label><label><span>ชื่อผู้ใช้งาน *</span><input value={userForm.displayName} onChange={(e) => setUserForm((current) => ({ ...current, displayName: e.target.value }))} placeholder="ชื่อ-นามสกุล" required /></label><label><span>บทบาท *</span><select value={userForm.role} onChange={(e) => setUserForm((current) => ({ ...current, role: e.target.value as UserForm["role"] }))}><option value="dispatcher">ผู้จัดงาน — สแกนรับเข้า</option><option value="inspector">ผู้ตรวจงาน — สแกนส่งออก/ตัด Due</option></select></label><label><span>{userForm.id ? "ตั้ง PIN ใหม่ (เว้นว่างหากไม่เปลี่ยน)" : "PIN 6 หลัก *"}</span><input type="password" inputMode="numeric" maxLength={6} pattern="[0-9]{6}" value={userForm.pin} onChange={(e) => setUserForm((current) => ({ ...current, pin: e.target.value.replace(/\D/g, "") }))} required={!userForm.id} placeholder="••••••" /></label><label className="wide"><span>อีเมล (ไม่บังคับ)</span><input type="email" value={userForm.email} onChange={(e) => setUserForm((current) => ({ ...current, email: e.target.value }))} /></label></div><footer><button type="button" className="button secondary" onClick={() => setUserEditorOpen(false)}>ยกเลิก</button><button className="button primary" disabled={userSaving}>{userSaving ? "กำลังบันทึก…" : "บันทึกผู้ใช้งาน"}</button></footer></form></div>}
   </div>;
 }

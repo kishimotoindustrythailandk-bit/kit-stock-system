@@ -1,5 +1,6 @@
 import { getRuntimeEnv } from "../../../../runtime/env";
 import { SESSION_COOKIE } from "../../../cloudflare-auth";
+import { verifyHashedPin } from "../../../pin-security";
 
 type LoginUser = {
   id: number;
@@ -36,8 +37,11 @@ export async function POST(request: Request) {
       FROM app_users WHERE employee_code = ?1 AND active = 1 LIMIT 1
     `).bind(employeeCode).first<LoginUser>();
     if (!user) return Response.json({ error: "รหัสพนักงานหรือ PIN ไม่ถูกต้อง" }, { status: 401 });
-    const expectedPin = user.pinHash === "ENV_INITIAL_ADMIN_PIN" ? env.INITIAL_ADMIN_PIN : "";
-    if (!expectedPin || !secureEqual(pin, expectedPin)) {
+    const legacyPin = user.pinHash === "ENV_INITIAL_ADMIN_PIN" ? env.INITIAL_ADMIN_PIN : "";
+    const valid = user.pinHash.startsWith("pbkdf2$")
+      ? await verifyHashedPin(pin, user.pinHash)
+      : Boolean(legacyPin && secureEqual(pin, legacyPin));
+    if (!valid) {
       return Response.json({ error: "รหัสพนักงานหรือ PIN ไม่ถูกต้อง" }, { status: 401 });
     }
     const id = sessionId();

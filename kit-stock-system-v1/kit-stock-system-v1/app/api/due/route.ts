@@ -1,7 +1,7 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { getCurrentUser } from "../../cloudflare-auth";
 import { getDb } from "../../../db";
-import { deliveryDueLines, deliveryImports, deliveryTagScans } from "../../../db/schema";
+import { deliveryDueLines, deliveryImports, deliveryTagReceipts, deliveryTagScans } from "../../../db/schema";
 
 function qrDate(value: string) {
   if (!/^\d{8}$/.test(value)) return "";
@@ -76,7 +76,15 @@ export async function GET() {
     }).from(deliveryTagScans)
       .innerJoin(deliveryDueLines, eq(deliveryTagScans.dueLineId, deliveryDueLines.id))
       .orderBy(desc(deliveryTagScans.id)).limit(100);
-    return Response.json({ dues, imports, scans });
+    const receipts = await db.select({
+      id: deliveryTagReceipts.id, dueLineId: deliveryTagReceipts.dueLineId, tagId: deliveryTagReceipts.tagId,
+      qty: deliveryTagReceipts.qty, unit: deliveryTagReceipts.unit, location: deliveryTagReceipts.location,
+      receivedByName: deliveryTagReceipts.receivedByName, createdAt: deliveryTagReceipts.createdAt,
+      materialCode: deliveryDueLines.materialCode, fact: deliveryDueLines.fact,
+    }).from(deliveryTagReceipts)
+      .innerJoin(deliveryDueLines, eq(deliveryTagReceipts.dueLineId, deliveryDueLines.id))
+      .orderBy(desc(deliveryTagReceipts.id)).limit(100);
+    return Response.json({ dues, imports, scans, receipts });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "โหลดข้อมูล Due ไม่สำเร็จ" }, { status: 500 });
   }
@@ -86,12 +94,14 @@ export async function POST(request: Request) {
   try {
     const user = await getCurrentUser();
     if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
-    const payload = await request.json() as { rawPayload?: string; preview?: boolean };
+    const payload = await request.json() as { rawPayload?: string; operation?: "receive" | "dispatch" };
     const tag = parseCustomerTag(payload.rawPayload ?? "");
     const db = getDb();
+    const operation = user.role === "admin" ? (payload.operation || "dispatch") : user.role === "dispatcher" ? "receive" : user.role === "inspector" ? "dispatch" : "";
+    if (!operation) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์สแกนรับเข้าหรือส่งออก" }, { status: 403 });
     const duplicate = await db.select({ id: deliveryTagScans.id }).from(deliveryTagScans)
       .where(eq(deliveryTagScans.tagId, tag.tagId)).limit(1);
-    if (duplicate.length) return Response.json({ error: "Tag นี้ถูกสแกนและตัดยอดแล้ว" }, { status: 409 });
+    if (duplicate.length) return Response.json({ error: "Tag นี้ถูกผู้ตรวจสแกนส่งออกและตัดยอดแล้ว" }, { status: 409 });
 
     const matches = await db.select().from(deliveryDueLines).where(and(
       eq(deliveryDueLines.doNo, tag.doNo),
@@ -111,22 +121,18 @@ export async function POST(request: Request) {
     const [currentRow] = await db.select({ total: sql<number>`coalesce(sum(${deliveryTagScans.qty}), 0)` })
       .from(deliveryTagScans).where(eq(deliveryTagScans.dueLineId, due.id));
     const currentQty = Number(currentRow?.total ?? 0);
-    const projectedQty = currentQty + tag.qty;
-    const projectedStatus = projectedQty === due.reqQty ? "completed" : projectedQty > due.reqQty ? "over" : "partial";
-
-    if (payload.preview) {
-      return Response.json({
-        tag,
-        due: {
-          ...due,
-          scannedQty: currentQty,
-          remainingQty: Math.max(due.reqQty - currentQty, 0),
-          projectedQty,
-          remainingAfter: Math.max(due.reqQty - projectedQty, 0),
-          projectedStatus,
-        },
-      });
+    if (operation === "receive") {
+      const received = await db.select({ id: deliveryTagReceipts.id }).from(deliveryTagReceipts).where(eq(deliveryTagReceipts.tagId, tag.tagId)).limit(1);
+      if (received.length) return Response.json({ error: "Tag นี้ถูกผู้จัดงานสแกนรับเข้าแล้ว" }, { status: 409 });
+      const [receipt] = await db.insert(deliveryTagReceipts).values({
+        dueLineId: due.id, tagId: tag.tagId, rawPayload: tag.rawPayload, qty: tag.qty, unit: tag.unit,
+        location: tag.location, receivedByName: user.displayName, receivedByCode: user.employeeCode,
+      }).returning();
+      return Response.json({ action: "received", receipt, tag, due: { ...due, scannedQty: currentQty, remainingQty: Math.max(due.reqQty - currentQty, 0), projectedQty: currentQty, remainingAfter: Math.max(due.reqQty - currentQty, 0), projectedStatus: due.status } }, { status: 201 });
     }
+
+    const [receipt] = await db.select().from(deliveryTagReceipts).where(eq(deliveryTagReceipts.tagId, tag.tagId)).limit(1);
+    if (!receipt) return Response.json({ error: "ยังไม่พบการสแกนรับเข้าจากผู้จัดงาน กรุณารับเข้า Tag นี้ก่อน" }, { status: 409 });
 
     const [scan] = await db.insert(deliveryTagScans).values({
       dueLineId: due.id,
@@ -143,7 +149,7 @@ export async function POST(request: Request) {
     const scannedQty = Number(sumRow?.total ?? 0);
     const status = scannedQty === due.reqQty ? "completed" : scannedQty > due.reqQty ? "over" : "partial";
     await db.update(deliveryDueLines).set({ status }).where(eq(deliveryDueLines.id, due.id));
-    return Response.json({ scan, due: { ...due, status, scannedQty, remainingQty: Math.max(due.reqQty - scannedQty, 0) } }, { status: 201 });
+    return Response.json({ action: "dispatched", scan, tag, receipt, due: { ...due, status, scannedQty, remainingQty: Math.max(due.reqQty - scannedQty, 0), projectedQty: scannedQty, remainingAfter: Math.max(due.reqQty - scannedQty, 0), projectedStatus: status } }, { status: 201 });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "ตัดยอด Tag ไม่สำเร็จ" }, { status: 500 });
   }

@@ -408,3 +408,24 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
   .summary-strip > div:last-child { border-bottom: 0 !important; }
   .top-user .user-avatar { width: 36px; height: 36px; }
 }
+
+.user-cell > div { display: grid; gap: 2px; }
+.user-cell small, .muted { color: #8090a8; font-size: 10px; }
+.user-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+.danger-outline { color: #d84352 !important; border-color: #f3c2c8 !important; background: #fff6f7 !important; }
+.user-modal { width: min(680px, calc(100vw - 28px)); padding: 24px; border-radius: 18px; background: #fff; box-shadow: 0 25px 80px rgba(8, 28, 61, .28); }
+.user-modal > header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; }
+.user-modal h3, .user-modal p { margin: 0; }
+.user-modal p { margin-top: 4px; color: #74839b; font-size: 12px; }
+.user-modal > header > button { width: 34px; height: 34px; border: 0; border-radius: 50%; background: #eef3fa; color: #53647e; font-size: 21px; }
+.user-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+.user-form-grid label { display: grid; gap: 7px; }
+.user-form-grid label > span { color: #42516a; font-size: 11px; font-weight: 700; }
+.user-form-grid input, .user-form-grid select { min-height: 45px; padding: 0 13px; border: 1px solid #dbe3ef; border-radius: 9px; background: #fff; color: #15284b; }
+.user-form-grid .wide { grid-column: 1 / -1; }
+.user-modal footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
+.scan-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.scan-mode button { min-height: 48px; border: 1px solid #dbe4f1; border-radius: 10px; background: #f7faff; color: #55657e; font-weight: 700; }
+.scan-mode button.active { color: #fff; border-color: var(--blue); background: var(--blue); box-shadow: 0 8px 20px rgba(10, 93, 218, .2); }
+.scan-saved { margin: 14px 18px 18px; padding: 13px 15px; color: #19844b; border: 1px solid #bce7cf; border-radius: 9px; background: #effbf4; font-weight: 700; }
+@media (max-width: 620px) { .user-form-grid { grid-template-columns: 1fr; } .user-form-grid .wide { grid-column: auto; } .user-modal { padding: 18px; } }

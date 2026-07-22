@@ -8,7 +8,7 @@ export default async function Home() {
 
   return (
     <DeliveryControlApp
-      user={{ displayName: user.displayName, email: user.email }}
+      user={{ id: user.id, employeeCode: user.employeeCode, displayName: user.displayName, email: user.email, role: user.role }}
       signOutPath="/api/auth/logout"
     />
   );

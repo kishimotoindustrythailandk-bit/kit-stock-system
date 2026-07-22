@@ -98,6 +98,19 @@ export const deliveryTagScans = sqliteTable("delivery_tag_scans", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+export const deliveryTagReceipts = sqliteTable("delivery_tag_receipts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  dueLineId: integer("due_line_id").notNull().references(() => deliveryDueLines.id, { onDelete: "cascade" }),
+  tagId: text("tag_id").notNull().unique(),
+  rawPayload: text("raw_payload").notNull(),
+  qty: integer("qty").notNull(),
+  unit: text("unit").notNull().default("PC"),
+  location: text("location").notNull().default(""),
+  receivedByName: text("received_by_name").notNull(),
+  receivedByCode: text("received_by_code").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
 export const appUsers = sqliteTable("app_users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   employeeCode: text("employee_code").notNull().unique(),
