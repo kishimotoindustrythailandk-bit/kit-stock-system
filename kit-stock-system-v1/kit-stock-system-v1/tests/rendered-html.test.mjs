@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("renders the standalone employee login page", async () => {
@@ -15,4 +16,16 @@ test("renders the standalone employee login page", async () => {
   const html = await response.text();
   assert.match(html, /รหัสพนักงาน/);
   assert.match(html, /DELIVERY DUE CONTROL/);
+});
+
+test("includes the v2.6 mobile navigation and card layouts", async () => {
+  const [appSource, css] = await Promise.all([
+    readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /mobile-bottom-nav/);
+  assert.match(appSource, /mobile-filter-toggle/);
+  assert.match(appSource, /mobile-card-table/);
+  assert.match(css, /@media\s*\(max-width:\s*720px\)/);
+  assert.match(css, /safe-area-inset-bottom/);
 });
