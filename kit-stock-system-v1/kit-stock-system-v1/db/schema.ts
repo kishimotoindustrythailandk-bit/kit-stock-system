@@ -120,6 +120,70 @@ export const partImages = sqliteTable("part_images", {
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+export const stockParts = sqliteTable("stock_parts", {
+  materialCode: text("material_code").primaryKey(),
+  partName: text("part_name").notNull().default(""),
+  customer: text("customer").notNull().default(""),
+  standardQty: integer("standard_qty").notNull().default(0),
+  active: integer("active", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const stockTags = sqliteTable("stock_tags", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tagId: text("tag_id").notNull().unique(),
+  materialCode: text("material_code").notNull().references(() => stockParts.materialCode),
+  qty: integer("qty").notNull(),
+  remainingQty: integer("remaining_qty").notNull(),
+  jobNo: text("job_no").notNull(),
+  productionDate: text("production_date").notNull(),
+  status: text("status").notNull().default("printed"),
+  printedByName: text("printed_by_name").notNull(),
+  receivedByName: text("received_by_name").notNull().default(""),
+  receivedByCode: text("received_by_code").notNull().default(""),
+  receivedAt: text("received_at"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const stockAllocations = sqliteTable("stock_allocations", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  customerTagId: text("customer_tag_id").notNull(),
+  stockTagId: integer("stock_tag_id").notNull().references(() => stockTags.id, { onDelete: "restrict" }),
+  dueLineId: integer("due_line_id").notNull().references(() => deliveryDueLines.id, { onDelete: "cascade" }),
+  qty: integer("qty").notNull(),
+  status: text("status").notNull().default("reserved"),
+  reservedByName: text("reserved_by_name").notNull(),
+  reservedAt: text("reserved_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  dispatchedByName: text("dispatched_by_name").notNull().default(""),
+  dispatchedAt: text("dispatched_at"),
+});
+
+export const stockPicks = sqliteTable("stock_picks", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  dueLineId: integer("due_line_id").notNull().references(() => deliveryDueLines.id, { onDelete: "cascade" }),
+  stockTagId: integer("stock_tag_id").notNull().references(() => stockTags.id, { onDelete: "restrict" }),
+  pickedQty: integer("picked_qty").notNull(),
+  dispatchedQty: integer("dispatched_qty").notNull().default(0),
+  status: text("status").notNull().default("staged"),
+  pickedByName: text("picked_by_name").notNull(),
+  pickedByCode: text("picked_by_code").notNull(),
+  pickedAt: text("picked_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const stockDispatchLinks = sqliteTable("stock_dispatch_links", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  customerTagId: text("customer_tag_id").notNull(),
+  pickId: integer("pick_id").notNull().references(() => stockPicks.id, { onDelete: "cascade" }),
+  dueLineId: integer("due_line_id").notNull().references(() => deliveryDueLines.id, { onDelete: "cascade" }),
+  stockTagId: integer("stock_tag_id").notNull().references(() => stockTags.id, { onDelete: "restrict" }),
+  qty: integer("qty").notNull(),
+  dispatchedByName: text("dispatched_by_name").notNull(),
+  dispatchedByCode: text("dispatched_by_code").notNull(),
+  dispatchedAt: text("dispatched_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
 export const appUsers = sqliteTable("app_users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   employeeCode: text("employee_code").notNull().unique(),
