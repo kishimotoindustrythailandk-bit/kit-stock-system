@@ -222,6 +222,9 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .stock-form-grid { display: grid; grid-template-columns: 1fr 1.4fr 1fr .8fr auto; gap: 12px; align-items: end; }
 .stock-form-grid label, .stock-tag-form label { display: grid; gap: 6px; color: #5e6f88; font-size: 11px; font-weight: 700; }
 .stock-form-grid input, .stock-tag-form input, .stock-tag-form select { width: 100%; min-height: 44px; padding: 0 12px; color: #142746; background: #fff; border: 1px solid #d8e2ef; border-radius: 9px; }
+.part-registry-toolbar { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin-top: 18px; }
+.part-registry-toolbar input { flex: 1; min-height: 44px; padding: 0 14px; color: #142746; background: #fff; border: 1px solid #d8e2ef; border-radius: 9px; }
+.part-registry-table { max-height: 430px; margin-top: 12px; border: 1px solid #e4ebf4; border-radius: 12px; }
 .stock-workflow-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .stock-tag-form { display: grid; gap: 12px; }
 .two-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -251,6 +254,7 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 
 @media (max-width: 720px) {
   .stock-workflow-grid, .stock-form-grid, .two-fields { grid-template-columns: 1fr; }
+  .part-registry-toolbar { align-items: stretch; flex-direction: column; }
   .created-stock-tag { grid-template-columns: auto 1fr; }
   .created-stock-tag .button { grid-column: 1 / -1; width: 100%; }
   .stock-scan-visual { min-height: 125px; }
