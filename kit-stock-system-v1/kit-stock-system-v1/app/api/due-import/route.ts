@@ -154,23 +154,45 @@ export async function DELETE(request: Request) {
     const activity = await DB.prepare(`
       SELECT
         (SELECT COUNT(*) FROM delivery_tag_scans s INNER JOIN delivery_due_lines d ON d.id = s.due_line_id WHERE d.import_id = ?1) AS scanCount,
-        (SELECT COUNT(*) FROM delivery_tag_receipts r INNER JOIN delivery_due_lines d ON d.id = r.due_line_id WHERE d.import_id = ?1) AS receiptCount
-    `).bind(importId).first<{ scanCount: number; receiptCount: number }>();
+        (SELECT COUNT(*) FROM delivery_tag_receipts r INNER JOIN delivery_due_lines d ON d.id = r.due_line_id WHERE d.import_id = ?1) AS receiptCount,
+        ((SELECT COUNT(*) FROM stock_allocations a INNER JOIN delivery_due_lines d ON d.id = a.due_line_id WHERE d.import_id = ?1)
+          + (SELECT COUNT(*) FROM stock_picks p INNER JOIN delivery_due_lines d ON d.id = p.due_line_id WHERE d.import_id = ?1)) AS stockCount
+    `).bind(importId).first<{ scanCount: number; receiptCount: number; stockCount: number }>();
     const scanCount = Number(activity?.scanCount || 0);
     const receiptCount = Number(activity?.receiptCount || 0);
-    if ((scanCount > 0 || receiptCount > 0) && !body.confirmActivity) {
+    const stockCount = Number(activity?.stockCount || 0);
+    if ((scanCount > 0 || receiptCount > 0 || stockCount > 0) && !body.confirmActivity) {
       return Response.json({
         error: "ชุดข้อมูลนี้มีประวัติการสแกน กรุณายืนยันการลบอีกครั้ง",
-        requiresConfirmation: true, scanCount, receiptCount,
+        requiresConfirmation: true, scanCount, receiptCount, stockCount,
       }, { status: 409 });
     }
+    const restored = await DB.prepare(`
+      SELECT stockTagId, sum(qty) AS qty FROM (
+        SELECT a.stock_tag_id AS stockTagId, a.qty AS qty
+        FROM stock_allocations a
+        INNER JOIN delivery_due_lines d ON d.id = a.due_line_id
+        WHERE d.import_id = ?1 AND a.status = 'dispatched'
+        UNION ALL
+        SELECT l.stock_tag_id AS stockTagId, l.qty AS qty
+        FROM stock_dispatch_links l
+        INNER JOIN delivery_due_lines d ON d.id = l.due_line_id
+        WHERE d.import_id = ?1
+      ) GROUP BY stockTagId
+    `).bind(importId).all<{ stockTagId: number; qty: number }>();
     await DB.batch([
+      ...restored.results.map((row) => DB.prepare(`
+        UPDATE stock_tags SET remaining_qty = remaining_qty + ?1, status = 'in_stock' WHERE id = ?2
+      `).bind(Number(row.qty), row.stockTagId)),
+      DB.prepare("DELETE FROM stock_dispatch_links WHERE due_line_id IN (SELECT id FROM delivery_due_lines WHERE import_id = ?1)").bind(importId),
+      DB.prepare("DELETE FROM stock_picks WHERE due_line_id IN (SELECT id FROM delivery_due_lines WHERE import_id = ?1)").bind(importId),
+      DB.prepare("DELETE FROM stock_allocations WHERE due_line_id IN (SELECT id FROM delivery_due_lines WHERE import_id = ?1)").bind(importId),
       DB.prepare("DELETE FROM delivery_tag_scans WHERE due_line_id IN (SELECT id FROM delivery_due_lines WHERE import_id = ?1)").bind(importId),
       DB.prepare("DELETE FROM delivery_tag_receipts WHERE due_line_id IN (SELECT id FROM delivery_due_lines WHERE import_id = ?1)").bind(importId),
       DB.prepare("DELETE FROM delivery_due_lines WHERE import_id = ?1").bind(importId),
       DB.prepare("DELETE FROM delivery_imports WHERE id = ?1").bind(importId),
     ]);
-    return Response.json({ success: true, deleted: target, scanCount, receiptCount });
+    return Response.json({ success: true, deleted: target, scanCount, receiptCount, stockCount });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "ลบข้อมูลนำเข้าไม่สำเร็จ" }, { status: 500 });
   }
