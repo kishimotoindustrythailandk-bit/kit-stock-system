@@ -45,3 +45,14 @@ test("includes v2.8 Stock Job traceability workflow", async () => {
   assert.match(migration, /CREATE TABLE IF NOT EXISTS `stock_picks`/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS `stock_dispatch_links`/);
 });
+
+test("includes Admin-safe Part deletion", async () => {
+  const [appSource, stockApi] = await Promise.all([
+    readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/stock/route.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /ลบ Part ที่ยังไม่ใช้งานทั้งหมด/);
+  assert.match(stockApi, /action === "delete_part"/);
+  assert.match(stockApi, /action === "delete_unused_parts"/);
+  assert.match(stockApi, /เพื่อรักษาข้อมูลย้อนหลัง/);
+});
