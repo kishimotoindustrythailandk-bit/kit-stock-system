@@ -276,6 +276,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [stock, setStock] = useState<StockPayload>({ parts: [], tags: [], allocations: [], picks: [], dispatchLinks: [] });
   const [stockLoading, setStockLoading] = useState(false);
   const [stockPartForm, setStockPartForm] = useState({ materialCode: "", partName: "", customer: "", standardQty: "" });
+  const [partSearch, setPartSearch] = useState("");
+  const [deletingPartCode, setDeletingPartCode] = useState("");
   const [stockTagForm, setStockTagForm] = useState({ materialCode: "", qty: "", jobNo: "", productionDate: new Date().toISOString().slice(0, 10) });
   const [stockScan, setStockScan] = useState("");
   const [stockSaving, setStockSaving] = useState(false);
@@ -703,6 +705,44 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     }
   }
 
+  async function deleteStockPart(part: StockPart) {
+    if (!window.confirm(`ยืนยันลบ Part ${part.materialCode} · ${part.partName} หรือไม่?`)) return;
+    setDeletingPartCode(part.materialCode);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "delete_part", materialCode: part.materialCode }),
+      });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || "ลบ Part ไม่สำเร็จ");
+      setNotice({ type: "success", text: `ลบ Part ${part.materialCode} แล้ว` });
+      await loadStock();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ลบ Part ไม่สำเร็จ" });
+    } finally {
+      setDeletingPartCode("");
+    }
+  }
+
+  async function deleteUnusedStockParts() {
+    if (!window.confirm("ยืนยันลบ Part ทุกตัวที่ยังไม่เคยสร้าง Tag หรือมีประวัติ Stock หรือไม่?")) return;
+    setDeletingPartCode("__ALL__");
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "delete_unused_parts" }),
+      });
+      const data = await response.json() as { deleted?: number; error?: string };
+      if (!response.ok) throw new Error(data.error || "ลบ Part ไม่สำเร็จ");
+      setNotice({ type: "success", text: `ลบ Part ที่ยังไม่เคยใช้งานแล้ว ${fmt(data.deleted || 0)} รายการ` });
+      await loadStock();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ลบ Part ไม่สำเร็จ" });
+    } finally {
+      setDeletingPartCode("");
+    }
+  }
+
   async function createStockTag(event: FormEvent) {
     event.preventDefault();
     setStockSaving(true);
@@ -975,6 +1015,11 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const onHand = receivedStockTags.reduce((sum, item) => sum + Number(item.remainingQty), 0);
     const reserved = receivedStockTags.reduce((sum, item) => sum + Number(item.reservedQty), 0);
     const available = Math.max(onHand - reserved, 0);
+    const partNeedle = partSearch.trim().toLowerCase();
+    const visibleParts = stock.parts.filter((item) => !partNeedle
+      || item.materialCode.toLowerCase().includes(partNeedle)
+      || item.partName.toLowerCase().includes(partNeedle)
+      || item.customer.toLowerCase().includes(partNeedle));
     return <>
       <div className="metrics four">
         <MetricCard tone="blue" icon="▦" label="Part ในระบบ" value={fmt(stock.parts.length)} suffix="รายการ" />
@@ -991,6 +1036,16 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <button className="button primary" disabled={stockSaving}>＋ บันทึก Part</button>
         </form>
         <p className="part-image-help">รูปชิ้นงานใช้รูปเดียวกับหน้า “ตั้งค่า” หากยังไม่มีรูป ให้ Admin อัปโหลดรูปตาม Part No.</p>
+        <div className="part-registry-toolbar">
+          <input value={partSearch} onChange={(event) => setPartSearch(event.target.value)} placeholder="ค้นหา Part No., ชื่อชิ้นงาน หรือลูกค้า" />
+          <button type="button" className="button secondary danger-outline" disabled={Boolean(deletingPartCode) || !stock.parts.length} onClick={() => void deleteUnusedStockParts()}>
+            {deletingPartCode === "__ALL__" ? "กำลังลบ…" : "ลบ Part ที่ยังไม่ใช้งานทั้งหมด"}
+          </button>
+        </div>
+        {visibleParts.length ? <div className="table-wrap mobile-table-wrap part-registry-table"><table className="mobile-card-table"><thead><tr><th>Part / Material No.</th><th>ชื่อชิ้นงาน</th><th>ลูกค้า</th><th className="num">จำนวนมาตรฐาน</th><th>จัดการ</th></tr></thead><tbody>{visibleParts.slice(0, 200).map((part) => {
+          const hasTag = stock.tags.some((tag) => tag.materialCode === part.materialCode);
+          return <tr key={part.materialCode}><td data-label="Part"><b>{part.materialCode}</b></td><td data-label="ชื่อชิ้นงาน">{part.partName}</td><td data-label="ลูกค้า">{part.customer || "—"}</td><td data-label="จำนวนมาตรฐาน" className="num">{fmt(part.standardQty)}</td><td data-label="จัดการ">{hasTag ? <span className="muted">มีประวัติ Stock</span> : <button type="button" className="tiny-button danger-outline" disabled={Boolean(deletingPartCode)} onClick={() => void deleteStockPart(part)}>{deletingPartCode === part.materialCode ? "กำลังลบ…" : "ลบ Part"}</button>}</td></tr>;
+        })}</tbody></table></div> : <Empty title="ไม่พบ Part" text={partNeedle ? "ลองเปลี่ยนคำค้นหา" : "ยังไม่มี Part ในทะเบียน Stock"} />}
       </Card>}
       <div className="stock-workflow-grid">
         <Card title="2. สร้างและพิมพ์ Tag ก่อนส่งเข้า Stock">
@@ -1116,7 +1171,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   function renderSettings() {
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <>
-      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.8.0</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
+      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.8.1</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
       <Card title="รูปชิ้นงานสำหรับหน้าสแกน" action={<button className="button secondary" onClick={() => void loadPartImages()}>↻ รีเฟรช</button>}>
         <form className="part-image-upload" onSubmit={uploadPartImage}>
           <label><span>Material / Part No. *</span><input list="part-material-codes" value={partImageCode} onChange={(e) => setPartImageCode(e.target.value.toUpperCase())} placeholder="เช่น ABC-1234" required /></label>
@@ -1147,7 +1202,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
       <nav>{NAV.filter((item) => user.role === "admin" || (user.role === "dispatcher" ? ["dashboard", "stock", "scan", "history"].includes(item.key) : ["dashboard", "scan", "history"].includes(item.key))).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.8.0</span></div></div>
+      <div className="sidebar-bottom"><div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.8.1</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
