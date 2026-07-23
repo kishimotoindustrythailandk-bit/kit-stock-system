@@ -143,6 +143,36 @@ export async function POST(request: Request) {
       return Response.json({ success: true, changed: result.meta.changes });
     }
 
+    if (action === "delete_part") {
+      if (user.role !== "admin") return Response.json({ error: "เฉพาะ Admin เท่านั้นที่ลบ Part ได้" }, { status: 403 });
+      const materialCode = clean(body.materialCode, 100).toUpperCase();
+      if (!materialCode) return Response.json({ error: "กรุณาระบุ Part ที่ต้องการลบ" }, { status: 400 });
+      const [tag] = await db.select({ id: stockTags.id }).from(stockTags)
+        .where(eq(stockTags.materialCode, materialCode)).limit(1);
+      if (tag) {
+        return Response.json({
+          error: "Part นี้มี Tag หรือประวัติ Stock แล้ว จึงลบไม่ได้ เพื่อรักษาข้อมูลย้อนหลัง",
+        }, { status: 409 });
+      }
+      const deleted = await db.delete(stockParts).where(eq(stockParts.materialCode, materialCode)).returning();
+      if (!deleted.length) return Response.json({ error: "ไม่พบ Part ที่ต้องการลบ" }, { status: 404 });
+      return Response.json({ success: true, deleted: 1, materialCode });
+    }
+
+    if (action === "delete_unused_parts") {
+      if (user.role !== "admin") return Response.json({ error: "เฉพาะ Admin เท่านั้นที่ลบ Part ได้" }, { status: 403 });
+      const { DB } = getRuntimeEnv();
+      if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
+      const result = await DB.prepare(`
+        DELETE FROM stock_parts
+        WHERE NOT EXISTS (
+          SELECT 1 FROM stock_tags
+          WHERE stock_tags.material_code = stock_parts.material_code
+        )
+      `).run();
+      return Response.json({ success: true, deleted: result.meta.changes });
+    }
+
     if (!requireStockRole(user.role)) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์จัดการ Stock" }, { status: 403 });
 
     if (action === "create_tag") {
