@@ -1,0 +1,260 @@
+import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { getCurrentUser } from "../../cloudflare-auth";
+import { getDb } from "../../../db";
+import { stockAllocations, stockParts, stockTags } from "../../../db/schema";
+import { getRuntimeEnv } from "../../../runtime/env";
+
+function clean(value: unknown, max = 160) {
+  return String(value ?? "").trim().slice(0, max);
+}
+
+function requireStockRole(role: string) {
+  return role === "admin" || role === "dispatcher";
+}
+
+function parseInternalTag(raw: string) {
+  const value = raw.trim();
+  const fields = value.split("|");
+  if (fields[0] === "KITSTOCK" && fields[1]) return fields[1].trim().toUpperCase();
+  if (/^KITSTK-[A-Z0-9-]+$/i.test(value)) return value.toUpperCase();
+  throw new Error("Tag นี้ไม่ใช่ Tag Stock ของ KIT");
+}
+
+function createTagId() {
+  const now = new Date();
+  const stamp = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, "0")}${String(now.getUTCDate()).padStart(2, "0")}`;
+  return `KITSTK-${stamp}-${crypto.randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase()}`;
+}
+
+export async function GET() {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
+    const db = getDb();
+    const parts = await db.select().from(stockParts).orderBy(asc(stockParts.materialCode));
+    const tags = await db.select({
+      id: stockTags.id,
+      tagId: stockTags.tagId,
+      materialCode: stockTags.materialCode,
+      partName: stockParts.partName,
+      customer: stockParts.customer,
+      qty: stockTags.qty,
+      remainingQty: stockTags.remainingQty,
+      reservedQty: sql<number>`coalesce(sum(case when ${stockAllocations.status} = 'reserved' then ${stockAllocations.qty} else 0 end), 0)
+        + coalesce((select sum(p.picked_qty - p.dispatched_qty) from stock_picks p
+          where p.stock_tag_id = ${stockTags.id} and p.status in ('staged', 'partial')), 0)`,
+      jobNo: stockTags.jobNo,
+      productionDate: stockTags.productionDate,
+      status: stockTags.status,
+      printedByName: stockTags.printedByName,
+      receivedByName: stockTags.receivedByName,
+      receivedAt: stockTags.receivedAt,
+      createdAt: stockTags.createdAt,
+    }).from(stockTags)
+      .innerJoin(stockParts, eq(stockParts.materialCode, stockTags.materialCode))
+      .leftJoin(stockAllocations, eq(stockAllocations.stockTagId, stockTags.id))
+      .groupBy(stockTags.id)
+      .orderBy(desc(stockTags.id)).limit(250);
+    const allocations = await db.select({
+      id: stockAllocations.id,
+      customerTagId: stockAllocations.customerTagId,
+      stockTagCode: stockTags.tagId,
+      materialCode: stockTags.materialCode,
+      qty: stockAllocations.qty,
+      status: stockAllocations.status,
+      reservedByName: stockAllocations.reservedByName,
+      reservedAt: stockAllocations.reservedAt,
+      dispatchedByName: stockAllocations.dispatchedByName,
+      dispatchedAt: stockAllocations.dispatchedAt,
+    }).from(stockAllocations)
+      .innerJoin(stockTags, eq(stockTags.id, stockAllocations.stockTagId))
+      .orderBy(desc(stockAllocations.id)).limit(100);
+    const { DB } = getRuntimeEnv();
+    const picks = DB ? await DB.prepare(`
+      SELECT p.id, p.due_line_id AS dueLineId, p.picked_qty AS pickedQty,
+        p.dispatched_qty AS dispatchedQty, p.status,
+        p.picked_by_name AS pickedByName, p.picked_by_code AS pickedByCode,
+        p.picked_at AS pickedAt, t.tag_id AS stockTagCode,
+        t.material_code AS materialCode, t.job_no AS jobNo,
+        t.production_date AS productionDate, t.received_at AS receivedAt,
+        d.do_no AS doNo, d.seq, d.fact, d.line, d.shop,
+        d.delivery_date AS deliveryDate, d.delivery_time AS deliveryTime
+      FROM stock_picks p
+      INNER JOIN stock_tags t ON t.id = p.stock_tag_id
+      INNER JOIN delivery_due_lines d ON d.id = p.due_line_id
+      ORDER BY p.id DESC LIMIT 150
+    `).all() : { results: [] };
+    const dispatchLinks = DB ? await DB.prepare(`
+      SELECT l.id, l.customer_tag_id AS customerTagId, l.qty,
+        l.dispatched_by_name AS dispatchedByName, l.dispatched_at AS dispatchedAt,
+        p.picked_by_name AS pickedByName, p.picked_at AS pickedAt,
+        t.tag_id AS stockTagCode, t.material_code AS materialCode,
+        t.job_no AS jobNo, t.production_date AS productionDate,
+        t.received_at AS receivedAt, d.do_no AS doNo, d.fact, d.line
+      FROM stock_dispatch_links l
+      INNER JOIN stock_picks p ON p.id = l.pick_id
+      INNER JOIN stock_tags t ON t.id = l.stock_tag_id
+      INNER JOIN delivery_due_lines d ON d.id = l.due_line_id
+      ORDER BY l.id DESC LIMIT 150
+    `).all() : { results: [] };
+    return Response.json({ parts, tags, allocations, picks: picks.results, dispatchLinks: dispatchLinks.results });
+  } catch (error) {
+    return Response.json({ error: error instanceof Error ? error.message : "โหลดข้อมูล Stock ไม่สำเร็จ" }, { status: 500 });
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
+    const body = await request.json() as Record<string, unknown>;
+    const action = clean(body.action, 30);
+    const db = getDb();
+
+    if (action === "save_part") {
+      if (user.role !== "admin") return Response.json({ error: "เฉพาะ Admin เท่านั้นที่เพิ่มหรือแก้ไข Part ได้" }, { status: 403 });
+      const materialCode = clean(body.materialCode, 100).toUpperCase();
+      const partName = clean(body.partName, 240);
+      const customer = clean(body.customer, 160);
+      const standardQty = Number(body.standardQty || 0);
+      if (!materialCode || !partName || !Number.isInteger(standardQty) || standardQty < 0) {
+        return Response.json({ error: "กรุณาระบุ Part No., ชื่อชิ้นงาน และจำนวนมาตรฐานให้ถูกต้อง" }, { status: 400 });
+      }
+      await db.insert(stockParts).values({ materialCode, partName, customer, standardQty, active: true })
+        .onConflictDoUpdate({ target: stockParts.materialCode, set: { partName, customer, standardQty, active: true, updatedAt: sql`CURRENT_TIMESTAMP` } });
+      return Response.json({ success: true, materialCode });
+    }
+
+    if (action === "sync_due_parts") {
+      if (user.role !== "admin") return Response.json({ error: "เฉพาะ Admin เท่านั้นที่นำ Part จาก Due เข้าทะเบียนได้" }, { status: 403 });
+      const { DB } = getRuntimeEnv();
+      if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
+      const result = await DB.prepare(`
+        INSERT INTO stock_parts (material_code, part_name, customer, standard_qty, active, created_at, updated_at)
+        SELECT material_code, max(material_description), '', 0, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        FROM delivery_due_lines
+        WHERE material_code <> ''
+        GROUP BY material_code
+        ON CONFLICT(material_code) DO UPDATE SET
+          part_name = CASE WHEN excluded.part_name <> '' THEN excluded.part_name ELSE stock_parts.part_name END,
+          active = 1,
+          updated_at = CURRENT_TIMESTAMP
+      `).run();
+      return Response.json({ success: true, changed: result.meta.changes });
+    }
+
+    if (!requireStockRole(user.role)) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์จัดการ Stock" }, { status: 403 });
+
+    if (action === "create_tag") {
+      const materialCode = clean(body.materialCode, 100).toUpperCase();
+      const jobNo = clean(body.jobNo, 120).toUpperCase();
+      const productionDate = clean(body.productionDate, 10);
+      const qty = Number(body.qty);
+      if (!materialCode || !jobNo || !/^\d{4}-\d{2}-\d{2}$/.test(productionDate) || !Number.isInteger(qty) || qty <= 0) {
+        return Response.json({ error: "กรุณาระบุ Part, จำนวน, Job และวันที่ผลิตให้ครบ" }, { status: 400 });
+      }
+      const [part] = await db.select().from(stockParts).where(and(eq(stockParts.materialCode, materialCode), eq(stockParts.active, true))).limit(1);
+      if (!part) return Response.json({ error: "ยังไม่มี Part นี้ในทะเบียน Stock กรุณาให้ Admin เพิ่ม Part ก่อน" }, { status: 404 });
+      const tagId = createTagId();
+      const [tag] = await db.insert(stockTags).values({
+        tagId, materialCode, qty, remainingQty: qty, jobNo, productionDate,
+        status: "printed", printedByName: user.displayName,
+      }).returning();
+      return Response.json({
+        tag: { ...tag, partName: part.partName, customer: part.customer, payload: `KITSTOCK|${tagId}|${materialCode}|${qty}|${jobNo}|${productionDate}` },
+      }, { status: 201 });
+    }
+
+    if (action === "receive") {
+      const tagId = parseInternalTag(clean(body.rawPayload, 1000));
+      const [tag] = await db.select().from(stockTags).where(eq(stockTags.tagId, tagId)).limit(1);
+      if (!tag) return Response.json({ error: "ไม่พบ Tag Stock นี้ในระบบ" }, { status: 404 });
+      if (tag.status !== "printed") return Response.json({ error: tag.status === "depleted" ? "Tag นี้ถูกขายออกหมดแล้ว" : "Tag นี้รับเข้า Stock แล้ว" }, { status: 409 });
+      const [updated] = await db.update(stockTags).set({
+        status: "in_stock", receivedByName: user.displayName, receivedByCode: user.employeeCode,
+        receivedAt: sql`CURRENT_TIMESTAMP`,
+      }).where(and(eq(stockTags.id, tag.id), eq(stockTags.status, "printed"))).returning();
+      return Response.json({ action: "received", tag: updated }, { status: 201 });
+    }
+
+    if (action === "stage") {
+      const dueLineId = Number(body.dueLineId);
+      const tagId = parseInternalTag(clean(body.rawPayload, 1000));
+      const requestedQty = Number(body.qty || 0);
+      if (!Number.isInteger(dueLineId) || dueLineId <= 0 || !Number.isInteger(requestedQty) || requestedQty < 0) {
+        return Response.json({ error: "กรุณาเลือก Due และระบุจำนวนให้ถูกต้อง" }, { status: 400 });
+      }
+      const { DB } = getRuntimeEnv();
+      if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
+      const due = await DB.prepare(`
+        SELECT d.id, d.do_no AS doNo, d.seq, d.material_code AS materialCode,
+          d.material_description AS materialDescription, d.fact, d.line, d.shop,
+          d.req_qty AS reqQty, d.delivery_date AS deliveryDate, d.delivery_time AS deliveryTime,
+          coalesce((SELECT sum(s.qty) FROM delivery_tag_scans s WHERE s.due_line_id = d.id), 0) AS scannedQty,
+          coalesce((SELECT sum(p.picked_qty - p.dispatched_qty) FROM stock_picks p
+            WHERE p.due_line_id = d.id AND p.status IN ('staged', 'partial')), 0) AS arrangedQty
+        FROM delivery_due_lines d WHERE d.id = ?1 LIMIT 1
+      `).bind(dueLineId).first<{
+        id: number; doNo: string; seq: number; materialCode: string; materialDescription: string;
+        fact: string; line: string; shop: string; reqQty: number; deliveryDate: string;
+        deliveryTime: string; scannedQty: number; arrangedQty: number;
+      }>();
+      if (!due) return Response.json({ error: "ไม่พบ Due ที่เลือก หรือข้อมูลถูกลบไปแล้ว" }, { status: 404 });
+      const tag = await DB.prepare(`
+        SELECT t.id, t.tag_id AS tagId, t.material_code AS materialCode,
+          t.qty, t.remaining_qty AS remainingQty, t.job_no AS jobNo,
+          t.production_date AS productionDate, t.status,
+          t.received_by_name AS receivedByName, t.received_at AS receivedAt,
+          coalesce((SELECT sum(p.picked_qty - p.dispatched_qty) FROM stock_picks p
+            WHERE p.stock_tag_id = t.id AND p.status IN ('staged', 'partial')), 0) AS stagedQty,
+          coalesce((SELECT sum(a.qty) FROM stock_allocations a
+            WHERE a.stock_tag_id = t.id AND a.status = 'reserved'), 0) AS legacyReservedQty
+        FROM stock_tags t WHERE t.tag_id = ?1 LIMIT 1
+      `).bind(tagId).first<{
+        id: number; tagId: string; materialCode: string; qty: number; remainingQty: number;
+        jobNo: string; productionDate: string; status: string; receivedByName: string;
+        receivedAt: string | null; stagedQty: number; legacyReservedQty: number;
+      }>();
+      if (!tag) return Response.json({ error: "ไม่พบ Tag Stock นี้ในระบบ" }, { status: 404 });
+      if (tag.status !== "in_stock") {
+        return Response.json({ error: tag.status === "printed" ? "Tag นี้ยังไม่ได้สแกนรับเข้า Stock" : "Tag นี้ขายออกหมดแล้ว" }, { status: 409 });
+      }
+      if (tag.materialCode !== due.materialCode) {
+        return Response.json({ error: `Part ไม่ตรงกัน: Due ต้องการ ${due.materialCode} แต่ Tag Stock เป็น ${tag.materialCode}` }, { status: 409 });
+      }
+      const dueOpenQty = Math.max(Number(due.reqQty) - Number(due.scannedQty) - Number(due.arrangedQty), 0);
+      const tagAvailableQty = Math.max(Number(tag.remainingQty) - Number(tag.stagedQty) - Number(tag.legacyReservedQty), 0);
+      if (!dueOpenQty) return Response.json({ error: "Due นี้จัดงานครบแล้ว หรือส่งออกครบแล้ว" }, { status: 409 });
+      if (!tagAvailableQty) return Response.json({ error: "Tag Stock นี้ไม่มีจำนวนพร้อมจัดเหลืออยู่" }, { status: 409 });
+      const pickedQty = requestedQty > 0 ? requestedQty : Math.min(dueOpenQty, tagAvailableQty);
+      if (pickedQty > dueOpenQty) return Response.json({ error: `จำนวนเกิน Due ที่ยังไม่ได้จัด เหลือจัดได้ ${dueOpenQty} ชิ้น` }, { status: 409 });
+      if (pickedQty > tagAvailableQty) return Response.json({ error: `Tag Stock นี้พร้อมจัดเพียง ${tagAvailableQty} ชิ้น` }, { status: 409 });
+      const result = await DB.prepare(`
+        INSERT INTO stock_picks
+          (due_line_id, stock_tag_id, picked_qty, dispatched_qty, status,
+           picked_by_name, picked_by_code, picked_at, updated_at)
+        VALUES (?1, ?2, ?3, 0, 'staged', ?4, ?5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `).bind(due.id, tag.id, pickedQty, user.displayName, user.employeeCode).run();
+      return Response.json({
+        action: "staged",
+        pick: {
+          id: result.meta.last_row_id, dueLineId: due.id, pickedQty, dispatchedQty: 0,
+          status: "staged", pickedByName: user.displayName, stockTagCode: tag.tagId,
+          materialCode: tag.materialCode, jobNo: tag.jobNo, productionDate: tag.productionDate,
+          receivedAt: tag.receivedAt, doNo: due.doNo, fact: due.fact, line: due.line,
+        },
+        tag,
+        due: {
+          ...due,
+          arrangedQty: Number(due.arrangedQty) + pickedQty,
+          remainingToArrange: Math.max(dueOpenQty - pickedQty, 0),
+          remainingQty: Math.max(Number(due.reqQty) - Number(due.scannedQty), 0),
+        },
+      }, { status: 201 });
+    }
+
+    return Response.json({ error: "ไม่รู้จักคำสั่ง Stock" }, { status: 400 });
+  } catch (error) {
+    return Response.json({ error: error instanceof Error ? error.message : "บันทึก Stock ไม่สำเร็จ" }, { status: 500 });
+  }
+}
