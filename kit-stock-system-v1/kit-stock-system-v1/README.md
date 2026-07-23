@@ -1,4 +1,6 @@
-# KIT Delivery Due Control v2.8 — Stock Job Traceability
+# KIT Delivery Due Control v2.8.1 — Stock Job Traceability
+
+อัปเดต v2.8.1: Admin สามารถค้นหาและลบ Part ที่ยังไม่เคยสร้าง Tag หรือมีประวัติ Stock ได้ ทั้งแบบทีละรายการและลบรายการที่ยังไม่ใช้งานทั้งหมด
 
 ขั้นตอนอัปเกรดและวิธีใช้งาน v2.8 อยู่ในไฟล์ `README-v2.8-TRACEABILITY.txt`
 

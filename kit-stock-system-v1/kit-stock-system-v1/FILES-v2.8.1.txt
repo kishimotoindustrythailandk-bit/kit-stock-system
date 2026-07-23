@@ -1,0 +1,25 @@
+KIT Delivery Due Control v2.8.1 — ลบ Part
+================================================
+
+แนะนำ: แตก ZIP แล้วอัปโหลดทุกไฟล์และทุกโฟลเดอร์ทับของเดิม
+
+ไฟล์หลักที่แก้ไข
+----------------
+app/api/stock/route.ts
+app/delivery-control-app.tsx
+app/globals.css
+package.json
+package-lock.json
+README.md
+
+ความสามารถที่เพิ่ม
+------------------
+- Admin ค้นหา Part จาก Part No., ชื่อชิ้นงาน หรือลูกค้า
+- Admin ลบ Part ทีละรายการ
+- Admin ลบ Part ที่ยังไม่เคยใช้งานทั้งหมด
+- Part ที่มี Tag หรือประวัติ Stock จะถูกป้องกันไม่ให้ลบ
+
+หลังอัปโหลด
+------------
+รอ Cloudflare Build และ Deploy ให้สำเร็จ แล้วกด Ctrl + F5
+ไม่ต้องรัน SQL เพิ่ม
