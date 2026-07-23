@@ -1,0 +1,29 @@
+KIT Delivery Due Control v2.8 — ไฟล์สำคัญที่เพิ่ม/แก้ไข
+=======================================================
+
+แนะนำ: แตก ZIP แล้วอัปโหลดทุกไฟล์และทุกโฟลเดอร์ทับของเดิม
+
+ไฟล์ใหม่
+--------
+database-upgrade-v2.8-traceability.sql
+README-v2.8-TRACEABILITY.txt
+
+ไฟล์หลักที่แก้ไข
+----------------
+app/delivery-control-app.tsx
+app/globals.css
+app/api/due/route.ts
+app/api/due-import/route.ts
+app/api/stock/route.ts
+db/schema.ts
+package.json
+package-lock.json
+README.md
+tests/rendered-html.test.mjs
+
+หลังอัปโหลด
+------------
+1. รอ Cloudflare Build และ Deploy ให้สำเร็จ
+2. ไปที่ D1 Console
+3. รัน database-upgrade-v2.8-traceability.sql
+4. Refresh หน้าเว็บแล้วทดสอบ ผู้จัดงาน → ผู้ตรวจ

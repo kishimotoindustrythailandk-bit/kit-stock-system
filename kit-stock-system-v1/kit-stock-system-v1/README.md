@@ -1,4 +1,6 @@
-# KIT Delivery Due Control v2.6 — Mobile Responsive
+# KIT Delivery Due Control v2.8 — Stock Job Traceability
+
+ขั้นตอนอัปเกรดและวิธีใช้งาน v2.8 อยู่ในไฟล์ `README-v2.8-TRACEABILITY.txt`
 
 ชุดนี้ทำสำหรับ Worker เดิมชื่อ `kit-stock-system` โดยเฉพาะ
 

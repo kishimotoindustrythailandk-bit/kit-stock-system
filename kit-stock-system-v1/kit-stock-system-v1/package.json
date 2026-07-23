@@ -1,6 +1,6 @@
 {
   "name": "kit-stock-system-cloudflare",
-  "version": "2.6.0",
+  "version": "2.8.0",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -13,13 +13,17 @@
     "db:upgrade": "wrangler d1 execute DB --remote --file=database-upgrade-due.sql",
     "db:upgrade:v22": "wrangler d1 execute DB --remote --file=database-upgrade-v2.2-users-scan.sql",
     "db:upgrade:v23": "wrangler d1 execute DB --remote --file=database-upgrade-v2.3-part-images.sql",
+    "db:upgrade:v27": "wrangler d1 execute DB --remote --file=database-upgrade-v2.7-stock.sql",
+    "db:upgrade:v28": "wrangler d1 execute DB --remote --file=database-upgrade-v2.8-traceability.sql",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate"
   },
   "dependencies": {
+    "@types/qrcode": "^1.5.6",
     "drizzle-orm": "0.45.2",
     "next": "16.2.6",
+    "qrcode": "^1.5.4",
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "xlsx": "^0.18.5"
