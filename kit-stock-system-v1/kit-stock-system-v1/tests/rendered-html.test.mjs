@@ -18,7 +18,7 @@ test("renders the standalone employee login page", async () => {
   assert.match(html, /DELIVERY DUE CONTROL/);
 });
 
-test("includes the v2.6 mobile navigation and card layouts", async () => {
+test("includes the mobile navigation and card layouts", async () => {
   const [appSource, css] = await Promise.all([
     readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
@@ -28,4 +28,20 @@ test("includes the v2.6 mobile navigation and card layouts", async () => {
   assert.match(appSource, /mobile-card-table/);
   assert.match(css, /@media\s*\(max-width:\s*720px\)/);
   assert.match(css, /safe-area-inset-bottom/);
+});
+
+test("includes v2.8 Stock Job traceability workflow", async () => {
+  const [appSource, dueApi, stockApi, migration] = await Promise.all([
+    readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/due/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/stock/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../database-upgrade-v2.8-traceability.sql", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /ผู้จัดงาน: เลือก Due แล้วยิง KIT Stock Tag/);
+  assert.match(appSource, /Traceability: Tag ลูกค้า ↔ KIT Tag ↔ Job/);
+  assert.match(appSource, /arrangedQty/);
+  assert.match(stockApi, /action === "stage"/);
+  assert.match(dueApi, /stock_dispatch_links/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS `stock_picks`/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS `stock_dispatch_links`/);
 });
