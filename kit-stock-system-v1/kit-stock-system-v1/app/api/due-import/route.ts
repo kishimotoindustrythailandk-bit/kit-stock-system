@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { getCurrentUser } from "../../cloudflare-auth";
 import { getDb } from "../../../db";
-import { deliveryDueLines, deliveryImports } from "../../../db/schema";
+import { deliveryImports } from "../../../db/schema";
 import { getRuntimeEnv } from "../../../runtime/env";
 
 type ImportRow = {
@@ -21,6 +21,43 @@ type ImportRow = {
 
 function clean(value: unknown, max = 180) {
   return String(value ?? "").trim().slice(0, max);
+}
+
+const JSON_IMPORT_CHUNK_SIZE = 250;
+
+async function insertDueRows(importId: number, rows: Required<ImportRow>[]) {
+  const { DB } = getRuntimeEnv();
+  if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
+
+  const sql = `
+    INSERT INTO delivery_due_lines (
+      import_id, source_key, do_no, seq, material_code, material_description,
+      site, fact, line, shop, req_qty, delivery_date, delivery_time, status, created_at
+    )
+    SELECT
+      ?1,
+      json_extract(value, '$.sourceKey'),
+      json_extract(value, '$.doNo'),
+      CAST(json_extract(value, '$.seq') AS INTEGER),
+      json_extract(value, '$.materialCode'),
+      json_extract(value, '$.materialDescription'),
+      json_extract(value, '$.site'),
+      json_extract(value, '$.fact'),
+      json_extract(value, '$.line'),
+      json_extract(value, '$.shop'),
+      CAST(json_extract(value, '$.reqQty') AS INTEGER),
+      json_extract(value, '$.deliveryDate'),
+      json_extract(value, '$.deliveryTime'),
+      'pending',
+      CURRENT_TIMESTAMP
+    FROM json_each(?2)
+  `;
+
+  for (let offset = 0; offset < rows.length; offset += JSON_IMPORT_CHUNK_SIZE) {
+    await DB.prepare(sql)
+      .bind(importId, JSON.stringify(rows.slice(offset, offset + JSON_IMPORT_CHUNK_SIZE)))
+      .run();
+  }
 }
 
 export async function POST(request: Request) {
@@ -84,11 +121,7 @@ export async function POST(request: Request) {
     }).returning();
     importId = created.id;
 
-    for (let offset = 0; offset < normalized.length; offset += 80) {
-      await db.insert(deliveryDueLines).values(
-        normalized.slice(offset, offset + 80).map((row) => ({ ...row, importId })),
-      );
-    }
+    await insertDueRows(importId, normalized);
 
     return Response.json({ importId, rowCount: normalized.length, totalQty }, { status: 201 });
   } catch (error) {
