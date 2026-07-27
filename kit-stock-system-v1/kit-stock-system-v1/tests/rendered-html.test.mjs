@@ -110,3 +110,13 @@ test("v2.8.5 imports Parts from Excel and prints complete Stock Tag data", async
   assert.match(stockApi, /action === "import_parts"/);
   assert.match(stockApi, /deliveryQty: totalQty/);
 });
+
+test("v2.8.6 separates Stock operations from Tag printing", async () => {
+  const appSource = await readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8");
+  assert.match(appSource, /key: "stock", label: "Stock"/);
+  assert.match(appSource, /key: "tags", label: "พิมพ์ Tag"/);
+  assert.match(appSource, /function renderTags\(\)/);
+  assert.match(appSource, /function renderStock\(\)/);
+  assert.match(appSource, /Tag ที่สร้างแล้ว/);
+  assert.match(appSource, /ยิง Tag รับงานเข้า Stock/);
+});
