@@ -792,19 +792,35 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const qr = await qrcode.toDataURL(payloadValue, { width: 440, margin: 1, errorCorrectionLevel: "M" });
     const popup = window.open("", "_blank", "width=900,height=950");
     if (!popup) return setNotice({ type: "error", text: "เบราว์เซอร์บล็อกหน้าพิมพ์ กรุณาอนุญาต Pop-up" });
-    const imageUrl = `/api/part-images?materialCode=${encodeURIComponent(tag.materialCode)}`;
+    let imageUrl = "";
+    try {
+      const imageResponse = await fetch(`/api/part-images?materialCode=${encodeURIComponent(tag.materialCode)}`, { cache: "no-store" });
+      if (imageResponse.ok) {
+        const imageBlob = await imageResponse.blob();
+        imageUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(imageBlob);
+        });
+      }
+    } catch {
+      imageUrl = "";
+    }
     popup.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${html(tag.tagId)}</title><style>
       @page{size:A4 portrait;margin:8mm}*{box-sizing:border-box}body{margin:0;font-family:Arial,"Noto Sans Thai",sans-serif;color:#10264c}
-      .sheet{display:grid;grid-template-columns:1fr 1fr;gap:8mm}.tag{min-height:125mm;border:2px solid #0a61d8;border-radius:5mm;padding:5mm;display:grid;grid-template-rows:auto 38mm auto 1fr auto;gap:3mm;break-inside:avoid}
-      header{display:flex;justify-content:space-between;align-items:start;border-bottom:2px solid #0a61d8;padding-bottom:2mm}.brand{font-size:23px;font-weight:900;color:#075fd7}.brand small{display:block;font-size:7px;letter-spacing:1px;color:#50698f}
-      .photo{width:100%;height:38mm;object-fit:contain;border:1px solid #dbe6f5;border-radius:3mm}.main b{font-size:18px}.main p{margin:1mm 0;color:#526783}.grid{display:grid;grid-template-columns:1fr 1fr;border:1px solid #d7e1ef}.grid div{padding:2.5mm;border-right:1px solid #d7e1ef;border-bottom:1px solid #d7e1ef}.grid div:nth-child(even){border-right:0}.grid small{display:block;color:#6d7e98;font-size:8px}.grid b{font-size:12px}
-      footer{display:grid;grid-template-columns:32mm 1fr;gap:3mm;align-items:center}.qr{width:32mm;height:32mm}.code{font-size:9px;overflow-wrap:anywhere}.qty{font-size:25px;color:#075fd7}.hint{text-align:center;font-size:8px;color:#657791;margin-top:1mm}@media print{body{print-color-adjust:exact}.sheet{gap:6mm}}
-    </style></head><body><div class="sheet"><section class="tag"><header><div class="brand">KiT<small>STOCK TAG</small></div><b>รับเข้า Stock</b></header>
-      <img class="photo" src="${imageUrl}" alt="รูปชิ้นงาน" />
-      <div class="main"><small>PART / MATERIAL</small><br><b>${html(tag.materialCode)}</b><p>${html(tag.partName)}</p></div>
-      <div class="grid"><div><small>จำนวน</small><b class="qty">${fmt(tag.qty)}</b> PC</div><div><small>Job</small><b>${html(tag.jobNo)}</b></div><div><small>วันที่ผลิต</small><b>${html(formatDate(tag.productionDate))}</b></div><div><small>ลูกค้า</small><b>${html(tag.customer || "—")}</b></div><div><small>Tag ID</small><b>${html(tag.tagId)}</b></div><div><small>ผู้พิมพ์</small><b>${html(tag.printedByName)}</b></div></div>
-      <footer><img class="qr" src="${qr}" alt="QR"><div><b class="code">${html(tag.tagId)}</b><p class="code">${html(payloadValue)}</p><div class="hint">ยิง QR นี้เพื่อรับงานเข้า Stock</div></div></footer>
-    </section></div><script>window.onload=()=>setTimeout(()=>window.print(),500)<\/script></body></html>`);
+      .sheet{display:grid;grid-template-columns:1fr 1fr;gap:8mm}.tag{min-height:125mm;border:2px solid #0a61d8;border-radius:4mm;overflow:hidden;display:grid;grid-template-rows:auto auto 1fr auto;break-inside:avoid;background:#fff}
+      header{display:flex;justify-content:space-between;align-items:center;padding:3mm 4mm;color:#fff;background:#075fd7}.brand{font-size:24px;font-weight:900;line-height:.8}.brand small{display:block;margin-top:2mm;font-size:6px;letter-spacing:1.2px;color:#dbeaff}.tag-title{text-align:right}.tag-title b{display:block;font-size:11px;letter-spacing:.8px}.tag-title small{font-size:7px;color:#dbeaff}
+      .product{display:grid;grid-template-columns:40mm 1fr;gap:3mm;padding:4mm;border-bottom:1px solid #cbd9eb;background:#f5f9ff}.photo-wrap{height:38mm;display:grid;place-items:center;border:1px solid #b9cce5;border-radius:2.5mm;background:#fff;overflow:hidden}.photo{width:100%;height:100%;object-fit:contain}.photo-fallback{color:#8493aa;text-align:center;font-size:8px}.photo-fallback strong{display:block;font-size:21px;color:#b7c5d8}
+      .main{align-self:center}.main small{font-size:7px;letter-spacing:.6px;color:#6d7e98}.main b{display:block;margin:1mm 0;font-size:17px;overflow-wrap:anywhere}.main p{margin:0;color:#526783;font-size:10px}.customer{margin-top:2mm!important;color:#075fd7!important;font-weight:700}
+      .grid{display:grid;grid-template-columns:1fr 1fr;margin:3mm 4mm;border:1px solid #c7d5e7}.grid div{min-height:15mm;padding:2.5mm;border-right:1px solid #c7d5e7;border-bottom:1px solid #c7d5e7}.grid div:nth-child(even){border-right:0}.grid div:nth-last-child(-n+2){border-bottom:0}.grid small{display:block;color:#6d7e98;font-size:7px;letter-spacing:.4px}.grid b{font-size:11px;overflow-wrap:anywhere}.qty{font-size:24px!important;color:#075fd7}.unit{font-size:8px;color:#526783}
+      footer{display:grid;grid-template-columns:34mm 1fr;gap:3mm;align-items:center;padding:3mm 4mm;border-top:2px solid #075fd7}.qr{width:34mm;height:34mm}.code{font-size:9px;overflow-wrap:anywhere}.payload{margin:1mm 0;font-size:6px;color:#71809a;overflow-wrap:anywhere}.hint{display:inline-block;padding:1.5mm 2mm;color:#fff;background:#075fd7;border-radius:1.5mm;font-size:7px;font-weight:700}
+      @media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}.sheet{gap:6mm}}
+    </style></head><body><div class="sheet"><section class="tag"><header><div class="brand">KiT<small>DELIVERY DUE CONTROL</small></div><div class="tag-title"><b>STOCK RECEIVING TAG</b><small>TAG รับงานเข้า STOCK</small></div></header>
+      <div class="product"><div class="photo-wrap">${imageUrl ? `<img class="photo" src="${imageUrl}" alt="รูปชิ้นงาน ${html(tag.materialCode)}" />` : `<div class="photo-fallback"><strong>◇</strong>ยังไม่มีรูปชิ้นงาน</div>`}</div><div class="main"><small>PART NO. / MATERIAL</small><b>${html(tag.materialCode)}</b><small>PART NAME</small><p>${html(tag.partName)}</p><p class="customer">CUSTOMER: ${html(tag.customer || "—")}</p></div></div>
+      <div class="grid"><div><small>QTY / จำนวน</small><b class="qty">${fmt(tag.qty)}</b> <span class="unit">PC</span></div><div><small>JOB NO.</small><b>${html(tag.jobNo)}</b></div><div><small>PRODUCTION DATE / วันที่ผลิต</small><b>${html(formatDate(tag.productionDate))}</b></div><div><small>PRINTED BY / ผู้พิมพ์</small><b>${html(tag.printedByName)}</b></div><div><small>TAG ID</small><b>${html(tag.tagId)}</b></div><div><small>STATUS</small><b>รอรับเข้า STOCK</b></div></div>
+      <footer><img class="qr" src="${qr}" alt="QR"><div><b class="code">${html(tag.tagId)}</b><p class="payload">${html(payloadValue)}</p><div class="hint">ยิง QR เพื่อรับงานเข้า Stock</div></div></footer>
+    </section></div><script>window.onload=()=>{const images=[...document.images];Promise.all(images.map((image)=>image.complete?Promise.resolve():new Promise((resolve)=>{image.onload=resolve;image.onerror=resolve}))).finally(()=>setTimeout(()=>window.print(),250))}<\/script></body></html>`);
     popup.document.close();
   }
 
