@@ -1,0 +1,20 @@
+KIT Delivery Due Control v2.8.3
+
+ไฟล์ที่แก้ไขจาก v2.8.2
+- app/delivery-control-app.tsx
+- app/api/stock/route.ts
+- tests/rendered-html.test.mjs
+- package.json
+- package-lock.json
+- README.md
+- FILES-v2.8.3.txt
+
+ความสามารถใหม่
+- พิมพ์ Stock Tag 6 ดวงต่อกระดาษ A4 หนึ่งหน้า (2 × 3)
+- Admin ลบ Tag ที่ยังไม่เคยรับเข้า Stock ได้จากตารางรายการ Stock
+- Tag ที่มีประวัติรับเข้า จัดงาน หรือขายออกแล้วจะถูกป้องกันไม่ให้ลบ
+
+การติดตั้ง
+- วางไฟล์ทั้งหมดจาก ZIP ทับโฟลเดอร์ระบบเดิม
+- เก็บไฟล์ wrangler.jsonc / wrangler.json / wrangler.toml เดิมไว้
+- ไม่ต้องรัน SQL เพิ่ม
