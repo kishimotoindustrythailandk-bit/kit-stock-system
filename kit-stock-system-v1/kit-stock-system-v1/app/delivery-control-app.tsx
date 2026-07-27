@@ -81,7 +81,7 @@ type DuePayload = { dues: DueLine[]; imports: DueImport[]; scans: DueScan[]; rec
 type SystemUser = { id: number; employeeCode: string; displayName: string; email: string; role: string; active: boolean; createdAt?: string };
 type PartImageMapping = { materialCode: string; originalName: string; contentType: string; updatedByName: string; updatedAt: string; materialDescription?: string };
 type StockPart = { materialCode: string; partName: string; customer: string; standardQty: number; active: boolean };
-type StockTag = { id: number; tagId: string; materialCode: string; partName: string; customer: string; qty: number; remainingQty: number; reservedQty: number; jobNo: string; productionDate: string; status: string; printedByName: string; receivedByName: string; receivedAt?: string; createdAt: string; payload?: string; boxNo?: number; boxCount?: number };
+type StockTag = { id: number; tagId: string; materialCode: string; partName: string; customer: string; qty: number; remainingQty: number; reservedQty: number; jobNo: string; productionDate: string; status: string; printedByName: string; receivedByName: string; receivedAt?: string; createdAt: string; payload?: string; boxNo?: number; boxCount?: number; deliveryQty?: number };
 type StockAllocation = { id: number; customerTagId: string; stockTagCode: string; materialCode: string; qty: number; status: string; reservedByName: string; reservedAt: string; dispatchedByName: string; dispatchedAt?: string };
 type StockPick = {
   id: number; dueLineId: number; pickedQty: number; dispatchedQty: number; status: string;
@@ -284,6 +284,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [stockSaving, setStockSaving] = useState(false);
   const [createdStockTags, setCreatedStockTags] = useState<StockTag[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
+  const partFileInput = useRef<HTMLInputElement>(null);
   const tagInput = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const tagResultRef = useRef<HTMLElement>(null);
@@ -688,6 +689,70 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     }
   }
 
+  async function importPartExcel(event: ChangeEvent<HTMLInputElement>) {
+    const selected = event.target.files?.[0];
+    if (!selected) return;
+    setStockSaving(true);
+    setNotice(null);
+    try {
+      if (!/\.xlsx?$/i.test(selected.name)) throw new Error("กรุณาเลือกไฟล์ Excel .xlsx หรือ .xls");
+      const xlsx = await import("xlsx");
+      const workbook = xlsx.read(await selected.arrayBuffer(), { type: "array", cellDates: true });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const grid = xlsx.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: "" });
+      const normalized = (value: unknown) => text(value).toLowerCase().replace(/[\s._/()\-]+/g, "");
+      const aliases = {
+        materialCode: ["partno", "material", "materialno", "materialcode", "partmaterialno", "รหัสpart", "พาร์ท", "รหัสชิ้นงาน"],
+        partName: ["partname", "materialdescription", "description", "ชื่อชิ้นงาน", "รายละเอียด"],
+        customer: ["customer", "customername", "ลูกค้า"],
+        standardQty: ["maxqtyperbox", "maxperbox", "packqty", "standardqty", "qtyperbox", "จำนวนสูงสุดต่อกล่อง", "ชิ้นต่อกล่อง", "จำนวนต่อกล่อง"],
+      };
+      const normalizedAliases = Object.fromEntries(
+        Object.entries(aliases).map(([key, values]) => [key, values.map(normalized)]),
+      ) as Record<keyof typeof aliases, string[]>;
+      const headerIndex = grid.findIndex((row) => {
+        const headers = row.map(normalized);
+        return normalizedAliases.materialCode.some((name) => headers.includes(name))
+          && normalizedAliases.partName.some((name) => headers.includes(name));
+      });
+      if (headerIndex < 0) {
+        throw new Error("ไม่พบหัวตาราง Part / Material No. และ Part Name ในไฟล์");
+      }
+      const headers = grid[headerIndex].map(normalized);
+      const columnIndex = (names: string[]) => headers.findIndex((header) => names.includes(header));
+      const indexes = {
+        materialCode: columnIndex(normalizedAliases.materialCode),
+        partName: columnIndex(normalizedAliases.partName),
+        customer: columnIndex(normalizedAliases.customer),
+        standardQty: columnIndex(normalizedAliases.standardQty),
+      };
+      if (indexes.standardQty < 0) {
+        throw new Error("ไม่พบคอลัมน์ Max Qty per Box / จำนวนสูงสุดต่อกล่อง");
+      }
+      const parts = grid.slice(headerIndex + 1).map((row) => ({
+        materialCode: text(row[indexes.materialCode]).toUpperCase(),
+        partName: text(row[indexes.partName]),
+        customer: indexes.customer >= 0 ? text(row[indexes.customer]) : "",
+        standardQty: number(row[indexes.standardQty]),
+      })).filter((part) => part.materialCode && part.partName && part.standardQty > 0);
+      if (!parts.length) throw new Error("ไม่พบข้อมูล Part ที่มี Part No., Part Name และจำนวนต่อกล่องครบถ้วน");
+      const response = await fetch("/api/stock", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "import_parts", parts }),
+      });
+      const data = await response.json() as { imported?: number; error?: string };
+      if (!response.ok) throw new Error(data.error || "นำเข้า Part ไม่สำเร็จ");
+      setNotice({ type: "success", text: `นำเข้า/อัปเดต Part จาก ${selected.name} สำเร็จ ${fmt(data.imported || 0)} รายการ` });
+      await loadStock();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "นำเข้า Part ไม่สำเร็จ" });
+    } finally {
+      setStockSaving(false);
+      if (partFileInput.current) partFileInput.current.value = "";
+    }
+  }
+
   async function syncDueParts() {
     setStockSaving(true);
     try {
@@ -839,10 +904,14 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       const boxMatch = tag.tagId.match(/-B(\d+)OF(\d+)$/);
       const boxNo = tag.boxNo || Number(boxMatch?.[1] || 1);
       const boxCount = tag.boxCount || Number(boxMatch?.[2] || 1);
+      const batchCode = tag.tagId.replace(/-B\d+OF\d+$/, "");
+      const deliveryQty = tag.deliveryQty || stock.tags
+        .filter((item) => item.tagId.replace(/-B\d+OF\d+$/, "") === batchCode)
+        .reduce((sum, item) => sum + Number(item.qty), 0) || tag.qty;
       return `<section class="tag"><header><div class="brand">KiT<small>DELIVERY DUE CONTROL</small></div><div class="tag-title"><b>STOCK RECEIVING TAG</b><small>TAG รับงานเข้า STOCK</small></div></header>
-        <div class="product"><div class="photo-wrap">${imageUrl ? `<img class="photo" src="${imageUrl}" alt="รูปชิ้นงาน ${html(tag.materialCode)}" />` : `<div class="photo-fallback"><strong>◇</strong>ยังไม่มีรูปชิ้นงาน</div>`}</div><div class="main"><small>PART NO. / MATERIAL</small><b>${html(tag.materialCode)}</b><small>PART NAME</small><p>${html(tag.partName)}</p><p class="customer">CUSTOMER: ${html(tag.customer || "—")}</p></div></div>
-        <div class="grid"><div><small>QTY / จำนวนในกล่อง</small><b class="qty">${fmt(tag.qty)}</b> <span class="unit">PC</span></div><div class="box-cell"><small>BOX / กล่อง</small><b>${fmt(boxNo)} / ${fmt(boxCount)}</b></div><div><small>JOB NO.</small><b>${html(tag.jobNo)}</b></div><div><small>PRODUCTION DATE / วันที่ผลิต</small><b>${html(formatDate(tag.productionDate))}</b></div><div><small>PRINTED BY / ผู้พิมพ์</small><b>${html(tag.printedByName)}</b></div><div><small>TAG ID</small><b>${html(tag.tagId)}</b></div></div>
-        <footer><img class="qr" src="${qr}" alt="QR"><div><b class="code">${html(tag.tagId)}</b><p class="payload">${html(payloadValue)}</p><div class="hint">ยิง QR เพื่อรับงานเข้า Stock</div></div></footer>
+        <div class="product"><div class="photo-wrap">${imageUrl ? `<img class="photo" src="${imageUrl}" alt="รูปชิ้นงาน ${html(tag.materialCode)}" />` : `<div class="photo-fallback"><strong>◇</strong>ยังไม่มีรูปชิ้นงาน</div>`}</div><div class="qr-wrap"><img class="qr" src="${qr}" alt="QR"><small>QR / BARCODE</small></div><div class="main"><small>CUSTOMER</small><p class="customer">${html(tag.customer || "—")}</p><small>PART NO. / MATERIAL</small><b>${html(tag.materialCode)}</b><small>PART NAME</small><p>${html(tag.partName)}</p></div></div>
+        <div class="grid"><div><small>DELIVERY QTY / จำนวนงานรวม</small><b class="qty">${fmt(deliveryQty)}</b> <span class="unit">PC</span></div><div><small>QTY IN BOX / จำนวนในกล่อง</small><b class="qty">${fmt(tag.qty)}</b> <span class="unit">PC</span></div><div class="box-cell"><small>BOX / กล่อง</small><b>${fmt(boxNo)} / ${fmt(boxCount)}</b></div><div><small>JOB NO.</small><b>${html(tag.jobNo)}</b></div><div><small>PRODUCTION DATE / วันที่ผลิต</small><b>${html(formatDate(tag.productionDate))}</b></div><div><small>TAG ID</small><b>${html(tag.tagId)}</b></div></div>
+        <footer><b class="code">${html(tag.tagId)}</b><p class="payload">${html(payloadValue)}</p><div class="hint">ยิง QR เพื่อรับงานเข้า Stock</div></footer>
       </section>`;
     }));
     const pages = Array.from({ length: Math.ceil(tagMarkups.length / 6) }, (_, pageIndex) =>
@@ -852,10 +921,10 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       @page{size:A4 portrait;margin:5mm}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;font-family:Arial,"Noto Sans Thai",sans-serif;color:#10264c}
       .sheet{height:287mm;display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(3,1fr);gap:2.5mm;break-after:page}.sheet:last-child{break-after:auto}.tag{min-width:0;min-height:0;border:1.2px solid #0a61d8;border-radius:2.2mm;overflow:hidden;display:grid;grid-template-rows:auto auto 1fr auto;break-inside:avoid;background:#fff}
       header{display:flex;justify-content:space-between;align-items:center;padding:1.5mm 2mm;color:#fff;background:#075fd7}.brand{font-size:16px;font-weight:900;line-height:.8}.brand small{display:block;margin-top:1mm;font-size:4px;letter-spacing:.7px;color:#dbeaff}.tag-title{text-align:right}.tag-title b{display:block;font-size:7px;letter-spacing:.35px}.tag-title small{font-size:5px;color:#dbeaff}
-      .product{display:grid;grid-template-columns:24mm 1fr;gap:2mm;padding:2mm;border-bottom:1px solid #cbd9eb;background:#f5f9ff}.photo-wrap{height:22mm;display:grid;place-items:center;border:1px solid #b9cce5;border-radius:1.5mm;background:#fff;overflow:hidden}.photo{width:100%;height:100%;object-fit:contain}.photo-fallback{color:#8493aa;text-align:center;font-size:5px}.photo-fallback strong{display:block;font-size:14px;color:#b7c5d8}
+      .product{display:grid;grid-template-columns:22mm 20mm 1fr;gap:1.5mm;padding:1.5mm 2mm;border-bottom:1px solid #cbd9eb;background:#f5f9ff}.photo-wrap{height:21mm;display:grid;place-items:center;border:1px solid #b9cce5;border-radius:1.5mm;background:#fff;overflow:hidden}.photo{width:100%;height:100%;object-fit:contain}.photo-fallback{color:#8493aa;text-align:center;font-size:5px}.photo-fallback strong{display:block;font-size:14px;color:#b7c5d8}.qr-wrap{height:21mm;display:grid;place-items:center;align-content:center;border:1px solid #b9cce5;border-radius:1.5mm;background:#fff}.qr{width:16.5mm;height:16.5mm}.qr-wrap small{font-size:3.6px;color:#526783}
       .main{align-self:center;min-width:0}.main small{font-size:4.8px;letter-spacing:.25px;color:#6d7e98}.main b{display:block;margin:.4mm 0;font-size:10px;overflow-wrap:anywhere}.main p{margin:0;color:#526783;font-size:6.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.customer{margin-top:.7mm!important;color:#075fd7!important;font-weight:700}
       .grid{display:grid;grid-template-columns:1fr 1fr;margin:1.5mm 2mm;border:1px solid #c7d5e7}.grid div{min-height:8mm;padding:1mm;border-right:1px solid #c7d5e7;border-bottom:1px solid #c7d5e7;overflow:hidden}.grid div:nth-child(even){border-right:0}.grid div:nth-last-child(-n+2){border-bottom:0}.grid small{display:block;color:#6d7e98;font-size:4.5px;letter-spacing:.15px}.grid b{font-size:6.8px;overflow-wrap:anywhere}.qty,.box-cell b{font-size:13px!important;color:#075fd7}.unit{font-size:5px;color:#526783}
-      footer{display:grid;grid-template-columns:21mm 1fr;gap:1.5mm;align-items:center;padding:1.5mm 2mm;border-top:1.2px solid #075fd7;min-width:0}.qr{width:21mm;height:21mm}.code{display:block;font-size:6px;overflow-wrap:anywhere}.payload{margin:.6mm 0;font-size:3.7px;line-height:1.2;color:#71809a;overflow-wrap:anywhere}.hint{display:inline-block;padding:.7mm 1mm;color:#fff;background:#075fd7;border-radius:1mm;font-size:4.7px;font-weight:700}
+      footer{display:grid;grid-template-columns:1fr auto;gap:.7mm 1.5mm;align-items:center;padding:1mm 2mm;border-top:1.2px solid #075fd7;min-width:0}.code{display:block;font-size:5.5px;overflow-wrap:anywhere}.payload{grid-column:1/-1;margin:0;font-size:3.5px;line-height:1.15;color:#71809a;overflow-wrap:anywhere}.hint{display:inline-block;padding:.7mm 1mm;color:#fff;background:#075fd7;border-radius:1mm;font-size:4.5px;font-weight:700;white-space:nowrap}
       @media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
     </style></head><body>${pages}<script>window.onload=()=>{const images=[...document.images];Promise.all(images.map((image)=>image.complete?Promise.resolve():new Promise((resolve)=>{image.onload=resolve;image.onerror=resolve}))).finally(()=>setTimeout(()=>window.print(),250))}<\/script></body></html>`);
     popup.document.close();
@@ -1085,7 +1154,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         <MetricCard tone="orange" icon="◷" label="รอขายออก" value={fmt(reserved)} suffix="ชิ้น" />
         <MetricCard tone="purple" icon="✓" label="พร้อมจัดงาน" value={fmt(available)} suffix="ชิ้น" />
       </div>
-      {user.role === "admin" && <Card title="1. ทะเบียน Part ทั้งหมด" action={<button className="button secondary" disabled={stockSaving || !payload.dues.length} onClick={() => void syncDueParts()}>⇩ นำ Part ทั้งหมดจาก Due</button>}>
+      {user.role === "admin" && <Card title="1. ทะเบียน Part ทั้งหมด" action={<div className="user-actions"><input ref={partFileInput} type="file" accept=".xlsx,.xls" hidden onChange={importPartExcel} /><button className="button primary" disabled={stockSaving} onClick={() => partFileInput.current?.click()}>⇧ นำเข้า Part Excel</button><button className="button secondary" disabled={stockSaving || !payload.dues.length} onClick={() => void syncDueParts()}>⇩ นำ Part ทั้งหมดจาก Due</button></div>}>
         <form className="stock-form-grid" onSubmit={saveStockPart}>
           <label><span>Part / Material No. *</span><input value={stockPartForm.materialCode} onChange={(e) => setStockPartForm((current) => ({ ...current, materialCode: e.target.value.toUpperCase() }))} required /></label>
           <label><span>ชื่อชิ้นงาน *</span><input value={stockPartForm.partName} onChange={(e) => setStockPartForm((current) => ({ ...current, partName: e.target.value }))} required /></label>
@@ -1093,7 +1162,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <label><span>จำนวนสูงสุดต่อกล่อง *</span><input type="number" min="1" value={stockPartForm.standardQty} onChange={(e) => setStockPartForm((current) => ({ ...current, standardQty: e.target.value }))} required /></label>
           <button className="button primary" disabled={stockSaving}>＋ บันทึก Part</button>
         </form>
-        <p className="part-image-help">กำหนดความจุกล่องของแต่ละ Part เช่น 100 ชิ้น/กล่อง ระบบจะแบ่งจำนวน Job เป็นกล่องเต็มและกล่องเศษให้อัตโนมัติ · รูปชิ้นงานใช้รูปเดียวกับหน้า “ตั้งค่า”</p>
+        <p className="part-image-help">Excel รองรับคอลัมน์: Part / Material No., Part Name, Customer และ Max Qty per Box (จำนวนสูงสุดต่อกล่อง) · ระบบจะเพิ่ม Part ใหม่และอัปเดต Part เดิมตาม Part No. · รูปชิ้นงานใช้รูปเดียวกับหน้า “ตั้งค่า”</p>
         <div className="part-registry-toolbar">
           <input value={partSearch} onChange={(event) => setPartSearch(event.target.value)} placeholder="ค้นหา Part No., ชื่อชิ้นงาน หรือลูกค้า" />
           <button type="button" className="button secondary danger-outline" disabled={Boolean(deletingPartCode) || !stock.parts.length} onClick={() => void deleteUnusedStockParts()}>
