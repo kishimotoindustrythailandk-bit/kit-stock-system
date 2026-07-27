@@ -95,3 +95,18 @@ test("v2.8.4 splits a Job into full and remainder boxes", async () => {
   assert.match(stockApi, /boxNo < boxCount \? packQty/);
   assert.match(stockApi, /-B\$\{String\(boxNo\)/);
 });
+
+test("v2.8.5 imports Parts from Excel and prints complete Stock Tag data", async () => {
+  const [appSource, stockApi] = await Promise.all([
+    readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/stock/route.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /นำเข้า Part Excel/);
+  assert.match(appSource, /Max Qty per Box/);
+  assert.match(appSource, /QR \/ BARCODE/);
+  assert.match(appSource, /DELIVERY QTY \/ จำนวนงานรวม/);
+  assert.match(appSource, /QTY IN BOX \/ จำนวนในกล่อง/);
+  assert.match(appSource, /CUSTOMER/);
+  assert.match(stockApi, /action === "import_parts"/);
+  assert.match(stockApi, /deliveryQty: totalQty/);
+});
