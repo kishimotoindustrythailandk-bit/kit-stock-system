@@ -20,10 +20,15 @@ function parseInternalTag(raw: string) {
   throw new Error("Tag นี้ไม่ใช่ Tag Stock ของ KIT");
 }
 
-function createTagId() {
+function createTagBatchCode() {
   const now = new Date();
   const stamp = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, "0")}${String(now.getUTCDate()).padStart(2, "0")}`;
-  return `KITSTK-${stamp}-${crypto.randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase()}`;
+  return `KITSTK-${stamp}-${crypto.randomUUID().replaceAll("-", "").slice(0, 8).toUpperCase()}`;
+}
+
+function createTagId(batchCode: string, boxNo: number, boxCount: number) {
+  const width = Math.max(2, String(boxCount).length);
+  return `${batchCode}-B${String(boxNo).padStart(width, "0")}OF${String(boxCount).padStart(width, "0")}`;
 }
 
 export async function GET() {
@@ -117,8 +122,8 @@ export async function POST(request: Request) {
       const partName = clean(body.partName, 240);
       const customer = clean(body.customer, 160);
       const standardQty = Number(body.standardQty || 0);
-      if (!materialCode || !partName || !Number.isInteger(standardQty) || standardQty < 0) {
-        return Response.json({ error: "กรุณาระบุ Part No., ชื่อชิ้นงาน และจำนวนมาตรฐานให้ถูกต้อง" }, { status: 400 });
+      if (!materialCode || !partName || !Number.isInteger(standardQty) || standardQty <= 0) {
+        return Response.json({ error: "กรุณาระบุ Part No., ชื่อชิ้นงาน และจำนวนสูงสุดต่อกล่องอย่างน้อย 1 ชิ้น" }, { status: 400 });
       }
       await db.insert(stockParts).values({ materialCode, partName, customer, standardQty, active: true })
         .onConflictDoUpdate({ target: stockParts.materialCode, set: { partName, customer, standardQty, active: true, updatedAt: sql`CURRENT_TIMESTAMP` } });
@@ -210,19 +215,47 @@ export async function POST(request: Request) {
       const materialCode = clean(body.materialCode, 100).toUpperCase();
       const jobNo = clean(body.jobNo, 120).toUpperCase();
       const productionDate = clean(body.productionDate, 10);
-      const qty = Number(body.qty);
-      if (!materialCode || !jobNo || !/^\d{4}-\d{2}-\d{2}$/.test(productionDate) || !Number.isInteger(qty) || qty <= 0) {
-        return Response.json({ error: "กรุณาระบุ Part, จำนวน, Job และวันที่ผลิตให้ครบ" }, { status: 400 });
+      const totalQty = Number(body.qty);
+      if (!materialCode || !jobNo || !/^\d{4}-\d{2}-\d{2}$/.test(productionDate) || !Number.isInteger(totalQty) || totalQty <= 0) {
+        return Response.json({ error: "กรุณาระบุ Part, จำนวนงานรวม, Job และวันที่ผลิตให้ครบ" }, { status: 400 });
       }
       const [part] = await db.select().from(stockParts).where(and(eq(stockParts.materialCode, materialCode), eq(stockParts.active, true))).limit(1);
       if (!part) return Response.json({ error: "ยังไม่มี Part นี้ในทะเบียน Stock กรุณาให้ Admin เพิ่ม Part ก่อน" }, { status: 404 });
-      const tagId = createTagId();
-      const [tag] = await db.insert(stockTags).values({
-        tagId, materialCode, qty, remainingQty: qty, jobNo, productionDate,
-        status: "printed", printedByName: user.displayName,
-      }).returning();
+      const packQty = Number(part.standardQty);
+      if (!Number.isInteger(packQty) || packQty <= 0) {
+        return Response.json({
+          error: `Part ${materialCode} ยังไม่ได้กำหนดจำนวนสูงสุดต่อกล่อง กรุณาให้ Admin แก้ไขข้อมูล Part ก่อน`,
+        }, { status: 409 });
+      }
+      const boxCount = Math.ceil(totalQty / packQty);
+      if (boxCount > 200) {
+        return Response.json({
+          error: `จำนวนนี้ต้องสร้าง ${boxCount} กล่อง เกินขีดจำกัด 200 กล่องต่อครั้ง กรุณาแบ่งสร้างเป็นหลายครั้ง`,
+        }, { status: 400 });
+      }
+      const batchCode = createTagBatchCode();
+      const tags = [];
+      for (let boxNo = 1; boxNo <= boxCount; boxNo += 1) {
+        const boxQty = boxNo < boxCount ? packQty : totalQty - (packQty * (boxCount - 1));
+        const tagId = createTagId(batchCode, boxNo, boxCount);
+        const [tag] = await db.insert(stockTags).values({
+          tagId, materialCode, qty: boxQty, remainingQty: boxQty, jobNo, productionDate,
+          status: "printed", printedByName: user.displayName,
+        }).returning();
+        tags.push({
+          ...tag,
+          boxNo,
+          boxCount,
+          partName: part.partName,
+          customer: part.customer,
+          payload: `KITSTOCK|${tagId}|${materialCode}|${boxQty}|${jobNo}|${productionDate}`,
+        });
+      }
       return Response.json({
-        tag: { ...tag, partName: part.partName, customer: part.customer, payload: `KITSTOCK|${tagId}|${materialCode}|${qty}|${jobNo}|${productionDate}` },
+        tags,
+        totalQty,
+        packQty,
+        boxCount,
       }, { status: 201 });
     }
 
