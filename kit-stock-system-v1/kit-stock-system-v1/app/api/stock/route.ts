@@ -173,6 +173,37 @@ export async function POST(request: Request) {
       return Response.json({ success: true, deleted: result.meta.changes });
     }
 
+    if (action === "delete_tag") {
+      if (user.role !== "admin") return Response.json({ error: "เฉพาะ Admin เท่านั้นที่ลบ Tag ได้" }, { status: 403 });
+      const tagId = clean(body.tagId, 120).toUpperCase();
+      if (!tagId) return Response.json({ error: "กรุณาระบุ Tag ที่ต้องการลบ" }, { status: 400 });
+      const { DB } = getRuntimeEnv();
+      if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
+      const tag = await DB.prepare(`
+        SELECT id, tag_id AS tagId, status, received_at AS receivedAt
+        FROM stock_tags WHERE tag_id = ?1 LIMIT 1
+      `).bind(tagId).first<{ id: number; tagId: string; status: string; receivedAt: string | null }>();
+      if (!tag) return Response.json({ error: "ไม่พบ Tag ที่ต้องการลบ" }, { status: 404 });
+      if (tag.status !== "printed" || tag.receivedAt) {
+        return Response.json({
+          error: "Tag นี้รับเข้า Stock แล้ว จึงลบไม่ได้ เพื่อรักษาข้อมูลย้อนหลัง",
+        }, { status: 409 });
+      }
+      const result = await DB.prepare(`
+        DELETE FROM stock_tags
+        WHERE id = ?1 AND status = 'printed' AND received_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM stock_allocations WHERE stock_tag_id = ?1)
+          AND NOT EXISTS (SELECT 1 FROM stock_picks WHERE stock_tag_id = ?1)
+          AND NOT EXISTS (SELECT 1 FROM stock_dispatch_links WHERE stock_tag_id = ?1)
+      `).bind(tag.id).run();
+      if (!result.meta.changes) {
+        return Response.json({
+          error: "Tag นี้มีประวัติรับเข้า จัดงาน หรือขายออกแล้ว จึงลบไม่ได้ เพื่อรักษาข้อมูลย้อนหลัง",
+        }, { status: 409 });
+      }
+      return Response.json({ success: true, deleted: 1, tagId: tag.tagId });
+    }
+
     if (!requireStockRole(user.role)) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์จัดการ Stock" }, { status: 403 });
 
     if (action === "create_tag") {
