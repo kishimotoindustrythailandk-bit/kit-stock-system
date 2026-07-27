@@ -1,0 +1,23 @@
+KIT Delivery Due Control v2.8.4
+
+ไฟล์ที่แก้ไขจาก v2.8.3
+- app/delivery-control-app.tsx
+- app/api/stock/route.ts
+- tests/rendered-html.test.mjs
+- package.json
+- package-lock.json
+- README.md
+- FILES-v2.8.4.txt
+
+ความสามารถใหม่
+- กำหนดจำนวนสูงสุดต่อกล่องในข้อมูล Part
+- กรอกจำนวนรวมของ Job แล้วระบบแบ่งกล่องเต็ม/กล่องเศษอัตโนมัติ
+- สร้าง QR และ Tag ID แยกจริงทุกกล่อง พร้อมเลขกล่อง 1/N
+- พิมพ์ได้สูงสุด 6 Tag ต่อกระดาษ A4 หนึ่งหน้า และขึ้นหน้าใหม่เมื่อเกิน 6 Tag
+- เอา Status ออกจากแบบพิมพ์ Stock Tag
+- คงการลบ Tag ที่ยังไม่เคยรับเข้า Stockไว้เหมือนเดิม
+
+การติดตั้ง
+- วางไฟล์ทั้งหมดจาก ZIP ทับโฟลเดอร์ระบบเดิม
+- เก็บไฟล์ wrangler.jsonc / wrangler.json / wrangler.toml เดิมไว้
+- ไม่ต้องรัน SQL เพิ่ม
