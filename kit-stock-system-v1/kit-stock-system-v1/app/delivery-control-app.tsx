@@ -278,6 +278,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [stockPartForm, setStockPartForm] = useState({ materialCode: "", partName: "", customer: "", standardQty: "" });
   const [partSearch, setPartSearch] = useState("");
   const [deletingPartCode, setDeletingPartCode] = useState("");
+  const [deletingStockTagId, setDeletingStockTagId] = useState("");
   const [stockTagForm, setStockTagForm] = useState({ materialCode: "", qty: "", jobNo: "", productionDate: new Date().toISOString().slice(0, 10) });
   const [stockScan, setStockScan] = useState("");
   const [stockSaving, setStockSaving] = useState(false);
@@ -786,6 +787,26 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     }
   }
 
+  async function deleteStockTag(tag: StockTag) {
+    if (!window.confirm(`ยืนยันลบ Tag ${tag.tagId}\nPart ${tag.materialCode} · Job ${tag.jobNo} หรือไม่?\n\nลบได้เฉพาะ Tag ที่ยังไม่เคยรับเข้า Stock เท่านั้น`)) return;
+    setDeletingStockTagId(tag.tagId);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "delete_tag", tagId: tag.tagId }),
+      });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || "ลบ Tag ไม่สำเร็จ");
+      if (createdStockTag?.tagId === tag.tagId) setCreatedStockTag(null);
+      setNotice({ type: "success", text: `ลบ Tag ${tag.tagId} แล้ว` });
+      await loadStock();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ลบ Tag ไม่สำเร็จ" });
+    } finally {
+      setDeletingStockTagId("");
+    }
+  }
+
   async function printStockTag(tag: StockTag) {
     const payloadValue = tag.payload || `KITSTOCK|${tag.tagId}|${tag.materialCode}|${tag.qty}|${tag.jobNo}|${tag.productionDate}`;
     const qrcode = await import("qrcode");
@@ -807,20 +828,22 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     } catch {
       imageUrl = "";
     }
-    popup.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${html(tag.tagId)}</title><style>
-      @page{size:A4 portrait;margin:8mm}*{box-sizing:border-box}body{margin:0;font-family:Arial,"Noto Sans Thai",sans-serif;color:#10264c}
-      .sheet{display:grid;grid-template-columns:1fr 1fr;gap:8mm}.tag{min-height:125mm;border:2px solid #0a61d8;border-radius:4mm;overflow:hidden;display:grid;grid-template-rows:auto auto 1fr auto;break-inside:avoid;background:#fff}
-      header{display:flex;justify-content:space-between;align-items:center;padding:3mm 4mm;color:#fff;background:#075fd7}.brand{font-size:24px;font-weight:900;line-height:.8}.brand small{display:block;margin-top:2mm;font-size:6px;letter-spacing:1.2px;color:#dbeaff}.tag-title{text-align:right}.tag-title b{display:block;font-size:11px;letter-spacing:.8px}.tag-title small{font-size:7px;color:#dbeaff}
-      .product{display:grid;grid-template-columns:40mm 1fr;gap:3mm;padding:4mm;border-bottom:1px solid #cbd9eb;background:#f5f9ff}.photo-wrap{height:38mm;display:grid;place-items:center;border:1px solid #b9cce5;border-radius:2.5mm;background:#fff;overflow:hidden}.photo{width:100%;height:100%;object-fit:contain}.photo-fallback{color:#8493aa;text-align:center;font-size:8px}.photo-fallback strong{display:block;font-size:21px;color:#b7c5d8}
-      .main{align-self:center}.main small{font-size:7px;letter-spacing:.6px;color:#6d7e98}.main b{display:block;margin:1mm 0;font-size:17px;overflow-wrap:anywhere}.main p{margin:0;color:#526783;font-size:10px}.customer{margin-top:2mm!important;color:#075fd7!important;font-weight:700}
-      .grid{display:grid;grid-template-columns:1fr 1fr;margin:3mm 4mm;border:1px solid #c7d5e7}.grid div{min-height:15mm;padding:2.5mm;border-right:1px solid #c7d5e7;border-bottom:1px solid #c7d5e7}.grid div:nth-child(even){border-right:0}.grid div:nth-last-child(-n+2){border-bottom:0}.grid small{display:block;color:#6d7e98;font-size:7px;letter-spacing:.4px}.grid b{font-size:11px;overflow-wrap:anywhere}.qty{font-size:24px!important;color:#075fd7}.unit{font-size:8px;color:#526783}
-      footer{display:grid;grid-template-columns:34mm 1fr;gap:3mm;align-items:center;padding:3mm 4mm;border-top:2px solid #075fd7}.qr{width:34mm;height:34mm}.code{font-size:9px;overflow-wrap:anywhere}.payload{margin:1mm 0;font-size:6px;color:#71809a;overflow-wrap:anywhere}.hint{display:inline-block;padding:1.5mm 2mm;color:#fff;background:#075fd7;border-radius:1.5mm;font-size:7px;font-weight:700}
-      @media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}.sheet{gap:6mm}}
-    </style></head><body><div class="sheet"><section class="tag"><header><div class="brand">KiT<small>DELIVERY DUE CONTROL</small></div><div class="tag-title"><b>STOCK RECEIVING TAG</b><small>TAG รับงานเข้า STOCK</small></div></header>
+    const tagMarkup = `<section class="tag"><header><div class="brand">KiT<small>DELIVERY DUE CONTROL</small></div><div class="tag-title"><b>STOCK RECEIVING TAG</b><small>TAG รับงานเข้า STOCK</small></div></header>
       <div class="product"><div class="photo-wrap">${imageUrl ? `<img class="photo" src="${imageUrl}" alt="รูปชิ้นงาน ${html(tag.materialCode)}" />` : `<div class="photo-fallback"><strong>◇</strong>ยังไม่มีรูปชิ้นงาน</div>`}</div><div class="main"><small>PART NO. / MATERIAL</small><b>${html(tag.materialCode)}</b><small>PART NAME</small><p>${html(tag.partName)}</p><p class="customer">CUSTOMER: ${html(tag.customer || "—")}</p></div></div>
       <div class="grid"><div><small>QTY / จำนวน</small><b class="qty">${fmt(tag.qty)}</b> <span class="unit">PC</span></div><div><small>JOB NO.</small><b>${html(tag.jobNo)}</b></div><div><small>PRODUCTION DATE / วันที่ผลิต</small><b>${html(formatDate(tag.productionDate))}</b></div><div><small>PRINTED BY / ผู้พิมพ์</small><b>${html(tag.printedByName)}</b></div><div><small>TAG ID</small><b>${html(tag.tagId)}</b></div><div><small>STATUS</small><b>รอรับเข้า STOCK</b></div></div>
       <footer><img class="qr" src="${qr}" alt="QR"><div><b class="code">${html(tag.tagId)}</b><p class="payload">${html(payloadValue)}</p><div class="hint">ยิง QR เพื่อรับงานเข้า Stock</div></div></footer>
-    </section></div><script>window.onload=()=>{const images=[...document.images];Promise.all(images.map((image)=>image.complete?Promise.resolve():new Promise((resolve)=>{image.onload=resolve;image.onerror=resolve}))).finally(()=>setTimeout(()=>window.print(),250))}<\/script></body></html>`);
+    </section>`;
+    const tagCopies = Array.from({ length: 6 }, () => tagMarkup).join("");
+    popup.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${html(tag.tagId)}</title><style>
+      @page{size:A4 portrait;margin:5mm}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;font-family:Arial,"Noto Sans Thai",sans-serif;color:#10264c}
+      .sheet{height:287mm;display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(3,1fr);gap:2.5mm}.tag{min-width:0;min-height:0;border:1.2px solid #0a61d8;border-radius:2.2mm;overflow:hidden;display:grid;grid-template-rows:auto auto 1fr auto;break-inside:avoid;background:#fff}
+      header{display:flex;justify-content:space-between;align-items:center;padding:1.5mm 2mm;color:#fff;background:#075fd7}.brand{font-size:16px;font-weight:900;line-height:.8}.brand small{display:block;margin-top:1mm;font-size:4px;letter-spacing:.7px;color:#dbeaff}.tag-title{text-align:right}.tag-title b{display:block;font-size:7px;letter-spacing:.35px}.tag-title small{font-size:5px;color:#dbeaff}
+      .product{display:grid;grid-template-columns:24mm 1fr;gap:2mm;padding:2mm;border-bottom:1px solid #cbd9eb;background:#f5f9ff}.photo-wrap{height:22mm;display:grid;place-items:center;border:1px solid #b9cce5;border-radius:1.5mm;background:#fff;overflow:hidden}.photo{width:100%;height:100%;object-fit:contain}.photo-fallback{color:#8493aa;text-align:center;font-size:5px}.photo-fallback strong{display:block;font-size:14px;color:#b7c5d8}
+      .main{align-self:center;min-width:0}.main small{font-size:4.8px;letter-spacing:.25px;color:#6d7e98}.main b{display:block;margin:.4mm 0;font-size:10px;overflow-wrap:anywhere}.main p{margin:0;color:#526783;font-size:6.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.customer{margin-top:.7mm!important;color:#075fd7!important;font-weight:700}
+      .grid{display:grid;grid-template-columns:1fr 1fr;margin:1.5mm 2mm;border:1px solid #c7d5e7}.grid div{min-height:8mm;padding:1mm;border-right:1px solid #c7d5e7;border-bottom:1px solid #c7d5e7;overflow:hidden}.grid div:nth-child(even){border-right:0}.grid div:nth-last-child(-n+2){border-bottom:0}.grid small{display:block;color:#6d7e98;font-size:4.5px;letter-spacing:.15px}.grid b{font-size:6.8px;overflow-wrap:anywhere}.qty{font-size:13px!important;color:#075fd7}.unit{font-size:5px;color:#526783}
+      footer{display:grid;grid-template-columns:21mm 1fr;gap:1.5mm;align-items:center;padding:1.5mm 2mm;border-top:1.2px solid #075fd7;min-width:0}.qr{width:21mm;height:21mm}.code{display:block;font-size:6px;overflow-wrap:anywhere}.payload{margin:.6mm 0;font-size:3.7px;line-height:1.2;color:#71809a;overflow-wrap:anywhere}.hint{display:inline-block;padding:.7mm 1mm;color:#fff;background:#075fd7;border-radius:1mm;font-size:4.7px;font-weight:700}
+      @media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
+    </style></head><body><div class="sheet">${tagCopies}</div><script>window.onload=()=>{const images=[...document.images];Promise.all(images.map((image)=>image.complete?Promise.resolve():new Promise((resolve)=>{image.onload=resolve;image.onerror=resolve}))).finally(()=>setTimeout(()=>window.print(),250))}<\/script></body></html>`);
     popup.document.close();
   }
 
@@ -1074,7 +1097,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
             <label><span>วันที่ผลิต *</span><input type="date" value={stockTagForm.productionDate} onChange={(e) => setStockTagForm((current) => ({ ...current, productionDate: e.target.value }))} required /></label>
             <button className="button primary full" disabled={stockSaving || !stock.parts.length}>สร้าง Tag</button>
           </form>
-          {createdStockTag && <div className="created-stock-tag"><PartImage materialCode={createdStockTag.materialCode} compact /><div><small>TAG พร้อมพิมพ์</small><b>{createdStockTag.tagId}</b><p>{createdStockTag.materialCode} · {fmt(createdStockTag.qty)} ชิ้น · Job {createdStockTag.jobNo}</p></div><button className="button primary" onClick={() => void printStockTag(createdStockTag)}>▤ พิมพ์ Tag</button></div>}
+          {createdStockTag && <div className="created-stock-tag"><PartImage materialCode={createdStockTag.materialCode} compact /><div><small>TAG พร้อมพิมพ์ · A4 หนึ่งหน้ามี 6 ดวง</small><b>{createdStockTag.tagId}</b><p>{createdStockTag.materialCode} · {fmt(createdStockTag.qty)} ชิ้น · Job {createdStockTag.jobNo}</p></div><button className="button primary" onClick={() => void printStockTag(createdStockTag)}>▤ พิมพ์ 6 Tag</button></div>}
         </Card>
         <Card title="3. ยิง Tag รับงานเข้า Stock">
           <div className="stock-scan-visual"><span>▦</span><b>พร้อมรับ Tag Stock</b><small>เครื่องยิงส่ง Enter แล้วระบบบันทึกทันที</small></div>
@@ -1083,7 +1106,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         </Card>
       </div>
       <Card title="รายการ Stock" action={<button className="button secondary" onClick={() => void loadStock()}>↻ รีเฟรช</button>}>
-        {stockLoading ? <div className="inline-loading">กำลังโหลด Stock…</div> : stock.tags.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>Part / รูป</th><th>Job / วันที่ผลิต</th><th>Tag ID</th><th className="num">จำนวน</th><th className="num">จองรอ</th><th className="num">คงเหลือ</th><th>สถานะ / จัดการ</th></tr></thead><tbody>{stock.tags.map((item) => <tr key={item.id}><td data-label="Part"><div className="stock-part-cell"><PartImage materialCode={item.materialCode} compact /><div><b>{item.materialCode}</b><small>{item.partName}</small></div></div></td><td data-label="Job / วันที่"><b>{item.jobNo}</b><small>{formatDate(item.productionDate)}</small></td><td data-label="Tag ID">{item.tagId}</td><td data-label="จำนวน" className="num">{fmt(item.qty)}</td><td data-label="จองรอ" className="num warning">{fmt(item.reservedQty)}</td><td data-label="คงเหลือ" className="num sent"><b>{fmt(item.remainingQty)}</b></td><td data-label="สถานะ / จัดการ"><div className="user-actions"><span className={`status ${item.status === "depleted" ? "over" : item.status === "printed" || item.reservedQty ? "partial" : "completed"}`}>{item.status === "depleted" ? "ขายออกหมด" : item.status === "printed" ? "รอรับเข้า" : item.reservedQty ? "มีงานรอขาย" : "พร้อมใช้"}</span><button className="tiny-button" onClick={() => void printStockTag(item)}>พิมพ์ซ้ำ</button></div></td></tr>)}</tbody></table></div> : <Empty title="ยังไม่มี Stock" text="สร้าง Tag พิมพ์ติดงาน แล้วสแกนรับเข้า Stock" />}
+        {stockLoading ? <div className="inline-loading">กำลังโหลด Stock…</div> : stock.tags.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>Part / รูป</th><th>Job / วันที่ผลิต</th><th>Tag ID</th><th className="num">จำนวน</th><th className="num">จองรอ</th><th className="num">คงเหลือ</th><th>สถานะ / จัดการ</th></tr></thead><tbody>{stock.tags.map((item) => <tr key={item.id}><td data-label="Part"><div className="stock-part-cell"><PartImage materialCode={item.materialCode} compact /><div><b>{item.materialCode}</b><small>{item.partName}</small></div></div></td><td data-label="Job / วันที่"><b>{item.jobNo}</b><small>{formatDate(item.productionDate)}</small></td><td data-label="Tag ID">{item.tagId}</td><td data-label="จำนวน" className="num">{fmt(item.qty)}</td><td data-label="จองรอ" className="num warning">{fmt(item.reservedQty)}</td><td data-label="คงเหลือ" className="num sent"><b>{fmt(item.remainingQty)}</b></td><td data-label="สถานะ / จัดการ"><div className="user-actions"><span className={`status ${item.status === "depleted" ? "over" : item.status === "printed" || item.reservedQty ? "partial" : "completed"}`}>{item.status === "depleted" ? "ขายออกหมด" : item.status === "printed" ? "รอรับเข้า" : item.reservedQty ? "มีงานรอขาย" : "พร้อมใช้"}</span><button className="tiny-button" onClick={() => void printStockTag(item)}>พิมพ์ซ้ำ 6 ดวง</button>{user.role === "admin" && item.status === "printed" && <button type="button" className="tiny-button danger-outline" disabled={Boolean(deletingStockTagId)} onClick={() => void deleteStockTag(item)}>{deletingStockTagId === item.tagId ? "กำลังลบ…" : "ลบ Tag"}</button>}</div></td></tr>)}</tbody></table></div> : <Empty title="ยังไม่มี Stock" text="สร้าง Tag พิมพ์ติดงาน แล้วสแกนรับเข้า Stock" />}
       </Card>
       <Card title="Traceability: Tag ลูกค้า ↔ KIT Tag ↔ Job">
         {stock.dispatchLinks.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>Tag ลูกค้า</th><th>KIT Tag / Job</th><th>Part / Due</th><th>ผลิต / รับเข้า</th><th className="num">จำนวน</th><th>ผู้จัด / ผู้ตรวจ</th></tr></thead><tbody>{stock.dispatchLinks.slice(0, 50).map((item) => <tr key={item.id}><td data-label="Tag ลูกค้า"><b>{item.customerTagId}</b></td><td data-label="KIT Tag / Job"><b>{item.stockTagCode}</b><small>Job {item.jobNo}</small></td><td data-label="Part / Due"><b>{item.materialCode}</b><small>{item.fact} / {item.line || "—"} · DO {item.doNo}</small></td><td data-label="ผลิต / รับเข้า"><b>{formatDate(item.productionDate)}</b><small>{item.receivedAt ? formatDateTime(item.receivedAt) : "—"}</small></td><td data-label="จำนวน" className="num"><b>{fmt(item.qty)}</b></td><td data-label="ผู้จัด / ผู้ตรวจ"><b>{item.pickedByName}</b><small>{item.dispatchedByName} · {formatDateTime(item.dispatchedAt)}</small></td></tr>)}</tbody></table></div> : <Empty title="ยังไม่มี Traceability ขายออก" text="เมื่อผู้ตรวจยิง Tag ลูกค้า ระบบจะแสดง KIT Tag, Job, วันที่ผลิต และวันที่รับเข้าที่ใช้จริง" />}
