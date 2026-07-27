@@ -261,6 +261,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [query, setQuery] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraPurpose, setCameraPurpose] = useState<"scan" | "stock">("scan");
   const [cameraError, setCameraError] = useState("");
   const [selectedScan, setSelectedScan] = useState<DueScan | null>(null);
   const [settings, setSettings] = useState({ partial: true, confirm: true, sound: true, autoFocus: true });
@@ -471,6 +472,11 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
             const value = codes[0]?.rawValue;
             if (value) {
               setCameraOpen(false);
+              if (cameraPurpose === "stock") {
+                setStockScan(value);
+                void receiveStockTag(value);
+                return;
+              }
               const arrangeMode = user.role === "dispatcher" || (user.role === "admin" && adminScanMode === "arrange");
               if (arrangeMode) {
                 setArrangeTag(value);
@@ -497,7 +503,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       window.clearTimeout(timer);
       stream?.getTracks().forEach((track) => track.stop());
     };
-  }, [cameraOpen, adminScanMode, user.role]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cameraOpen, cameraPurpose, adminScanMode, user.role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function parseExcel(event: ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0] ?? null;
@@ -837,9 +843,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     }
   }
 
-  async function receiveStockTag(event: FormEvent) {
-    event.preventDefault();
-    const rawPayload = stockScan.trim();
+  async function receiveStockTag(input: FormEvent | string) {
+    if (typeof input !== "string") input.preventDefault();
+    const rawPayload = (typeof input === "string" ? input : stockScan).trim();
     if (!rawPayload || stockSaving) return;
     setStockSaving(true);
     try {
@@ -1209,8 +1215,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         <MetricCard tone="orange" icon="◷" label="รอขายออก" value={fmt(reserved)} suffix="ชิ้น" />
         <MetricCard tone="purple" icon="✓" label="พร้อมจัดงาน" value={fmt(available)} suffix="ชิ้น" />
       </div>
-      <Card title="1. ยิง Tag รับงานเข้า Stock">
-        <div className="stock-scan-visual"><span>▦</span><b>พร้อมรับ Tag Stock</b><small>เครื่องยิงส่ง Enter แล้วระบบบันทึกทันที</small></div>
+      <Card title="1. ยิง Tag รับงานเข้า Stock" action={<button type="button" className="camera-button" onClick={() => { setCameraPurpose("stock"); setCameraOpen(true); }}>▣ เปิดกล้องยิง Tag</button>}>
+        <div className="stock-scan-visual"><span>▦</span><b>พร้อมรับ Tag Stock</b><small>ใช้กล้องโทรศัพท์หรือเครื่องยิงส่ง Enter แล้วระบบบันทึกทันที</small></div>
         <form className="manual-scan" onSubmit={receiveStockTag}><label><span>รหัส Tag Stock / ข้อมูล QR</span><input value={stockScan} onChange={(e) => setStockScan(e.target.value)} placeholder="ยิง Tag ที่สร้างจากเมนูพิมพ์ Tag" autoComplete="off" autoFocus /></label><button className="button primary" disabled={!stockScan.trim() || stockSaving}>{stockSaving ? "กำลังรับเข้า…" : "รับเข้า Stock"}</button></form>
         <div className="stock-rule-note"><b>ขั้นตอนการทำงาน</b><p>สร้างและพิมพ์ Tag จากเมนู “พิมพ์ Tag” ก่อน จากนั้นนำ Tag มายิงหน้านี้เพื่อรับงานเข้า Stock ผู้จัดงานจะยิง KIT Tag เพื่อจองงาน และผู้ตรวจยิง Tag ลูกค้าเพื่อตัด Stock กับ Due จริง</p></div>
       </Card>
@@ -1255,7 +1261,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       {user.role === "admin" && <Card title="เลือกขั้นตอนทำงาน"><div className="scan-mode"><button className={adminScanMode === "arrange" ? "active" : ""} onClick={() => setAdminScanMode("arrange")}>⇥ ผู้จัดงาน — ยิง KIT Tag</button><button className={adminScanMode === "dispatch" ? "active" : ""} onClick={() => setAdminScanMode("dispatch")}>⌗ ผู้ตรวจ — ยิง Tag ลูกค้า</button></div></Card>}
       <div className="scan-layout">
         <section className="scanner-card">
-          <div className="scanner-title"><div><h3>{scanMode === "arrange" ? "ผู้จัดงาน: เลือก Due แล้วยิง KIT Stock Tag" : "ผู้ตรวจ: ยิง Tag ลูกค้าเพื่อขายออก"}</h3><p>{scanMode === "arrange" ? "บันทึก Job ที่หยิบจริงและขึ้นสถานะรอขาย — ยังไม่ลด Stock / Due" : "ระบบจับคู่กับ KIT Tag ที่จัดไว้ แล้วลด Stock และ Due พร้อมกัน"}</p></div><button className="camera-button" onClick={() => setCameraOpen(true)}>▣ เปิดกล้อง</button></div>
+          <div className="scanner-title"><div><h3>{scanMode === "arrange" ? "ผู้จัดงาน: เลือก Due แล้วยิง KIT Stock Tag" : "ผู้ตรวจ: ยิง Tag ลูกค้าเพื่อขายออก"}</h3><p>{scanMode === "arrange" ? "บันทึก Job ที่หยิบจริงและขึ้นสถานะรอขาย — ยังไม่ลด Stock / Due" : "ระบบจับคู่กับ KIT Tag ที่จัดไว้ แล้วลด Stock และ Due พร้อมกัน"}</p></div><button className="camera-button" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>▣ เปิดกล้อง</button></div>
           {scanMode === "arrange" && <div className="arrange-due-selector">
             <label><span>1. เลือก Due ที่จะจัด *</span><select value={effectiveArrangeDueId} onChange={(e) => { setArrangeDueId(e.target.value); setArrangementPreview(null); }}>
               <option value="">— เลือก Due —</option>
@@ -1322,7 +1328,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   function renderSettings() {
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <>
-      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.8.1</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
+      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.8.7</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
       <Card title="รูปชิ้นงานสำหรับหน้าสแกน" action={<button className="button secondary" onClick={() => void loadPartImages()}>↻ รีเฟรช</button>}>
         <form className="part-image-upload" onSubmit={uploadPartImage}>
           <label><span>Material / Part No. *</span><input list="part-material-codes" value={partImageCode} onChange={(e) => setPartImageCode(e.target.value.toUpperCase())} placeholder="เช่น ABC-1234" required /></label>
@@ -1353,7 +1359,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
       <nav>{NAV.filter((item) => user.role === "admin" || (user.role === "dispatcher" ? ["dashboard", "stock", "tags", "scan", "history"].includes(item.key) : ["dashboard", "scan", "history"].includes(item.key))).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.8.6</span></div></div>
+      <div className="sidebar-bottom"><div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.8.7</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
@@ -1368,7 +1374,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       {(user.role === "admin" ? (["dashboard", "stock", "tags", "scan"] as PageKey[]) : user.role === "dispatcher" ? (["dashboard", "stock", "tags", "scan"] as PageKey[]) : (["dashboard", "scan", "history"] as PageKey[])).map((key) => { const item = NAV.find((nav) => nav.key === key)!; return <button key={key} className={page === key ? "active" : ""} onClick={() => go(key)}><span>{item.icon}</span><small>{item.label.replace("แผนส่งงาน (Due)", "แผนงาน").replace("สแกนและตัดยอด", "สแกน")}</small></button>; })}
       <button onClick={() => setMenuOpen(true)}><span>☰</span><small>เมนู</small></button>
     </nav>
-    {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>สแกน QR Tag ด้วยกล้อง</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className="camera-view"><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div>{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
+    {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>{cameraPurpose === "stock" ? "สแกน Tag รับงานเข้า Stock" : "สแกน QR Tag ด้วยกล้อง"}</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className="camera-view"><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div>{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
     {userEditorOpen && <div className="modal-backdrop"><form className="user-modal" onSubmit={saveUser}><header><div><h3>{userForm.id ? "แก้ไขผู้ใช้งาน" : "เพิ่มผู้ใช้งาน"}</h3><p>กำหนดผู้จัดงานหรือผู้ตรวจงานได้หลายคน</p></div><button type="button" onClick={() => setUserEditorOpen(false)}>×</button></header><div className="user-form-grid"><label><span>รหัสพนักงาน *</span><input value={userForm.employeeCode} onChange={(e) => setUserForm((current) => ({ ...current, employeeCode: e.target.value.toUpperCase() }))} placeholder="เช่น DISP001" required /></label><label><span>ชื่อผู้ใช้งาน *</span><input value={userForm.displayName} onChange={(e) => setUserForm((current) => ({ ...current, displayName: e.target.value }))} placeholder="ชื่อ-นามสกุล" required /></label><label><span>บทบาท *</span><select value={userForm.role} onChange={(e) => setUserForm((current) => ({ ...current, role: e.target.value as UserForm["role"] }))}><option value="dispatcher">ผู้จัดงาน — สแกนรับเข้า</option><option value="inspector">ผู้ตรวจงาน — สแกนส่งออก/ตัด Due</option></select></label><label><span>{userForm.id ? "ตั้ง PIN ใหม่ (เว้นว่างหากไม่เปลี่ยน)" : "PIN 6 หลัก *"}</span><input type="password" inputMode="numeric" maxLength={6} pattern="[0-9]{6}" value={userForm.pin} onChange={(e) => setUserForm((current) => ({ ...current, pin: e.target.value.replace(/\D/g, "") }))} required={!userForm.id} placeholder="••••••" /></label><label className="wide"><span>อีเมล (ไม่บังคับ)</span><input type="email" value={userForm.email} onChange={(e) => setUserForm((current) => ({ ...current, email: e.target.value }))} /></label></div><footer><button type="button" className="button secondary" onClick={() => setUserEditorOpen(false)}>ยกเลิก</button><button className="button primary" disabled={userSaving}>{userSaving ? "กำลังบันทึก…" : "บันทึกผู้ใช้งาน"}</button></footer></form></div>}
   </div>;
 }
