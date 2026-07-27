@@ -130,6 +130,43 @@ export async function POST(request: Request) {
       return Response.json({ success: true, materialCode });
     }
 
+    if (action === "import_parts") {
+      if (user.role !== "admin") return Response.json({ error: "เฉพาะ Admin เท่านั้นที่นำเข้า Part ได้" }, { status: 403 });
+      if (!Array.isArray(body.parts) || !body.parts.length || body.parts.length > 2000) {
+        return Response.json({ error: "ไฟล์ต้องมีข้อมูล Part 1–2,000 รายการ" }, { status: 400 });
+      }
+      const unique = new Map<string, { materialCode: string; partName: string; customer: string; standardQty: number }>();
+      for (const raw of body.parts) {
+        const row = raw as Record<string, unknown>;
+        const materialCode = clean(row.materialCode, 100).toUpperCase();
+        const partName = clean(row.partName, 240);
+        const customer = clean(row.customer, 160);
+        const standardQty = Number(row.standardQty || 0);
+        if (!materialCode || !partName || !Number.isInteger(standardQty) || standardQty <= 0) continue;
+        unique.set(materialCode, { materialCode, partName, customer, standardQty });
+      }
+      const parts = [...unique.values()];
+      if (!parts.length) {
+        return Response.json({ error: "ไม่พบ Part ที่มี Part No., Part Name และจำนวนสูงสุดต่อกล่องครบถ้วน" }, { status: 400 });
+      }
+      const { DB } = getRuntimeEnv();
+      if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
+      const statements = parts.map((part) => DB.prepare(`
+        INSERT INTO stock_parts (material_code, part_name, customer, standard_qty, active, created_at, updated_at)
+        VALUES (?1, ?2, ?3, ?4, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(material_code) DO UPDATE SET
+          part_name = excluded.part_name,
+          customer = excluded.customer,
+          standard_qty = excluded.standard_qty,
+          active = 1,
+          updated_at = CURRENT_TIMESTAMP
+      `).bind(part.materialCode, part.partName, part.customer, part.standardQty));
+      for (let index = 0; index < statements.length; index += 100) {
+        await DB.batch(statements.slice(index, index + 100));
+      }
+      return Response.json({ success: true, imported: parts.length });
+    }
+
     if (action === "sync_due_parts") {
       if (user.role !== "admin") return Response.json({ error: "เฉพาะ Admin เท่านั้นที่นำ Part จาก Due เข้าทะเบียนได้" }, { status: 403 });
       const { DB } = getRuntimeEnv();
@@ -246,6 +283,7 @@ export async function POST(request: Request) {
           ...tag,
           boxNo,
           boxCount,
+          deliveryQty: totalQty,
           partName: part.partName,
           customer: part.customer,
           payload: `KITSTOCK|${tagId}|${materialCode}|${boxQty}|${jobNo}|${productionDate}`,
