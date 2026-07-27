@@ -1,4 +1,8 @@
-# KIT Delivery Due Control v2.8.1 — Stock Job Traceability
+# KIT Delivery Due Control v2.8.2 — Stock Receiving Tag with Part Image
+
+อัปเดต v2.8.2: ปรับ Tag รับงานเข้า Stock ให้จัดวางเหมือน Tag ลูกค้า แสดงรูปชิ้นงาน, Customer, Part No., Part Name, Job, วันที่ผลิต, จำนวน, Tag ID และ QR โดยฝังรูปลงในหน้าพิมพ์เพื่อให้รูปแสดงครบก่อนเปิดหน้าต่างพิมพ์
+
+ขั้นตอน Stock, ข้อมูล QR, การรับเข้า, การจัดงาน, การขายออก, การตัด Stock/Due และหน้าจออื่นคงเดิมจาก v2.8.1
 
 อัปเดต v2.8.1: Admin สามารถค้นหาและลบ Part ที่ยังไม่เคยสร้าง Tag หรือมีประวัติ Stock ได้ ทั้งแบบทีละรายการและลบรายการที่ยังไม่ใช้งานทั้งหมด
 
