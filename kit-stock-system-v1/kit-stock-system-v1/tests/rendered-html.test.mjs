@@ -56,3 +56,13 @@ test("includes Admin-safe Part deletion", async () => {
   assert.match(stockApi, /action === "delete_unused_parts"/);
   assert.match(stockApi, /เพื่อรักษาข้อมูลย้อนหลัง/);
 });
+
+test("prints the v2.8.2 Stock receiving Tag with the part image", async () => {
+  const appSource = await readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8");
+  assert.match(appSource, /STOCK RECEIVING TAG/);
+  assert.match(appSource, /imageResponse\.blob/);
+  assert.match(appSource, /PART NO\. \/ MATERIAL/);
+  assert.match(appSource, /PRODUCTION DATE \/ วันที่ผลิต/);
+  assert.match(appSource, /ยิง QR เพื่อรับงานเข้า Stock/);
+  assert.match(appSource, /KITSTOCK\|/);
+});
