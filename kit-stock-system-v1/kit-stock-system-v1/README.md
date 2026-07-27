@@ -1,4 +1,12 @@
-# KIT Delivery Due Control v2.8.4 — Auto Pack Tags
+# KIT Delivery Due Control v2.8.5 — Part Excel & Complete Stock Tags
+
+อัปเดต v2.8.5:
+
+- Admin นำเข้าทะเบียน Part จาก Excel ได้ โดยรองรับคอลัมน์ `Part / Material No.`, `Part Name`, `Customer` และ `Max Qty per Box`
+- Tag รับเข้า Stock แสดงรูปชิ้นงานและ QR/Barcode ในพื้นที่ด้านบน
+- Tag แสดง Customer, Part No./Material, Part Name, Delivery Qty, วันที่ผลิต, Job, จำนวนในกล่อง และเลขกล่อง
+- ยังคงแบ่ง Tag ตามจำนวนสูงสุดต่อกล่องอัตโนมัติ และพิมพ์ได้สูงสุด 6 Tag ต่อ A4
+- ไม่ต้องรัน SQL เพิ่มจาก v2.8.4
 
 อัปเดต v2.8.4: ในทะเบียน Part ต้องกำหนด **จำนวนสูงสุดต่อกล่อง** และเมื่อสร้าง Tag ให้กรอกจำนวนงานรวมของ Job ระบบจะแบ่งเป็นกล่องและสร้าง Tag จริงให้ทุกกล่องอัตโนมัติ
 
