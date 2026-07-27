@@ -1,4 +1,11 @@
-# KIT Delivery Due Control v2.8.5 — Part Excel & Complete Stock Tags
+# KIT Delivery Due Control v2.8.6 — แยก Stock และพิมพ์ Tag
+
+อัปเดต v2.8.6:
+
+- แยกเมนู `Stock` และ `พิมพ์ Tag` ออกจากกันอย่างชัดเจน
+- หน้า `พิมพ์ Tag` รวมทะเบียน Part, นำเข้า Part Excel, สร้าง Tag, พิมพ์ซ้ำ และลบ Tag ที่ยังไม่รับเข้า
+- หน้า `Stock` รวมสแกนรับเข้า, ยอดคงเหลือ, รายการ Stock และ Traceability
+- ใช้ฐานข้อมูล Part และ Tag ชุดเดิม จึงไม่ต้องรัน SQL เพิ่ม
 
 อัปเดต v2.8.5:
 

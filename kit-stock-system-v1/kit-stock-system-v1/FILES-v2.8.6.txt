@@ -1,0 +1,18 @@
+KIT Delivery Due Control v2.8.6
+
+ไฟล์ที่ต้องวางทับใน GitHub หากอัปเดตจาก v2.8.5:
+
+1. app/delivery-control-app.tsx
+2. package.json
+3. package-lock.json
+4. README.md
+5. tests/rendered-html.test.mjs
+6. FILES-v2.8.6.txt
+
+ไม่ต้องรัน SQL เพิ่มสำหรับ v2.8.6
+
+สิ่งที่เปลี่ยน:
+- แยกเมนู Stock และเมนูพิมพ์ Tag ออกจากกัน
+- เมนูพิมพ์ Tag มีทะเบียน Part, นำเข้า Part Excel, สร้าง/พิมพ์/พิมพ์ซ้ำ และลบ Tag ที่ยังไม่รับเข้า
+- เมนู Stock มีสแกนรับเข้า, ยอดคงเหลือ, รายการ Stock และ Traceability
+- ผู้จัดงานเข้าถึง Stock และพิมพ์ Tag ได้ ส่วนผู้ตรวจใช้หน้าสแกนขายออกตามเดิม
