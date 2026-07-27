@@ -1,0 +1,18 @@
+KIT Delivery Due Control v2.8.7
+
+ไฟล์ที่ต้องวางทับใน GitHub หากอัปเดตจาก v2.8.6:
+
+1. app/delivery-control-app.tsx
+2. package.json
+3. package-lock.json
+4. README.md
+5. tests/rendered-html.test.mjs
+6. FILES-v2.8.7.txt
+
+ไม่ต้องรัน SQL เพิ่มสำหรับ v2.8.7
+
+สิ่งที่เปลี่ยน:
+- หน้า Stock มีปุ่ม "เปิดกล้องยิง Tag"
+- ใช้กล้องหลังของโทรศัพท์สแกน KIT Stock Tag
+- เมื่ออ่าน QR สำเร็จ ระบบรับ Tag เข้า Stockทันที ไม่ต้องกดปุ่มรับเข้าซ้ำ
+- เครื่องยิง Barcode/QR แบบ USB หรือ Bluetooth ยังใช้ช่องรหัสและ Enter ได้ตามเดิม
