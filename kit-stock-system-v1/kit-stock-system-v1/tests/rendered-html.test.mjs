@@ -120,3 +120,12 @@ test("v2.8.6 separates Stock operations from Tag printing", async () => {
   assert.match(appSource, /Tag ที่สร้างแล้ว/);
   assert.match(appSource, /ยิง Tag รับงานเข้า Stock/);
 });
+
+test("v2.8.7 opens the camera from Stock receiving and receives immediately", async () => {
+  const appSource = await readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8");
+  assert.match(appSource, /cameraPurpose/);
+  assert.match(appSource, /เปิดกล้องยิง Tag/);
+  assert.match(appSource, /cameraPurpose === "stock"/);
+  assert.match(appSource, /receiveStockTag\(value\)/);
+  assert.match(appSource, /สแกน Tag รับงานเข้า Stock/);
+});
