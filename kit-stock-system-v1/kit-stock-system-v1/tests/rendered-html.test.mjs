@@ -82,6 +82,16 @@ test("prints up to eight unique Stock Tags per A4 page and safely deletes unused
   assert.match(stockApi, /Tag นี้มีประวัติรับเข้า จัดงาน หรือขายออกแล้ว/);
 });
 
+test("v2.8.11 prints eight high-contrast Tags with larger readable text", async () => {
+  const appSource = await readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8");
+  assert.match(appSource, /grid-template-rows:repeat\(4,1fr\)/);
+  assert.match(appSource, /border:1\.6px solid #003f98/);
+  assert.match(appSource, /\.main b\{[^}]*font-size:9px/);
+  assert.match(appSource, /\.grid b\{[^}]*font-size:6\.4px/);
+  assert.match(appSource, /\.qty,\.box-cell b\{font-size:11\.5px!important/);
+  assert.match(appSource, /print-color-adjust:exact/);
+});
+
 test("v2.8.4 splits a Job into full and remainder boxes", async () => {
   const [appSource, stockApi] = await Promise.all([
     readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8"),
