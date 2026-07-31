@@ -1,0 +1,24 @@
+KIT Delivery Due Control v2.8.11
+
+ไฟล์ที่ต้องวางทับใน GitHub (ทั้งหมด 6 ไฟล์)
+
+1. app/delivery-control-app.tsx
+2. tests/rendered-html.test.mjs
+3. package.json
+4. package-lock.json
+5. README.md
+6. FILES-v2.8.11.txt
+
+วิธีวาง
+
+- เข้าโฟลเดอร์ระบบเดิมที่มี app, db, public, worker และ package.json
+- วางไฟล์ตาม path ด้านบนทับไฟล์เดิม แล้ว Commit ไปที่ branch main
+- อย่าวางโฟลเดอร์โปรเจกต์ซ้อนเพิ่มอีกชั้น
+- รอ Cloudflare Build และ Deploy สำเร็จ แล้วทดสอบ Print Preview
+
+สิ่งที่เปลี่ยน
+
+- A4 หนึ่งหน้าพิมพ์ได้สูงสุด 8 Tag แบบ 2 คอลัมน์ × 4 แถวเหมือนเดิม
+- ตัวอักษรส่วนสำคัญใหญ่และหนาขึ้น
+- สีหัว Tag, ข้อความ, เส้นกรอบ และพื้นหลังเข้มชัดขึ้น
+- ไม่ต้องรัน SQL และไม่ลบข้อมูลเดิม
