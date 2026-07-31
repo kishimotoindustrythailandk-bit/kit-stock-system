@@ -129,3 +129,21 @@ test("v2.8.7 opens the camera from Stock receiving and receives immediately", as
   assert.match(appSource, /receiveStockTag\(value\)/);
   assert.match(appSource, /สแกน Tag รับงานเข้า Stock/);
 });
+
+test("v2.8.8 supports per-user page permissions and server-side checks", async () => {
+  const [appSource, authSource, usersApi, schema, migration] = await Promise.all([
+    readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/cloudflare-auth.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/users/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
+    readFile(new URL("../database-upgrade-v2.8.8-user-permissions.sql", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /สิทธิ์เข้าใช้งานรายบุคคล/);
+  assert.match(appSource, /allowedPages\.has/);
+  assert.match(appSource, /บันทึกผู้ใช้งานและสิทธิ์/);
+  assert.match(authSource, /PERMISSION_KEYS/);
+  assert.match(authSource, /hasPermission/);
+  assert.match(usersApi, /replacePermissions/);
+  assert.match(schema, /appUserPermissions/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS app_user_permissions/);
+});
