@@ -35,7 +35,7 @@ export async function GET() {
   try {
     const user = await getCurrentUser();
     if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
-    if (!["stock", "tags", "scan", "reports", "history"].some((key) => hasPermission(user, key as "stock" | "tags" | "scan" | "reports" | "history"))) {
+    if (!["stock", "tags", "arrange", "dispatch", "reports", "history"].some((key) => hasPermission(user, key as "stock" | "tags" | "arrange" | "dispatch" | "reports" | "history"))) {
       return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ดูข้อมูล Stock" }, { status: 403 });
     }
     const db = getDb();
@@ -315,7 +315,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "stage") {
-      if (!hasPermission(user, "scan")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์จัดงาน" }, { status: 403 });
+      if (!hasPermission(user, "arrange")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์จัดงาน" }, { status: 403 });
       const dueLineId = Number(body.dueLineId);
       const tagId = parseInternalTag(clean(body.rawPayload, 1000));
       const requestedQty = Number(body.qty || 0);
