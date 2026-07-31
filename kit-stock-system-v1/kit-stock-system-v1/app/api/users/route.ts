@@ -1,15 +1,16 @@
 import { desc, eq } from "drizzle-orm";
-import { getCurrentUser } from "../../cloudflare-auth";
+import { defaultPermissions, getCurrentUser, hasPermission, normalizePermissions, PERMISSION_KEYS, PermissionKey } from "../../cloudflare-auth";
 import { hashPin } from "../../pin-security";
 import { getDb } from "../../../db";
 import { appSessions, appUsers } from "../../../db/schema";
+import { getRuntimeEnv } from "../../../runtime/env";
 
 const ROLES = new Set(["dispatcher", "inspector"]);
 
 async function requireAdmin() {
   const user = await getCurrentUser();
   if (!user) return { error: Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 }) };
-  if (user.role !== "admin") return { error: Response.json({ error: "เฉพาะ Admin เท่านั้นที่จัดการผู้ใช้งานได้" }, { status: 403 }) };
+  if (!hasPermission(user, "users")) return { error: Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์จัดการผู้ใช้งาน" }, { status: 403 }) };
   return { user };
 }
 
@@ -25,6 +26,46 @@ function validate(code: string, name: string, role: string, pin?: string) {
   return "";
 }
 
+function permissionsFromBody(value: unknown, role: string): PermissionKey[] {
+  return value === undefined ? defaultPermissions(role) : normalizePermissions(value, role);
+}
+
+async function permissionMap() {
+  const map = new Map<number, PermissionKey[]>();
+  const { DB } = getRuntimeEnv();
+  if (!DB) return map;
+  try {
+    const rows = await DB.prepare("SELECT user_id AS userId, permission_key AS permissionKey FROM app_user_permissions ORDER BY id")
+      .all<{ userId: number; permissionKey: string }>();
+    for (const row of rows.results) {
+      const list = map.get(row.userId) || [];
+      if ((PERMISSION_KEYS as readonly string[]).includes(row.permissionKey)) list.push(row.permissionKey as PermissionKey);
+      map.set(row.userId, list);
+    }
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("app_user_permissions")) throw error;
+  }
+  return map;
+}
+
+async function replacePermissions(userId: number, permissions: PermissionKey[]) {
+  const { DB } = getRuntimeEnv();
+  if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
+  try {
+    await DB.batch([
+      DB.prepare("DELETE FROM app_user_permissions WHERE user_id = ?1").bind(userId),
+      ...permissions.map((key) => DB.prepare(
+        "INSERT INTO app_user_permissions (user_id, permission_key) VALUES (?1, ?2)",
+      ).bind(userId, key)),
+    ]);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("app_user_permissions")) {
+      throw new Error("กรุณารันไฟล์ database-upgrade-v2.8.8-user-permissions.sql ใน D1 ก่อนบันทึกสิทธิ์");
+    }
+    throw error;
+  }
+}
+
 export async function GET() {
   const auth = await requireAdmin();
   if (auth.error) return auth.error;
@@ -32,7 +73,15 @@ export async function GET() {
     id: appUsers.id, employeeCode: appUsers.employeeCode, displayName: appUsers.displayName,
     email: appUsers.email, role: appUsers.role, active: appUsers.active, createdAt: appUsers.createdAt,
   }).from(appUsers).orderBy(desc(appUsers.id));
-  return Response.json({ users });
+  const permissions = await permissionMap();
+  return Response.json({
+    users: users.map((item) => ({
+      ...item,
+      permissions: item.role === "admin"
+        ? [...PERMISSION_KEYS]
+        : permissions.get(item.id)?.length ? normalizePermissions(permissions.get(item.id), item.role) : defaultPermissions(item.role),
+    })),
+  });
 }
 
 export async function POST(request: Request) {
@@ -45,12 +94,14 @@ export async function POST(request: Request) {
     const email = String(body.email ?? "").trim().slice(0, 120);
     const role = String(body.role ?? "");
     const pin = String(body.pin ?? "").trim();
+    const permissions = permissionsFromBody(body.permissions, role);
     const invalid = validate(employeeCode, displayName, role, pin);
     if (invalid) return Response.json({ error: invalid }, { status: 400 });
     const [created] = await getDb().insert(appUsers).values({ employeeCode, displayName, email, role, pinHash: await hashPin(pin), active: true }).returning({
       id: appUsers.id, employeeCode: appUsers.employeeCode, displayName: appUsers.displayName, email: appUsers.email, role: appUsers.role, active: appUsers.active,
     });
-    return Response.json({ user: created }, { status: 201 });
+    await replacePermissions(created.id, permissions);
+    return Response.json({ user: { ...created, permissions } }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "เพิ่มผู้ใช้งานไม่สำเร็จ";
     return Response.json({ error: message.includes("UNIQUE") ? "รหัสพนักงานนี้มีในระบบแล้ว" : message }, { status: 400 });
@@ -72,6 +123,7 @@ export async function PATCH(request: Request) {
     const email = String(body.email ?? target.email).trim().slice(0, 120);
     const role = String(body.role ?? target.role);
     const pin = body.pin ? String(body.pin).trim() : undefined;
+    const permissions = body.permissions === undefined ? undefined : permissionsFromBody(body.permissions, role);
     const invalid = validate(employeeCode, displayName, role, pin);
     if (invalid) return Response.json({ error: invalid }, { status: 400 });
     const values: { employeeCode: string; displayName: string; email: string; role: string; active: boolean; pinHash?: string } = {
@@ -82,7 +134,8 @@ export async function PATCH(request: Request) {
       id: appUsers.id, employeeCode: appUsers.employeeCode, displayName: appUsers.displayName, email: appUsers.email, role: appUsers.role, active: appUsers.active,
     });
     if (!updated.active) await getDb().delete(appSessions).where(eq(appSessions.userId, id));
-    return Response.json({ user: updated });
+    if (permissions) await replacePermissions(id, permissions);
+    return Response.json({ user: { ...updated, permissions: permissions || defaultPermissions(updated.role) } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "บันทึกผู้ใช้งานไม่สำเร็จ";
     return Response.json({ error: message.includes("UNIQUE") ? "รหัสพนักงานนี้มีในระบบแล้ว" : message }, { status: 400 });

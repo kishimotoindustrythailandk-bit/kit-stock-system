@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, sql } from "drizzle-orm";
-import { getCurrentUser } from "../../cloudflare-auth";
+import { getCurrentUser, hasPermission } from "../../cloudflare-auth";
 import { getDb } from "../../../db";
 import { stockAllocations, stockParts, stockTags } from "../../../db/schema";
 import { getRuntimeEnv } from "../../../runtime/env";
@@ -35,6 +35,9 @@ export async function GET() {
   try {
     const user = await getCurrentUser();
     if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
+    if (!["stock", "tags", "scan", "reports", "history"].some((key) => hasPermission(user, key as "stock" | "tags" | "scan" | "reports" | "history"))) {
+      return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ดูข้อมูล Stock" }, { status: 403 });
+    }
     const db = getDb();
     const parts = await db.select().from(stockParts).orderBy(asc(stockParts.materialCode));
     const tags = await db.select({
@@ -117,7 +120,7 @@ export async function POST(request: Request) {
     const db = getDb();
 
     if (action === "save_part") {
-      if (user.role !== "admin") return Response.json({ error: "เฉพาะ Admin เท่านั้นที่เพิ่มหรือแก้ไข Part ได้" }, { status: 403 });
+      if (user.role !== "admin" || !hasPermission(user, "tags")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์เพิ่มหรือแก้ไข Part" }, { status: 403 });
       const materialCode = clean(body.materialCode, 100).toUpperCase();
       const partName = clean(body.partName, 240);
       const customer = clean(body.customer, 160);
@@ -131,7 +134,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "import_parts") {
-      if (user.role !== "admin") return Response.json({ error: "เฉพาะ Admin เท่านั้นที่นำเข้า Part ได้" }, { status: 403 });
+      if (user.role !== "admin" || !hasPermission(user, "tags")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์นำเข้า Part" }, { status: 403 });
       if (!Array.isArray(body.parts) || !body.parts.length || body.parts.length > 2000) {
         return Response.json({ error: "ไฟล์ต้องมีข้อมูล Part 1–2,000 รายการ" }, { status: 400 });
       }
@@ -168,7 +171,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "sync_due_parts") {
-      if (user.role !== "admin") return Response.json({ error: "เฉพาะ Admin เท่านั้นที่นำ Part จาก Due เข้าทะเบียนได้" }, { status: 403 });
+      if (user.role !== "admin" || !hasPermission(user, "tags")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์นำ Part จาก Due เข้าทะเบียน" }, { status: 403 });
       const { DB } = getRuntimeEnv();
       if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
       const result = await DB.prepare(`
@@ -186,7 +189,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "delete_part") {
-      if (user.role !== "admin") return Response.json({ error: "เฉพาะ Admin เท่านั้นที่ลบ Part ได้" }, { status: 403 });
+      if (user.role !== "admin" || !hasPermission(user, "tags")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ลบ Part" }, { status: 403 });
       const materialCode = clean(body.materialCode, 100).toUpperCase();
       if (!materialCode) return Response.json({ error: "กรุณาระบุ Part ที่ต้องการลบ" }, { status: 400 });
       const [tag] = await db.select({ id: stockTags.id }).from(stockTags)
@@ -202,7 +205,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "delete_unused_parts") {
-      if (user.role !== "admin") return Response.json({ error: "เฉพาะ Admin เท่านั้นที่ลบ Part ได้" }, { status: 403 });
+      if (user.role !== "admin" || !hasPermission(user, "tags")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ลบ Part" }, { status: 403 });
       const { DB } = getRuntimeEnv();
       if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
       const result = await DB.prepare(`
@@ -216,7 +219,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "delete_tag") {
-      if (user.role !== "admin") return Response.json({ error: "เฉพาะ Admin เท่านั้นที่ลบ Tag ได้" }, { status: 403 });
+      if (user.role !== "admin" || !hasPermission(user, "tags")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ลบ Tag" }, { status: 403 });
       const tagId = clean(body.tagId, 120).toUpperCase();
       if (!tagId) return Response.json({ error: "กรุณาระบุ Tag ที่ต้องการลบ" }, { status: 400 });
       const { DB } = getRuntimeEnv();
@@ -249,6 +252,7 @@ export async function POST(request: Request) {
     if (!requireStockRole(user.role)) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์จัดการ Stock" }, { status: 403 });
 
     if (action === "create_tag") {
+      if (!hasPermission(user, "tags")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์สร้างและพิมพ์ Tag" }, { status: 403 });
       const materialCode = clean(body.materialCode, 100).toUpperCase();
       const jobNo = clean(body.jobNo, 120).toUpperCase();
       const productionDate = clean(body.productionDate, 10);
@@ -298,6 +302,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "receive") {
+      if (!hasPermission(user, "stock")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์รับงานเข้า Stock" }, { status: 403 });
       const tagId = parseInternalTag(clean(body.rawPayload, 1000));
       const [tag] = await db.select().from(stockTags).where(eq(stockTags.tagId, tagId)).limit(1);
       if (!tag) return Response.json({ error: "ไม่พบ Tag Stock นี้ในระบบ" }, { status: 404 });
@@ -310,6 +315,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "stage") {
+      if (!hasPermission(user, "scan")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์จัดงาน" }, { status: 403 });
       const dueLineId = Number(body.dueLineId);
       const tagId = parseInternalTag(clean(body.rawPayload, 1000));
       const requestedQty = Number(body.qty || 0);
