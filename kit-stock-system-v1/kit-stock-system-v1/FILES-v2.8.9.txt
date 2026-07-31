@@ -1,0 +1,33 @@
+KIT Delivery Due Control v2.8.9
+
+ไฟล์ที่ต้องวางทับหรือเพิ่มใน GitHub หากอัปเดตจาก v2.8.8:
+
+1. app/delivery-control-app.tsx
+2. app/globals.css
+3. app/cloudflare-auth.ts
+4. app/api/due/route.ts
+5. app/api/stock/route.ts
+6. migrations/0006_split_workflow_permissions.sql
+7. database-upgrade-v2.8.9-split-workflow-permissions.sql
+8. package.json
+9. package-lock.json
+10. INSTALL-WINDOWS.bat
+11. INSTALL-MAC-LINUX.sh
+12. README.md
+13. tests/rendered-html.test.mjs
+14. FILES-v2.8.9.txt
+
+สำคัญ:
+
+- วางไฟล์ตามตำแหน่งเดิม ห้ามสร้างโฟลเดอร์ app หรือ app/api ซ้อนกัน
+- เก็บ wrangler.jsonc เดิมของบริษัทไว้ ห้ามนำไฟล์ตัวอย่างไปทับ
+- หลัง Deploy ให้รัน database-upgrade-v2.8.9-split-workflow-permissions.sql ใน D1 หนึ่งครั้ง
+- SQL จะย้ายสิทธิ์หน้า scan เดิมของผู้จัดงานไปที่ arrange และของผู้ตรวจไปที่ dispatch
+- SQL ไม่ลบผู้ใช้ Due Stock Tag หรือประวัติเดิม
+
+ผลลัพธ์:
+
+- ผู้จัดงานเห็นเมนู “จัดงาน”
+- ผู้ตรวจเห็นเมนู “ตรวจและขายออก”
+- Admin เลือกสิทธิ์สองหน้านี้แยกกันเป็นรายบุคคลได้
+- โทรศัพท์เห็นปุ่ม “ออกระบบ” บนเมนูล่างทันที

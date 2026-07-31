@@ -45,6 +45,8 @@ call npm run db:upgrade:v28
 if errorlevel 1 goto :failed
 call npm run db:upgrade:v288
 if errorlevel 1 goto :failed
+call npm run db:upgrade:v289
+if errorlevel 1 goto :failed
 
 echo [4/6] Building and deploying over kit-stock-system...
 call npm run deploy
