@@ -67,15 +67,16 @@ test("prints the v2.8.2 Stock receiving Tag with the part image", async () => {
   assert.match(appSource, /KITSTOCK\|/);
 });
 
-test("prints up to six unique Stock Tags per A4 page and safely deletes unused Tags", async () => {
+test("prints up to eight unique Stock Tags per A4 page and safely deletes unused Tags", async () => {
   const [appSource, stockApi] = await Promise.all([
     readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/stock/route.ts", import.meta.url), "utf8"),
   ]);
-  assert.match(appSource, /Math\.ceil\(tagMarkups\.length \/ 6\)/);
+  assert.match(appSource, /const tagsPerPage = 8/);
+  assert.match(appSource, /Math\.ceil\(tagMarkups\.length \/ tagsPerPage\)/);
   assert.match(appSource, /grid-template-columns:repeat\(2,1fr\)/);
-  assert.match(appSource, /grid-template-rows:repeat\(3,1fr\)/);
-  assert.match(appSource, /A4 หนึ่งหน้าสูงสุด 6 Tag/);
+  assert.match(appSource, /grid-template-rows:repeat\(4,1fr\)/);
+  assert.match(appSource, /A4 หนึ่งหน้าสูงสุด 8 Tag/);
   assert.match(appSource, /deleteStockTag/);
   assert.match(stockApi, /action === "delete_tag"/);
   assert.match(stockApi, /Tag นี้มีประวัติรับเข้า จัดงาน หรือขายออกแล้ว/);
