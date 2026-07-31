@@ -1,0 +1,24 @@
+KIT Delivery Due Control v2.8.10
+ไฟล์ที่ต้องวางทับระบบ v2.8.9
+
+1. app/delivery-control-app.tsx
+2. tests/rendered-html.test.mjs
+3. package.json
+4. package-lock.json
+5. README.md
+6. FILES-v2.8.10.txt
+
+การติดตั้ง
+
+1. แตก ZIP
+2. นำไฟล์ทั้ง 6 รายการด้านบนไปวางทับตำแหน่งเดิมใน GitHub
+3. Commit changes
+4. รอ Cloudflare Build และ Deploy สำเร็จ
+5. เปิดหน้าพิมพ์ Tag และตรวจ Print Preview
+
+หมายเหตุ
+
+- A4 หนึ่งหน้าพิมพ์ได้สูงสุด 8 Tag แบบ 2 คอลัมน์ × 4 แถว
+- Tag ที่ 9 จะขึ้นหน้าใหม่อัตโนมัติ
+- ไม่ต้องรัน SQL เพิ่ม
+- ไม่เปลี่ยนข้อมูล Stock, Due, ผู้ใช้, สิทธิ์ หรือประวัติเดิม
