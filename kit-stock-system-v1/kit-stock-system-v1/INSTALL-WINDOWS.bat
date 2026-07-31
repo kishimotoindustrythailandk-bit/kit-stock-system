@@ -35,6 +35,16 @@ if errorlevel 1 goto :failed
 echo [3/6] Upgrading the existing D1 database without deleting old data...
 call npm run db:upgrade
 if errorlevel 1 goto :failed
+call npm run db:upgrade:v22
+if errorlevel 1 goto :failed
+call npm run db:upgrade:v23
+if errorlevel 1 goto :failed
+call npm run db:upgrade:v27
+if errorlevel 1 goto :failed
+call npm run db:upgrade:v28
+if errorlevel 1 goto :failed
+call npm run db:upgrade:v288
+if errorlevel 1 goto :failed
 
 echo [4/6] Building and deploying over kit-stock-system...
 call npm run deploy

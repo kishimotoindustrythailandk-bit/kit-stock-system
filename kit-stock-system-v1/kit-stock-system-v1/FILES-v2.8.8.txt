@@ -1,0 +1,36 @@
+KIT Delivery Due Control v2.8.8
+
+ไฟล์ที่ต้องวางทับหรือเพิ่มใน GitHub หากอัปเดตจาก v2.8.7:
+
+1. app/cloudflare-auth.ts
+2. app/delivery-control-app.tsx
+3. app/globals.css
+4. app/page.tsx
+5. app/api/due-import/route.ts
+6. app/api/due/route.ts
+7. app/api/part-images/route.ts
+8. app/api/stock/route.ts
+9. app/api/users/route.ts
+10. db/schema.ts
+11. migrations/0005_user_permissions.sql
+12. database-upgrade-v2.8.8-user-permissions.sql
+13. package.json
+14. package-lock.json
+15. README.md
+16. tests/rendered-html.test.mjs
+17. FILES-v2.8.8.txt
+18. INSTALL-WINDOWS.bat
+19. INSTALL-MAC-LINUX.sh
+
+สำคัญ:
+- วางไฟล์ตามตำแหน่งเดิม ห้ามสร้างโฟลเดอร์ app/api ซ้อนกัน
+- เก็บ wrangler.jsonc เดิมของบริษัทไว้ ห้ามนำไฟล์ตัวอย่างไปทับ
+- หลัง Deploy ให้รัน database-upgrade-v2.8.8-user-permissions.sql ใน D1 หนึ่งครั้ง
+- SQL ไม่ลบข้อมูลเดิม และเติมสิทธิ์มาตรฐานให้ผู้ใช้เดิม
+
+วิธีกำหนดสิทธิ์:
+1. เข้าระบบด้วย Admin
+2. เปิดเมนู ผู้ใช้งาน
+3. กด เพิ่มผู้ใช้งาน หรือ แก้ไข / สิทธิ์ / PIN
+4. ติ๊กหน้าที่ต้องการให้บัญชีนั้นเห็นและใช้งาน
+5. กด บันทึกผู้ใช้งานและสิทธิ์
