@@ -147,3 +147,25 @@ test("v2.8.8 supports per-user page permissions and server-side checks", async (
   assert.match(schema, /appUserPermissions/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS app_user_permissions/);
 });
+
+test("v2.8.9 separates arranging and dispatching and shows mobile logout", async () => {
+  const [appSource, authSource, dueApi, stockApi, css, migration] = await Promise.all([
+    readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/cloudflare-auth.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/due/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/stock/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../database-upgrade-v2.8.9-split-workflow-permissions.sql", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /key: "arrange", label: "จัดงาน"/);
+  assert.match(appSource, /key: "dispatch", label: "ตรวจและขายออก"/);
+  assert.match(appSource, /renderScan\("arrange"\)/);
+  assert.match(appSource, /renderScan\("dispatch"\)/);
+  assert.match(appSource, /bottom-logout/);
+  assert.doesNotMatch(appSource, /key: "scan", label: "สแกนและตัดยอด"/);
+  assert.match(authSource, /"arrange", "dispatch"/);
+  assert.match(stockApi, /hasPermission\(user, "arrange"\)/);
+  assert.match(dueApi, /hasPermission\(user, "dispatch"\)/);
+  assert.match(css, /\.mobile-bottom-nav \.bottom-logout/);
+  assert.match(migration, /permission_key = 'scan'/);
+});
