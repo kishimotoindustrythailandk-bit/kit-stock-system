@@ -12,13 +12,13 @@ export type CloudUser = {
 };
 
 export const SESSION_COOKIE = "kit_session";
-export const PERMISSION_KEYS = ["dashboard", "stock", "tags", "plan", "scan", "exports", "reports", "history", "settings", "users"] as const;
+export const PERMISSION_KEYS = ["dashboard", "stock", "tags", "plan", "arrange", "dispatch", "exports", "reports", "history", "settings", "users"] as const;
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
 
 const ROLE_DEFAULTS: Record<string, PermissionKey[]> = {
   admin: [...PERMISSION_KEYS],
-  dispatcher: ["dashboard", "stock", "tags", "scan", "history"],
-  inspector: ["dashboard", "scan", "history"],
+  dispatcher: ["dashboard", "stock", "tags", "arrange", "history"],
+  inspector: ["dashboard", "dispatch", "history"],
 };
 
 export function defaultPermissions(role: string): PermissionKey[] {

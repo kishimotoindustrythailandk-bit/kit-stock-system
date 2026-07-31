@@ -33,6 +33,7 @@ button { cursor: pointer; }
 .control-sidebar nav button.active { color: #fff; background: linear-gradient(135deg, #0d6ee6, #034fbf); box-shadow: 0 8px 18px rgba(6, 91, 210, .22); }
 .control-sidebar nav button.active span { color: #fff; }
 .sidebar-bottom { margin-top: auto; }
+.mobile-logout { display: none; }
 .help-box { margin: 18px 0; padding: 13px; border: 1px solid var(--line); border-radius: 12px; }
 .help-box b { display: block; font-size: 12px; }
 .help-box button { width: 100%; margin-top: 10px; padding: 9px 8px; color: var(--blue); border: 0; border-radius: 8px; background: #eef5ff; font-weight: 700; }
@@ -428,6 +429,9 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
   .control-topbar { min-height: 82px; padding: 14px 18px; }
   .control-topbar h1 { font-size: 19px; }
   .top-user div, .top-user a, .notification { display: none; }
+  .mobile-logout { min-height: 46px; display: flex; align-items: center; justify-content: center; gap: 9px; margin: 10px 0; color: #b92f42; border: 1px solid #f0c5cb; border-radius: 10px; background: #fff5f6; text-decoration: none; }
+  .mobile-logout span { font-size: 20px; }
+  .mobile-logout b { font-size: 12px; }
   .dashboard-grid, .history-grid, .settings-grid, .split-grid { grid-template-columns: 1fr; }
 }
 
@@ -501,10 +505,11 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
   .toast { top: 94px; }
 
   .mobile-bottom-nav { position: fixed; z-index: 55; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); min-height: 64px; display: flex; align-items: stretch; justify-content: space-around; padding: 6px; background: rgba(255,255,255,.97); border: 1px solid #dce5f1; border-radius: 17px; box-shadow: 0 14px 35px rgba(13,43,84,.2); backdrop-filter: blur(14px); }
-  .mobile-bottom-nav button { min-width: 0; flex: 1; display: grid; place-items: center; align-content: center; gap: 2px; padding: 4px 2px; color: #6b7890; border: 0; border-radius: 12px; background: transparent; }
-  .mobile-bottom-nav button span { font-size: 21px; line-height: 1; }
-  .mobile-bottom-nav button small { max-width: 70px; overflow: hidden; font-size: 9px; font-weight: 700; white-space: nowrap; text-overflow: ellipsis; }
+  .mobile-bottom-nav button, .mobile-bottom-nav a { min-width: 0; flex: 1; display: grid; place-items: center; align-content: center; gap: 2px; padding: 4px 2px; color: #6b7890; border: 0; border-radius: 12px; background: transparent; text-decoration: none; }
+  .mobile-bottom-nav button span, .mobile-bottom-nav a span { font-size: 21px; line-height: 1; }
+  .mobile-bottom-nav button small, .mobile-bottom-nav a small { max-width: 70px; overflow: hidden; font-size: 9px; font-weight: 700; white-space: nowrap; text-overflow: ellipsis; }
   .mobile-bottom-nav button.active { color: #fff; background: linear-gradient(135deg, #0870e9, #0354c9); box-shadow: 0 6px 14px rgba(5,82,190,.23); }
+  .mobile-bottom-nav .bottom-logout { color: #c33b4e; background: #fff4f5; }
 
   .mobile-table-wrap { overflow: visible; }
   .mobile-card-table { white-space: normal; }

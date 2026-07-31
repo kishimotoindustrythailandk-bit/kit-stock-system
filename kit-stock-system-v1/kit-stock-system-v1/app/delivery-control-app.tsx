@@ -4,7 +4,7 @@
 
 import { ChangeEvent, FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
-type PageKey = "dashboard" | "stock" | "tags" | "plan" | "scan" | "exports" | "reports" | "history" | "settings" | "users";
+type PageKey = "dashboard" | "stock" | "tags" | "plan" | "arrange" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
 
 type DueLine = {
   id: number;
@@ -109,8 +109,8 @@ type ArrangementPreview = {
 type UserForm = { id?: number; employeeCode: string; displayName: string; email: string; role: "dispatcher" | "inspector"; pin: string; active: boolean; permissions: PageKey[] };
 
 const ROLE_PERMISSIONS: Record<UserForm["role"], PageKey[]> = {
-  dispatcher: ["dashboard", "stock", "tags", "scan", "history"],
-  inspector: ["dashboard", "scan", "history"],
+  dispatcher: ["dashboard", "stock", "tags", "arrange", "history"],
+  inspector: ["dashboard", "dispatch", "history"],
 };
 const EMPTY_USER: UserForm = { employeeCode: "", displayName: "", email: "", role: "dispatcher", pin: "", active: true, permissions: [...ROLE_PERMISSIONS.dispatcher] };
 
@@ -119,7 +119,8 @@ const NAV: Array<{ key: PageKey; label: string; icon: string }> = [
   { key: "stock", label: "Stock", icon: "▦" },
   { key: "tags", label: "พิมพ์ Tag", icon: "▤" },
   { key: "plan", label: "แผนส่งงาน (Due)", icon: "▤" },
-  { key: "scan", label: "สแกนและตัดยอด", icon: "⌗" },
+  { key: "arrange", label: "จัดงาน", icon: "⇥" },
+  { key: "dispatch", label: "ตรวจและขายออก", icon: "⌗" },
   { key: "exports", label: "รายการส่งออก", icon: "▱" },
   { key: "reports", label: "รายงาน", icon: "▥" },
   { key: "history", label: "ประวัติ", icon: "◷" },
@@ -132,7 +133,8 @@ const PERMISSION_HELP: Record<PageKey, string> = {
   stock: "รับ Tag เข้า Stock และดูยอดคงเหลือ",
   tags: "ทะเบียน Part สร้างและพิมพ์ Tag",
   plan: "นำเข้า ตรวจสอบ และลบแผน Due",
-  scan: "จัดงานและสแกนขายออก",
+  arrange: "เลือก Due และยิง KIT Tag เพื่อจัดงานรอขาย",
+  dispatch: "ยิง Tag ลูกค้าเพื่อตัด Stock และ Due",
   exports: "ดูรายการที่ส่งออกแล้ว",
   reports: "ดูและส่งออกรายงาน",
   history: "ตรวจสอบประวัติรายการ",
@@ -145,7 +147,8 @@ const PAGE_SUBTITLE: Record<PageKey, string> = {
   stock: "สแกนรับเข้า ตรวจสอบยอดคงเหลือ และประวัติ Stock",
   tags: "ทะเบียน Part สร้าง Tag และพิมพ์ Tag รับงานเข้า Stock",
   plan: "ตรวจสอบแผนส่งงานจากไฟล์ Excel",
-  scan: "สแกน Tag ตรวจสอบ Due และยืนยันตัดยอดในหน้าเดียว",
+  arrange: "ผู้จัดงานเลือก Due แล้วยิง KIT Stock Tag เพื่อบันทึกงานรอขาย",
+  dispatch: "ผู้ตรวจยิง Tag ลูกค้าเพื่อขายออก ตัด Stock และ Due",
   exports: "รายการที่ตัดยอดและส่งออกแล้ว",
   reports: "สรุปผลการส่งงานตามวันและโรงงาน",
   history: "ตรวจสอบประวัติการสแกนและตัดยอด",
@@ -268,7 +271,6 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [rawTag, setRawTag] = useState("");
   const [tagPreview, setTagPreview] = useState<TagPreview | null>(null);
   const [checkingTag, setCheckingTag] = useState(false);
-  const [adminScanMode, setAdminScanMode] = useState<"arrange" | "dispatch">("arrange");
   const [arrangeDueId, setArrangeDueId] = useState("");
   const [arrangeTag, setArrangeTag] = useState("");
   const [arrangeQty, setArrangeQty] = useState("");
@@ -358,7 +360,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!["stock", "tags", "scan", "reports", "history"].includes(page)) return;
+    if (!["stock", "tags", "arrange", "dispatch", "reports", "history"].includes(page)) return;
     const timer = window.setTimeout(() => void loadStock(), 0);
     return () => window.clearTimeout(timer);
   }, [page]);
@@ -503,7 +505,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
                 void receiveStockTag(value);
                 return;
               }
-              const arrangeMode = user.role === "dispatcher" || (user.role === "admin" && adminScanMode === "arrange");
+              const arrangeMode = page === "arrange";
               if (arrangeMode) {
                 setArrangeTag(value);
                 setArrangementPreview(null);
@@ -529,7 +531,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       window.clearTimeout(timer);
       stream?.getTracks().forEach((track) => track.stop());
     };
-  }, [cameraOpen, cameraPurpose, adminScanMode, user.role]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cameraOpen, cameraPurpose, page]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function parseExcel(event: ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0] ?? null;
@@ -1136,8 +1138,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
             <td data-label="สถานะ"><span className={`status ${Number(due.arrangedQty) > 0 && stateOf(due) === "pending" ? "partial" : stateOf(due)}`}>{stateLabel(due)}</span></td>
             <td data-label="จัดการ"><button className="tiny-button" onClick={() => {
               setArrangeDueId(String(due.id));
-              if (user.role === "admin") setAdminScanMode("arrange");
-              go("scan");
+              go(user.role === "inspector" ? "dispatch" : "arrange");
             }}>{Number(due.scannedQty) < due.reqQty ? (user.role === "inspector" ? "ขายออก" : "จัดงาน") : "ดู"}</button></td>
           </tr>)}</tbody>
         </table>
@@ -1165,7 +1166,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           {payload.scans.length ? <div className="activity-list">{payload.scans.slice(0, 5).map((scan) => <button key={scan.id} onClick={() => { setSelectedScan(scan); go("history"); }}><span className="activity-icon">✓</span><div><b>{scan.fact} / {scan.materialCode}</b><small>Tag {scan.tagId} · {fmt(scan.qty)} {scan.unit}</small></div><time>{formatDateTime(scan.createdAt)}</time></button>)}</div> : <Empty text="รายการสแกนล่าสุดจะแสดงที่นี่" />}
         </Card>
       </div>
-      <Card title="เมนูด่วน" className="quick-panel"><div className="quick-actions"><button onClick={() => go("plan")}><span>⇧</span>นำเข้าแผนงาน</button><button onClick={() => go("tags")}><span>▤</span>สร้างและพิมพ์ Tag</button><button onClick={() => go("stock")}><span>▦</span>รับเข้า Stock</button><button onClick={() => go("scan")}><span>⌗</span>สแกนและตัดยอด</button></div></Card>
+      <Card title="เมนูด่วน" className="quick-panel"><div className="quick-actions"><button onClick={() => go("plan")}><span>⇧</span>นำเข้าแผนงาน</button><button onClick={() => go("tags")}><span>▤</span>สร้างและพิมพ์ Tag</button><button onClick={() => go("stock")}><span>▦</span>รับเข้า Stock</button><button onClick={() => go(user.role === "inspector" ? "dispatch" : "arrange")}><span>⌗</span>{user.role === "inspector" ? "ตรวจและขายออก" : "จัดงาน"}</button></div></Card>
       <Card title="Due ที่ยังขาด (รายการล่าสุด)" action={<button className="text-button" onClick={() => go("plan")}>ดูทั้งหมด →</button>}><DueTable rows={filtered.filter((due) => ["partial", "pending"].includes(stateOf(due)))} limit={5} /></Card>
       <div className="summary-strip"><div><span>▣</span><small>วันที่มีแผนส่งงาน</small><b>{dates.length}</b></div><div><span>▥</span><small>FAC ทั้งหมด</small><b>{facts.length}</b></div><div><span>◈</span><small>รายการทั้งหมด</small><b>{fmt(payload.dues.length)}</b></div><div><span>□</span><small>ชิ้นงานตามแผน</small><b>{fmt(payload.dues.reduce((sum, due) => sum + due.reqQty, 0))}</b></div></div>
     </>;
@@ -1284,12 +1285,10 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     </>;
   }
 
-  function renderScan() {
+  function renderScan(scanMode: "arrange" | "dispatch") {
     const progress = tagPreview ? Math.min(100, Math.round((tagPreview.due.projectedQty / tagPreview.due.reqQty) * 100)) : 0;
-    const scanMode = user.role === "admin" ? adminScanMode : user.role === "dispatcher" ? "arrange" : "dispatch";
     const selectedArrangeDue = payload.dues.find((due) => String(due.id) === effectiveArrangeDueId);
     return <>
-      {user.role === "admin" && <Card title="เลือกขั้นตอนทำงาน"><div className="scan-mode"><button className={adminScanMode === "arrange" ? "active" : ""} onClick={() => setAdminScanMode("arrange")}>⇥ ผู้จัดงาน — ยิง KIT Tag</button><button className={adminScanMode === "dispatch" ? "active" : ""} onClick={() => setAdminScanMode("dispatch")}>⌗ ผู้ตรวจ — ยิง Tag ลูกค้า</button></div></Card>}
       <div className="scan-layout">
         <section className="scanner-card">
           <div className="scanner-title"><div><h3>{scanMode === "arrange" ? "ผู้จัดงาน: เลือก Due แล้วยิง KIT Stock Tag" : "ผู้ตรวจ: ยิง Tag ลูกค้าเพื่อขายออก"}</h3><p>{scanMode === "arrange" ? "บันทึก Job ที่หยิบจริงและขึ้นสถานะรอขาย — ยังไม่ลด Stock / Due" : "ระบบจับคู่กับ KIT Tag ที่จัดไว้ แล้วลด Stock และ Due พร้อมกัน"}</p></div><button className="camera-button" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>▣ เปิดกล้อง</button></div>
@@ -1321,7 +1320,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           </> : <Empty title="รอผู้ตรวจยิง Tag ลูกค้า" text="สแกนแล้วระบบจะแสดงรูปชิ้นงาน ตรวจยอด และตัด Stock / Due ทันทีโดยไม่ต้องกดตรวจสอบ Tag" />)}
         </section>
       </div>
-      <Card title={scanMode === "arrange" ? "รายการจัดงานรอขายออกล่าสุด" : "รายการขายออกและตัดยอดล่าสุด"} action={<button className="text-button" onClick={() => go("history")}>ดูประวัติทั้งหมด →</button>}>
+      <Card title={scanMode === "arrange" ? "รายการจัดงานรอขายออกล่าสุด" : "รายการขายออกและตัดยอดล่าสุด"} action={allowedPages.has("history") ? <button className="text-button" onClick={() => go("history")}>ดูประวัติทั้งหมด →</button> : undefined}>
         {scanMode === "arrange" ? (stock.picks.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>วัน / เวลา</th><th>Due / Part</th><th>KIT Tag / Job</th><th>ผลิต / รับเข้า</th><th className="num">จัด / ขายแล้ว</th><th>ผู้จัดงาน</th></tr></thead><tbody>{stock.picks.slice(0, 12).map((item) => <tr key={item.id}><td data-label="วัน / เวลา">{formatDateTime(item.pickedAt)}</td><td data-label="Due / Part"><b>{item.fact} / {item.line || "—"}</b><small>{item.materialCode} · DO {item.doNo}</small></td><td data-label="KIT Tag / Job"><b>{item.stockTagCode}</b><small>Job {item.jobNo}</small></td><td data-label="ผลิต / รับเข้า"><b>{formatDate(item.productionDate)}</b><small>{item.receivedAt ? formatDateTime(item.receivedAt) : "—"}</small></td><td data-label="จัด / ขายแล้ว" className="num"><b>{fmt(item.pickedQty)} / {fmt(item.dispatchedQty)}</b></td><td data-label="ผู้จัดงาน">{item.pickedByName}</td></tr>)}</tbody></table></div> : <Empty text="เลือก Due แล้วยิง KIT Stock Tag รายการจะขึ้นที่นี่" />) : (payload.scans.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>วัน / เวลา</th><th>FAC</th><th>Part No.</th><th>Tag ลูกค้า</th><th className="num">จำนวนที่ตัด</th><th>ผู้ตรวจ</th></tr></thead><tbody>{payload.scans.slice(0, 8).map((scan) => <tr key={scan.id}><td data-label="วัน / เวลา">{formatDateTime(scan.createdAt)}</td><td data-label="FAC"><b>{scan.fact}</b></td><td data-label="Part No."><b>{scan.materialCode}</b></td><td data-label="Tag ลูกค้า">{scan.tagId}</td><td data-label="จำนวนที่ตัด" className="num sent"><b>{fmt(scan.qty)} {scan.unit}</b></td><td data-label="ผู้ตรวจ">{scan.scannedByName}</td></tr>)}</tbody></table></div> : <Empty text="เมื่อผู้ตรวจสแกน Tag ลูกค้า รายการจะแสดงที่นี่" />)}
       </Card>
     </>;
@@ -1359,7 +1358,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   function renderSettings() {
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <>
-      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.8.8</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
+      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.8.9</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
       <Card title="รูปชิ้นงานสำหรับหน้าสแกน" action={<button className="button secondary" onClick={() => void loadPartImages()}>↻ รีเฟรช</button>}>
         <form className="part-image-upload" onSubmit={uploadPartImage}>
           <label><span>Material / Part No. *</span><input list="part-material-codes" value={partImageCode} onChange={(e) => setPartImageCode(e.target.value.toUpperCase())} placeholder="เช่น ABC-1234" required /></label>
@@ -1409,7 +1408,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     </>;
   }
 
-  const pageContent: Record<PageKey, () => ReactNode> = { dashboard: renderDashboard, stock: renderStock, tags: renderTags, plan: renderPlan, scan: renderScan, exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
+  const pageContent: Record<PageKey, () => ReactNode> = { dashboard: renderDashboard, stock: renderStock, tags: renderTags, plan: renderPlan, arrange: () => renderScan("arrange"), dispatch: () => renderScan("dispatch"), exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
   const activeNav = NAV.find((item) => item.key === page)!;
 
   return <div className="control-shell">
@@ -1417,7 +1416,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
       <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.8.8</span></div></div>
+      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.8.9</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
@@ -1429,8 +1428,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       </div>
     </main>
     <nav className="mobile-bottom-nav" aria-label="เมนูมือถือ">
-      {NAV.filter((item) => allowedPages.has(item.key)).slice(0, 4).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span><small>{item.label.replace("แผนส่งงาน (Due)", "แผนงาน").replace("สแกนและตัดยอด", "สแกน")}</small></button>)}
+      {NAV.filter((item) => allowedPages.has(item.key)).slice(0, 4).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span><small>{item.label.replace("แผนส่งงาน (Due)", "แผนงาน").replace("ตรวจและขายออก", "ขายออก")}</small></button>)}
       <button onClick={() => setMenuOpen(true)}><span>☰</span><small>เมนู</small></button>
+      <a className="bottom-logout" href={signOutPath}><span>↪</span><small>ออกระบบ</small></a>
     </nav>
     {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>{cameraPurpose === "stock" ? "สแกน Tag รับงานเข้า Stock" : "สแกน QR Tag ด้วยกล้อง"}</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className="camera-view"><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div>{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
     {userEditorOpen && <div className="modal-backdrop"><form className="user-modal permission-modal" onSubmit={saveUser}>
