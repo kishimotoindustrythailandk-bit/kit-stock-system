@@ -78,7 +78,7 @@ type TagPreview = {
 
 type ImportRow = Omit<DueLine, "id" | "importId" | "status" | "scannedQty" | "arrangedQty" | "tagCount"> & { sourceKey: string };
 type DuePayload = { dues: DueLine[]; imports: DueImport[]; scans: DueScan[]; receipts: DueReceipt[]; error?: string };
-type SystemUser = { id: number; employeeCode: string; displayName: string; email: string; role: string; active: boolean; createdAt?: string };
+type SystemUser = { id: number; employeeCode: string; displayName: string; email: string; role: string; active: boolean; permissions: PageKey[]; createdAt?: string };
 type PartImageMapping = { materialCode: string; originalName: string; contentType: string; updatedByName: string; updatedAt: string; materialDescription?: string };
 type StockPart = { materialCode: string; partName: string; customer: string; standardQty: number; active: boolean };
 type StockTag = { id: number; tagId: string; materialCode: string; partName: string; customer: string; qty: number; remainingQty: number; reservedQty: number; jobNo: string; productionDate: string; status: string; printedByName: string; receivedByName: string; receivedAt?: string; createdAt: string; payload?: string; boxNo?: number; boxCount?: number; deliveryQty?: number };
@@ -106,8 +106,13 @@ type ArrangementPreview = {
   tag: StockTag;
   due: DueLine & { remainingToArrange: number; remainingQty: number };
 };
-type UserForm = { id?: number; employeeCode: string; displayName: string; email: string; role: "dispatcher" | "inspector"; pin: string; active: boolean };
-const EMPTY_USER: UserForm = { employeeCode: "", displayName: "", email: "", role: "dispatcher", pin: "", active: true };
+type UserForm = { id?: number; employeeCode: string; displayName: string; email: string; role: "dispatcher" | "inspector"; pin: string; active: boolean; permissions: PageKey[] };
+
+const ROLE_PERMISSIONS: Record<UserForm["role"], PageKey[]> = {
+  dispatcher: ["dashboard", "stock", "tags", "scan", "history"],
+  inspector: ["dashboard", "scan", "history"],
+};
+const EMPTY_USER: UserForm = { employeeCode: "", displayName: "", email: "", role: "dispatcher", pin: "", active: true, permissions: [...ROLE_PERMISSIONS.dispatcher] };
 
 const NAV: Array<{ key: PageKey; label: string; icon: string }> = [
   { key: "dashboard", label: "หน้าหลัก", icon: "⌂" },
@@ -121,6 +126,19 @@ const NAV: Array<{ key: PageKey; label: string; icon: string }> = [
   { key: "settings", label: "ตั้งค่า", icon: "⚙" },
   { key: "users", label: "ผู้ใช้งาน", icon: "♙" },
 ];
+
+const PERMISSION_HELP: Record<PageKey, string> = {
+  dashboard: "ภาพรวม Due และสถานะงาน",
+  stock: "รับ Tag เข้า Stock และดูยอดคงเหลือ",
+  tags: "ทะเบียน Part สร้างและพิมพ์ Tag",
+  plan: "นำเข้า ตรวจสอบ และลบแผน Due",
+  scan: "จัดงานและสแกนขายออก",
+  exports: "ดูรายการที่ส่งออกแล้ว",
+  reports: "ดูและส่งออกรายงาน",
+  history: "ตรวจสอบประวัติรายการ",
+  settings: "ตั้งค่าระบบและรูปชิ้นงาน",
+  users: "เพิ่มผู้ใช้และกำหนดสิทธิ์",
+};
 
 const PAGE_SUBTITLE: Record<PageKey, string> = {
   dashboard: "ภาพรวมการส่งงานและสถานะล่าสุด",
@@ -236,7 +254,7 @@ function PartImage({ materialCode, compact = false }: { materialCode: string; co
   return <div className={`part-photo ${compact ? "compact" : ""}`}><img src={`/api/part-images?materialCode=${encodeURIComponent(materialCode)}`} alt={`รูปชิ้นงาน ${materialCode}`} onError={() => setFailedCode(materialCode)} /></div>;
 }
 
-export default function DeliveryControlApp({ user, signOutPath }: { user: { id: number; employeeCode: string; displayName: string; email: string; role: string }; signOutPath: string }) {
+export default function DeliveryControlApp({ user, signOutPath }: { user: { id: number; employeeCode: string; displayName: string; email: string; role: string; permissions: PageKey[] }; signOutPath: string }) {
   const [page, setPage] = useState<PageKey>("dashboard");
   const [menuOpen, setMenuOpen] = useState(false);
   const [payload, setPayload] = useState<DuePayload>({ dues: [], imports: [], scans: [], receipts: [] });
@@ -291,6 +309,10 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const tagInput = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const tagResultRef = useRef<HTMLElement>(null);
+  const allowedPages = useMemo(() => {
+    const keys = user.role === "admin" ? NAV.map((item) => item.key) : (user.permissions?.length ? user.permissions : ["dashboard"]);
+    return new Set<PageKey>(["dashboard", ...keys]);
+  }, [user.permissions, user.role]);
 
   async function loadDue() {
     setLoading(true);
@@ -352,7 +374,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }, []);
 
   async function loadUsers() {
-    if (user.role !== "admin") return;
+    if (!allowedPages.has("users")) return;
     setUsersLoading(true);
     try {
       const response = await fetch("/api/users", { cache: "no-store" });
@@ -367,7 +389,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }
 
   async function loadPartImages() {
-    if (user.role !== "admin") return;
+    if (!allowedPages.has("settings")) return;
     setPartImagesLoading(true);
     try {
       const response = await fetch("/api/part-images", { cache: "no-store" });
@@ -437,7 +459,11 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }
 
   function editUser(target: SystemUser) {
-    setUserForm({ id: target.id, employeeCode: target.employeeCode, displayName: target.displayName, email: target.email, role: target.role as "dispatcher" | "inspector", pin: "", active: target.active });
+    setUserForm({
+      id: target.id, employeeCode: target.employeeCode, displayName: target.displayName,
+      email: target.email, role: target.role as "dispatcher" | "inspector", pin: "",
+      active: target.active, permissions: target.permissions?.length ? [...target.permissions] : [...ROLE_PERMISSIONS[target.role as UserForm["role"]]],
+    });
     setUserEditorOpen(true);
   }
 
@@ -984,6 +1010,11 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     : arrangeableDues[0] ? String(arrangeableDues[0].id) : "";
 
   function go(next: PageKey) {
+    if (!allowedPages.has(next)) {
+      setNotice({ type: "error", text: "บัญชีนี้ไม่มีสิทธิ์เปิดหน้านี้ กรุณาติดต่อ Admin" });
+      setMenuOpen(false);
+      return;
+    }
     setPage(next);
     if (next === "users") void loadUsers();
     if (next === "settings") void loadPartImages();
@@ -1328,7 +1359,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   function renderSettings() {
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <>
-      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.8.7</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
+      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.8.8</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
       <Card title="รูปชิ้นงานสำหรับหน้าสแกน" action={<button className="button secondary" onClick={() => void loadPartImages()}>↻ รีเฟรช</button>}>
         <form className="part-image-upload" onSubmit={uploadPartImage}>
           <label><span>Material / Part No. *</span><input list="part-material-codes" value={partImageCode} onChange={(e) => setPartImageCode(e.target.value.toUpperCase())} placeholder="เช่น ABC-1234" required /></label>
@@ -1348,7 +1379,34 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const active = systemUsers.filter((item) => item.active).length;
     const dispatchers = systemUsers.filter((item) => item.role === "dispatcher").length;
     const inspectors = systemUsers.filter((item) => item.role === "inspector").length;
-    return <><Card title="ภาพรวมผู้ใช้งาน" action={<button className="button primary" onClick={() => { setUserForm(EMPTY_USER); setUserEditorOpen(true); }}>＋ เพิ่มผู้ใช้งาน</button>}><div className="metrics four compact"><MetricCard tone="blue" icon="♙" label="ผู้ใช้งานทั้งหมด" value={fmt(systemUsers.length)} suffix="คน" /><MetricCard tone="green" icon="✓" label="ใช้งานปกติ" value={fmt(active)} suffix="คน" /><MetricCard tone="orange" icon="⇥" label="ผู้จัดงาน" value={fmt(dispatchers)} suffix="คน" /><MetricCard tone="purple" icon="⌗" label="ผู้ตรวจงาน" value={fmt(inspectors)} suffix="คน" /></div></Card><Card title="ผู้ใช้งานระบบ" action={<button className="button secondary" onClick={() => void loadUsers()}>↻ รีเฟรช</button>}>{usersLoading ? <div className="loading-state"><span /><p>กำลังโหลดผู้ใช้งาน…</p></div> : <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>รหัส / ผู้ใช้งาน</th><th>อีเมล</th><th>บทบาท</th><th>สถานะ</th><th>จัดการ</th></tr></thead><tbody>{systemUsers.map((item) => <tr key={item.id}><td data-label="ผู้ใช้งาน"><div className="user-cell"><span>{item.displayName.slice(0, 1).toUpperCase()}</span><div><b>{item.displayName}</b><small>{item.employeeCode}</small></div></div></td><td data-label="อีเมล">{item.email || "—"}</td><td data-label="บทบาท"><span className="role-pill">{item.role === "admin" ? "ผู้ดูแลระบบ" : item.role === "dispatcher" ? "ผู้จัดงาน (รับเข้า)" : "ผู้ตรวจงาน (ส่งออก)"}</span></td><td data-label="สถานะ"><span className={`status ${item.active ? "completed" : "over"}`}>{item.active ? "ใช้งานปกติ" : "ระงับ"}</span></td><td data-label="จัดการ">{item.role === "admin" ? <span className="muted">บัญชีหลัก</span> : <div className="user-actions"><button className="tiny-button" onClick={() => editUser(item)}>แก้ไข / PIN</button><button className={`tiny-button ${item.active ? "danger-outline" : ""}`} onClick={() => void toggleUser(item)}>{item.active ? "ระงับ" : "เปิดใช้"}</button></div>}</td></tr>)}</tbody></table></div>}</Card><div className="split-grid"><Card title="สิทธิ์ตามบทบาท"><div className="role-list"><p><span>⇥</span><b>ผู้จัดงาน</b><em>สแกนรับงานเข้าระบบ</em></p><p><span>⌗</span><b>ผู้ตรวจงาน</b><em>สแกนส่งออกและตัด Due</em></p></div></Card><Card title="ความปลอดภัย"><div className="permission-note"><span>◆</span><div><b>PIN 6 หลักเก็บแบบ Hash</b><p>Admin ตั้งหรือรีเซ็ต PIN ได้ แต่ระบบไม่แสดง PIN เดิม และการระงับบัญชีจะยกเลิก Session ของผู้ใช้งานทันที</p></div></div></Card></div></>;
+    return <>
+      <Card title="ภาพรวมผู้ใช้งาน" action={<button className="button primary" onClick={() => { setUserForm({ ...EMPTY_USER, permissions: [...EMPTY_USER.permissions] }); setUserEditorOpen(true); }}>＋ เพิ่มผู้ใช้งาน</button>}>
+        <div className="metrics four compact">
+          <MetricCard tone="blue" icon="♙" label="ผู้ใช้งานทั้งหมด" value={fmt(systemUsers.length)} suffix="คน" />
+          <MetricCard tone="green" icon="✓" label="ใช้งานปกติ" value={fmt(active)} suffix="คน" />
+          <MetricCard tone="orange" icon="⇥" label="ผู้จัดงาน" value={fmt(dispatchers)} suffix="คน" />
+          <MetricCard tone="purple" icon="⌗" label="ผู้ตรวจงาน" value={fmt(inspectors)} suffix="คน" />
+        </div>
+      </Card>
+      <Card title="ผู้ใช้งานระบบ" action={<button className="button secondary" onClick={() => void loadUsers()}>↻ รีเฟรช</button>}>
+        {usersLoading ? <div className="loading-state"><span /><p>กำลังโหลดผู้ใช้งาน…</p></div> : <div className="table-wrap mobile-table-wrap">
+          <table className="mobile-card-table"><thead><tr><th>รหัส / ผู้ใช้งาน</th><th>อีเมล</th><th>บทบาท</th><th>สิทธิ์หน้า</th><th>สถานะ</th><th>จัดการ</th></tr></thead>
+            <tbody>{systemUsers.map((item) => <tr key={item.id}>
+              <td data-label="ผู้ใช้งาน"><div className="user-cell"><span>{item.displayName.slice(0, 1).toUpperCase()}</span><div><b>{item.displayName}</b><small>{item.employeeCode}</small></div></div></td>
+              <td data-label="อีเมล">{item.email || "—"}</td>
+              <td data-label="บทบาท"><span className="role-pill">{item.role === "admin" ? "ผู้ดูแลระบบ" : item.role === "dispatcher" ? "ผู้จัดงาน (รับเข้า)" : "ผู้ตรวจงาน (ส่งออก)"}</span></td>
+              <td data-label="สิทธิ์หน้า"><div className="permission-summary">{(item.role === "admin" ? NAV.map((nav) => nav.key) : item.permissions || []).map((key) => <span key={key}>{NAV.find((nav) => nav.key === key)?.label || key}</span>)}</div></td>
+              <td data-label="สถานะ"><span className={`status ${item.active ? "completed" : "over"}`}>{item.active ? "ใช้งานปกติ" : "ระงับ"}</span></td>
+              <td data-label="จัดการ">{item.role === "admin" ? <span className="muted">บัญชีหลัก</span> : <div className="user-actions"><button className="tiny-button" onClick={() => editUser(item)}>แก้ไข / สิทธิ์ / PIN</button><button className={`tiny-button ${item.active ? "danger-outline" : ""}`} onClick={() => void toggleUser(item)}>{item.active ? "ระงับ" : "เปิดใช้"}</button></div>}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>}
+      </Card>
+      <div className="split-grid">
+        <Card title="สิทธิ์รายบุคคล"><div className="permission-note"><span>◆</span><div><b>Admin เลือกได้ทีละคน</b><p>บทบาทจะใส่สิทธิ์เริ่มต้นให้ก่อน จากนั้นเปิดหรือปิดแต่ละหน้าได้อิสระ โดยหน้าหลักเปิดไว้เสมอ</p></div></div></Card>
+        <Card title="ความปลอดภัย"><div className="permission-note"><span>◆</span><div><b>ป้องกันทั้งเมนูและ API</b><p>หน้าที่ไม่ได้รับสิทธิ์จะไม่แสดงในเมนู และระบบจะปฏิเสธการเปิดหรือเรียกใช้งานโดยตรง</p></div></div></Card>
+      </div>
+    </>;
   }
 
   const pageContent: Record<PageKey, () => ReactNode> = { dashboard: renderDashboard, stock: renderStock, tags: renderTags, plan: renderPlan, scan: renderScan, exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
@@ -1358,8 +1416,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     <aside className={`control-sidebar ${menuOpen ? "open" : ""}`}>
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
-      <nav>{NAV.filter((item) => user.role === "admin" || (user.role === "dispatcher" ? ["dashboard", "stock", "tags", "scan", "history"].includes(item.key) : ["dashboard", "scan", "history"].includes(item.key))).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.8.7</span></div></div>
+      <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
+      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.8.8</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
@@ -1371,10 +1429,34 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       </div>
     </main>
     <nav className="mobile-bottom-nav" aria-label="เมนูมือถือ">
-      {(user.role === "admin" ? (["dashboard", "stock", "tags", "scan"] as PageKey[]) : user.role === "dispatcher" ? (["dashboard", "stock", "tags", "scan"] as PageKey[]) : (["dashboard", "scan", "history"] as PageKey[])).map((key) => { const item = NAV.find((nav) => nav.key === key)!; return <button key={key} className={page === key ? "active" : ""} onClick={() => go(key)}><span>{item.icon}</span><small>{item.label.replace("แผนส่งงาน (Due)", "แผนงาน").replace("สแกนและตัดยอด", "สแกน")}</small></button>; })}
+      {NAV.filter((item) => allowedPages.has(item.key)).slice(0, 4).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span><small>{item.label.replace("แผนส่งงาน (Due)", "แผนงาน").replace("สแกนและตัดยอด", "สแกน")}</small></button>)}
       <button onClick={() => setMenuOpen(true)}><span>☰</span><small>เมนู</small></button>
     </nav>
     {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>{cameraPurpose === "stock" ? "สแกน Tag รับงานเข้า Stock" : "สแกน QR Tag ด้วยกล้อง"}</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className="camera-view"><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div>{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
-    {userEditorOpen && <div className="modal-backdrop"><form className="user-modal" onSubmit={saveUser}><header><div><h3>{userForm.id ? "แก้ไขผู้ใช้งาน" : "เพิ่มผู้ใช้งาน"}</h3><p>กำหนดผู้จัดงานหรือผู้ตรวจงานได้หลายคน</p></div><button type="button" onClick={() => setUserEditorOpen(false)}>×</button></header><div className="user-form-grid"><label><span>รหัสพนักงาน *</span><input value={userForm.employeeCode} onChange={(e) => setUserForm((current) => ({ ...current, employeeCode: e.target.value.toUpperCase() }))} placeholder="เช่น DISP001" required /></label><label><span>ชื่อผู้ใช้งาน *</span><input value={userForm.displayName} onChange={(e) => setUserForm((current) => ({ ...current, displayName: e.target.value }))} placeholder="ชื่อ-นามสกุล" required /></label><label><span>บทบาท *</span><select value={userForm.role} onChange={(e) => setUserForm((current) => ({ ...current, role: e.target.value as UserForm["role"] }))}><option value="dispatcher">ผู้จัดงาน — สแกนรับเข้า</option><option value="inspector">ผู้ตรวจงาน — สแกนส่งออก/ตัด Due</option></select></label><label><span>{userForm.id ? "ตั้ง PIN ใหม่ (เว้นว่างหากไม่เปลี่ยน)" : "PIN 6 หลัก *"}</span><input type="password" inputMode="numeric" maxLength={6} pattern="[0-9]{6}" value={userForm.pin} onChange={(e) => setUserForm((current) => ({ ...current, pin: e.target.value.replace(/\D/g, "") }))} required={!userForm.id} placeholder="••••••" /></label><label className="wide"><span>อีเมล (ไม่บังคับ)</span><input type="email" value={userForm.email} onChange={(e) => setUserForm((current) => ({ ...current, email: e.target.value }))} /></label></div><footer><button type="button" className="button secondary" onClick={() => setUserEditorOpen(false)}>ยกเลิก</button><button className="button primary" disabled={userSaving}>{userSaving ? "กำลังบันทึก…" : "บันทึกผู้ใช้งาน"}</button></footer></form></div>}
+    {userEditorOpen && <div className="modal-backdrop"><form className="user-modal permission-modal" onSubmit={saveUser}>
+      <header><div><h3>{userForm.id ? "แก้ไขผู้ใช้งานและสิทธิ์" : "เพิ่มผู้ใช้งาน"}</h3><p>เลือกบทบาทและกำหนดหน้าที่แต่ละคนสามารถเปิดใช้งานได้</p></div><button type="button" onClick={() => setUserEditorOpen(false)}>×</button></header>
+      <div className="user-form-grid">
+        <label><span>รหัสพนักงาน *</span><input value={userForm.employeeCode} onChange={(e) => setUserForm((current) => ({ ...current, employeeCode: e.target.value.toUpperCase() }))} placeholder="เช่น DISP001" required /></label>
+        <label><span>ชื่อผู้ใช้งาน *</span><input value={userForm.displayName} onChange={(e) => setUserForm((current) => ({ ...current, displayName: e.target.value }))} placeholder="ชื่อ-นามสกุล" required /></label>
+        <label><span>บทบาท *</span><select value={userForm.role} onChange={(e) => { const role = e.target.value as UserForm["role"]; setUserForm((current) => ({ ...current, role, permissions: [...ROLE_PERMISSIONS[role]] })); }}><option value="dispatcher">ผู้จัดงาน — สแกนรับเข้า</option><option value="inspector">ผู้ตรวจงาน — สแกนส่งออก/ตัด Due</option></select></label>
+        <label><span>{userForm.id ? "ตั้ง PIN ใหม่ (เว้นว่างหากไม่เปลี่ยน)" : "PIN 6 หลัก *"}</span><input type="password" inputMode="numeric" maxLength={6} pattern="[0-9]{6}" value={userForm.pin} onChange={(e) => setUserForm((current) => ({ ...current, pin: e.target.value.replace(/\D/g, "") }))} required={!userForm.id} placeholder="••••••" /></label>
+        <label className="wide"><span>อีเมล (ไม่บังคับ)</span><input type="email" value={userForm.email} onChange={(e) => setUserForm((current) => ({ ...current, email: e.target.value }))} /></label>
+      </div>
+      <section className="individual-permissions"><div className="permission-title"><div><b>สิทธิ์เข้าใช้งานรายบุคคล</b><p>เลือกหน้าได้อิสระ หน้าหลักจะเปิดไว้เสมอ</p></div><button type="button" className="tiny-button" onClick={() => setUserForm((current) => ({ ...current, permissions: [...ROLE_PERMISSIONS[current.role]] }))}>คืนค่าตามบทบาท</button></div>
+        <div className="permission-grid">{NAV.map((item) => {
+          const checked = userForm.permissions.includes(item.key);
+          return <label key={item.key} className={`permission-option ${checked ? "checked" : ""}`}>
+            <input type="checkbox" checked={checked} disabled={item.key === "dashboard"} onChange={(event) => setUserForm((current) => ({
+              ...current,
+              permissions: event.target.checked
+                ? [...new Set([...current.permissions, item.key])]
+                : current.permissions.filter((key) => key !== item.key),
+            }))} />
+            <span>{item.icon}</span><div><b>{item.label}</b><small>{PERMISSION_HELP[item.key]}</small></div>
+          </label>;
+        })}</div>
+      </section>
+      <footer><button type="button" className="button secondary" onClick={() => setUserEditorOpen(false)}>ยกเลิก</button><button className="button primary" disabled={userSaving}>{userSaving ? "กำลังบันทึก…" : "บันทึกผู้ใช้งานและสิทธิ์"}</button></footer>
+    </form></div>}
   </div>;
 }
