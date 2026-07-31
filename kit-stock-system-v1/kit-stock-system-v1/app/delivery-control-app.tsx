@@ -1195,6 +1195,37 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       item.productionDate,
       item.createdAt,
     ].some((value) => String(value || "").toLowerCase().includes(tagNeedle)));
+    const tagJobSummaries = Array.from(visibleTags.reduce((summaryMap, item) => {
+      const jobNo = item.jobNo.trim().toUpperCase() || "ไม่ระบุ JOB";
+      const summary = summaryMap.get(jobNo) || {
+        jobNo,
+        partCodes: new Set<string>(),
+        customers: new Set<string>(),
+        tagCount: 0,
+        totalQty: 0,
+        awaitingQty: 0,
+        receivedQty: 0,
+        latestAt: "",
+      };
+      summary.partCodes.add(item.materialCode);
+      if (item.customer) summary.customers.add(item.customer);
+      summary.tagCount += 1;
+      summary.totalQty += Number(item.qty || 0);
+      if (item.status === "printed") summary.awaitingQty += Number(item.qty || 0);
+      else summary.receivedQty += Number(item.qty || 0);
+      if (!summary.latestAt || item.createdAt > summary.latestAt) summary.latestAt = item.createdAt;
+      summaryMap.set(jobNo, summary);
+      return summaryMap;
+    }, new Map<string, {
+      jobNo: string;
+      partCodes: Set<string>;
+      customers: Set<string>;
+      tagCount: number;
+      totalQty: number;
+      awaitingQty: number;
+      receivedQty: number;
+      latestAt: string;
+    }>()).values()).sort((a, b) => b.latestAt.localeCompare(a.latestAt));
     const selectedStockPart = stock.parts.find((item) => item.materialCode === stockTagForm.materialCode);
     const plannedTotalQty = Number(stockTagForm.qty || 0);
     const plannedBoxCount = selectedStockPart?.standardQty && plannedTotalQty > 0
@@ -1246,6 +1277,16 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           {tagSearch && <button type="button" className="button secondary" onClick={() => setTagSearch("")}>ล้างคำค้นหา</button>}
         </div>
         <p className="part-image-help">พบ {fmt(visibleTags.length)} จาก {fmt(stock.tags.length)} Tag · การพิมพ์ซ้ำใช้ Tag ID เดิม ไม่สร้าง Tag ใหม่และไม่เพิ่มยอด Stock</p>
+        {tagJobSummaries.length > 0 && <div className="table-wrap mobile-table-wrap tag-job-summary"><table className="mobile-card-table"><thead><tr><th>Job / Part</th><th className="num">Tag ที่สร้าง</th><th className="num">ยอด Tag สะสม</th><th className="num">รอรับเข้า</th><th className="num">รับเข้าแล้ว</th><th>สร้างล่าสุด</th><th>ดูรายการ</th></tr></thead><tbody>{tagJobSummaries.map((summary) => <tr key={summary.jobNo}>
+          <td data-label="Job / Part"><b>{summary.jobNo}</b><small>{Array.from(summary.partCodes).join(", ")}</small><small>{Array.from(summary.customers).join(", ") || "ไม่ระบุลูกค้า"}</small></td>
+          <td data-label="Tag ที่สร้าง" className="num"><b>{fmt(summary.tagCount)}</b> ใบ</td>
+          <td data-label="ยอด Tag สะสม" className="num"><b>{fmt(summary.totalQty)}</b> ชิ้น</td>
+          <td data-label="รอรับเข้า" className="num warning">{fmt(summary.awaitingQty)} ชิ้น</td>
+          <td data-label="รับเข้าแล้ว" className="num sent">{fmt(summary.receivedQty)} ชิ้น</td>
+          <td data-label="สร้างล่าสุด">{formatDateTime(summary.latestAt)}</td>
+          <td data-label="ดูรายการ"><button type="button" className="tiny-button" onClick={() => setTagSearch(summary.jobNo)}>ดู Tag ของ Job นี้</button></td>
+        </tr>)}</tbody></table></div>}
+        <p className="part-image-help">ยอด Tag สะสมคือจำนวนชิ้นจาก Tag ที่สร้างของ Job นั้นทุกครั้ง ไม่รวมจำนวนครั้งที่กดพิมพ์ซ้ำ</p>
         {stockLoading ? <div className="inline-loading">กำลังโหลด Tag…</div> : visibleTags.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>Part / รูป</th><th>Job / วันที่ผลิต</th><th>Tag ID / กล่อง</th><th className="num">จำนวน</th><th>สถานะ / จัดการ</th></tr></thead><tbody>{visibleTags.map((item) => {
           const boxMatch = item.tagId.match(/-B(\d+)OF(\d+)$/);
           return <tr key={item.id}><td data-label="Part"><div className="stock-part-cell"><PartImage materialCode={item.materialCode} compact /><div><b>{item.materialCode}</b><small>{item.partName}</small><small>{item.customer || "ไม่ระบุลูกค้า"}</small></div></div></td><td data-label="Job / วันที่"><b>{item.jobNo}</b><small>{formatDate(item.productionDate)}</small></td><td data-label="Tag ID / กล่อง"><b>{item.tagId}</b>{boxMatch && <small>กล่อง {Number(boxMatch[1])} / {Number(boxMatch[2])}</small>}</td><td data-label="จำนวน" className="num">{fmt(item.qty)}</td><td data-label="สถานะ / จัดการ"><div className="user-actions"><span className={`status ${item.status === "depleted" ? "over" : item.status === "printed" || item.reservedQty ? "partial" : "completed"}`}>{item.status === "depleted" ? "ขายออกหมด" : item.status === "printed" ? "รอรับเข้า" : item.reservedQty ? "มีงานรอขาย" : "รับเข้าแล้ว"}</span><button className="tiny-button" onClick={() => void printStockTags(item)}>พิมพ์ซ้ำ</button>{user.role === "admin" && item.status === "printed" && <button type="button" className="tiny-button danger-outline" disabled={Boolean(deletingStockTagId)} onClick={() => void deleteStockTag(item)}>{deletingStockTagId === item.tagId ? "กำลังลบ…" : "ลบ Tag"}</button>}</div></td></tr>;
@@ -1378,7 +1419,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   function renderSettings() {
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <>
-      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.8.13</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
+      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.8.14</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
       <Card title="รูปชิ้นงานสำหรับหน้าสแกน" action={<button className="button secondary" onClick={() => void loadPartImages()}>↻ รีเฟรช</button>}>
         <form className="part-image-upload" onSubmit={uploadPartImage}>
           <label><span>Material / Part No. *</span><input list="part-material-codes" value={partImageCode} onChange={(e) => setPartImageCode(e.target.value.toUpperCase())} placeholder="เช่น ABC-1234" required /></label>
@@ -1436,7 +1477,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
       <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.8.13</span></div></div>
+      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.8.14</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
