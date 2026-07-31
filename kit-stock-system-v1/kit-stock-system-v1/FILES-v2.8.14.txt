@@ -1,0 +1,22 @@
+KIT Delivery Due Control v2.8.14
+=================================
+
+วางทับเฉพาะ 6 ไฟล์ต่อไปนี้ โดยรักษาโครงสร้างโฟลเดอร์เดิม:
+
+1. app/delivery-control-app.tsx
+2. tests/rendered-html.test.mjs
+3. package.json
+4. package-lock.json
+5. README.md
+6. FILES-v2.8.14.txt
+
+ไม่ต้องวางไฟล์ SQL และไม่ต้องรันคำสั่ง SQL เพิ่ม
+
+หลังวางไฟล์:
+1. Commit เข้า branch main
+2. รอ Cloudflare Build และ Deploy สำเร็จ
+3. เปิดหน้า พิมพ์ Tag
+4. ค้นหาด้วยเลข Job
+5. ตรวจยอด Tag สะสม จำนวน Tag รอรับเข้า และรับเข้าแล้ว
+
+หมายเหตุ: ยอด Tag สะสมรวมจำนวนชิ้นจาก Tag ที่สร้างทุกครั้งของ Job เดียวกัน แต่ไม่รวมจำนวนครั้งที่กดพิมพ์ซ้ำ
