@@ -117,6 +117,18 @@ test("v2.8.13 searches previously created Tags and reprints the original Tag ID"
   assert.match(appSource, /ไม่สร้าง Tag ใหม่และไม่เพิ่มยอด Stock/);
 });
 
+test("v2.8.14 summarizes cumulative printed Tag quantity by Job", async () => {
+  const appSource = await readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8");
+  assert.match(appSource, /const tagJobSummaries = Array\.from/);
+  assert.match(appSource, /summary\.tagCount \+= 1/);
+  assert.match(appSource, /summary\.totalQty \+= Number\(item\.qty/);
+  assert.match(appSource, /ยอด Tag สะสม/);
+  assert.match(appSource, /รอรับเข้า/);
+  assert.match(appSource, /รับเข้าแล้ว/);
+  assert.match(appSource, /ดู Tag ของ Job นี้/);
+  assert.match(appSource, /ไม่รวมจำนวนครั้งที่กดพิมพ์ซ้ำ/);
+});
+
 test("v2.8.4 splits a Job into full and remainder boxes", async () => {
   const [appSource, stockApi] = await Promise.all([
     readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8"),
