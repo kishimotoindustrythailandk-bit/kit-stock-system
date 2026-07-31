@@ -102,6 +102,21 @@ test("v2.8.12 labels full and remainder boxes on every printed Tag", async () =>
   assert.match(appSource, /const tagsPerPage = 8/);
 });
 
+test("v2.8.13 searches previously created Tags and reprints the original Tag ID", async () => {
+  const appSource = await readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8");
+  assert.match(appSource, /ค้นหา Tag ที่เคยสร้าง/);
+  assert.match(appSource, /ค้นหา Tag ID, Part No\., Job, ลูกค้า หรือวันที่ผลิต/);
+  assert.match(appSource, /const visibleTags = stock\.tags\.filter/);
+  assert.match(appSource, /item\.tagId/);
+  assert.match(appSource, /item\.materialCode/);
+  assert.match(appSource, /item\.partName/);
+  assert.match(appSource, /item\.customer/);
+  assert.match(appSource, /item\.jobNo/);
+  assert.match(appSource, /item\.productionDate/);
+  assert.match(appSource, /printStockTags\(item\)/);
+  assert.match(appSource, /ไม่สร้าง Tag ใหม่และไม่เพิ่มยอด Stock/);
+});
+
 test("v2.8.4 splits a Job into full and remainder boxes", async () => {
   const [appSource, stockApi] = await Promise.all([
     readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8"),
