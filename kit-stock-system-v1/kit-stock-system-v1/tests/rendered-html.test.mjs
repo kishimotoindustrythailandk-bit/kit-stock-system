@@ -92,6 +92,16 @@ test("v2.8.11 prints eight high-contrast Tags with larger readable text", async 
   assert.match(appSource, /print-color-adjust:exact/);
 });
 
+test("v2.8.12 labels full and remainder boxes on every printed Tag", async () => {
+  const appSource = await readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8");
+  assert.match(appSource, /const packQty = Number\(stock\.parts\.find/);
+  assert.match(appSource, /FULL BOX \/ กล่องเต็ม/);
+  assert.match(appSource, /REMAINDER BOX \/ กล่องเศษ/);
+  assert.match(appSource, /\.box-type\.full/);
+  assert.match(appSource, /\.box-type\.remainder/);
+  assert.match(appSource, /const tagsPerPage = 8/);
+});
+
 test("v2.8.4 splits a Job into full and remainder boxes", async () => {
   const [appSource, stockApi] = await Promise.all([
     readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8"),
