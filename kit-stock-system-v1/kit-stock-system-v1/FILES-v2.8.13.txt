@@ -1,0 +1,22 @@
+KIT Delivery Due Control v2.8.13
+=================================
+
+วางทับเฉพาะ 6 ไฟล์ต่อไปนี้ โดยรักษาโครงสร้างโฟลเดอร์เดิม:
+
+1. app/delivery-control-app.tsx
+2. tests/rendered-html.test.mjs
+3. package.json
+4. package-lock.json
+5. README.md
+6. FILES-v2.8.13.txt
+
+ไม่ต้องวางไฟล์ SQL และไม่ต้องรันคำสั่ง SQL เพิ่ม
+
+หลังวางไฟล์:
+1. Commit เข้า branch main
+2. รอ Cloudflare Build และ Deploy สำเร็จ
+3. เปิดหน้า พิมพ์ Tag
+4. ค้นหา Tag เดิมจาก Tag ID, Part No., Job, ลูกค้า หรือวันที่ผลิต
+5. กด พิมพ์ซ้ำ ที่รายการที่ต้องการ
+
+หมายเหตุ: การพิมพ์ซ้ำใช้ Tag ID เดิม ไม่สร้าง Tag ใหม่ ไม่เพิ่มยอด Stock และไม่เปลี่ยน Due
