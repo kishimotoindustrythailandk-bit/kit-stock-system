@@ -102,7 +102,7 @@ export async function POST(request: Request) {
   try {
     const user = await getCurrentUser();
     if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
-    if (!hasPermission(user, "scan")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์สแกนและตัดยอด" }, { status: 403 });
+    if (!hasPermission(user, "dispatch")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ตรวจและขายออก" }, { status: 403 });
     if (user.role !== "admin" && user.role !== "inspector") {
       return Response.json({ error: "เฉพาะผู้ตรวจงานหรือ Admin เท่านั้นที่สแกน Tag ลูกค้าเพื่อขายออกได้" }, { status: 403 });
     }
