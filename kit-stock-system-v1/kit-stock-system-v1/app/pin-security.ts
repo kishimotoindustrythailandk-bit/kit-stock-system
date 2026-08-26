@@ -31,11 +31,23 @@ export async function hashPin(pin: string) {
   return `pbkdf2$${ITERATIONS}$${toBase64Url(salt)}$${toBase64Url(hash)}`;
 }
 
+/**
+ * ตรวจ PIN กับค่าที่เก็บไว้ คืนค่า false เสมอเมื่อตรวจไม่ได้ ไม่โยน exception
+ *
+ * เดิมถ้าค่าใน pin_hash ผิดรูปแบบ (เช่น base64 เสีย) atob() จะโยน
+ * InvalidCharacterError ทะลุออกไป ทำให้ทั้งการเข้าสู่ระบบและการเปลี่ยน PIN
+ * ตอบ 500 แทนที่จะบอกว่า PIN ไม่ถูกต้อง — บัญชีนั้นจะใช้งานไม่ได้เลยและ
+ * หาสาเหตุยากมาก เพราะข้อความที่ผู้ใช้เห็นไม่เกี่ยวกับต้นเหตุ
+ */
 export async function verifyHashedPin(pin: string, stored: string) {
-  const [algorithm, iterationText, saltText, hashText] = stored.split("$");
-  const iterations = Number(iterationText);
-  if (algorithm !== "pbkdf2" || !Number.isInteger(iterations) || iterations < 10_000 || !saltText || !hashText) return false;
-  const expected = fromBase64Url(hashText);
-  const actual = await derive(pin, fromBase64Url(saltText), iterations);
-  return secureEqual(actual, expected);
+  try {
+    const [algorithm, iterationText, saltText, hashText] = stored.split("$");
+    const iterations = Number(iterationText);
+    if (algorithm !== "pbkdf2" || !Number.isInteger(iterations) || iterations < 10_000 || !saltText || !hashText) return false;
+    const expected = fromBase64Url(hashText);
+    const actual = await derive(pin, fromBase64Url(saltText), iterations);
+    return secureEqual(actual, expected);
+  } catch {
+    return false;
+  }
 }
