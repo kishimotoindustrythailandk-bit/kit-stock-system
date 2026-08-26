@@ -15,8 +15,14 @@
 export const MAX_FAILED_ATTEMPTS = 5;
 export const LOCK_MINUTES = 15;
 
-/** แฮชหลอกที่ใช้เผาเวลาให้เท่ากับการตรวจ PIN จริง เมื่อไม่พบรหัสพนักงานในระบบ */
-export const DUMMY_PIN_HASH = "pbkdf2$120000$RFWXtEExPfkLjbr6BGoKaQ$3jI5zZIH5eIjlmcgeXMap-vbNguLioQmhTkBI-u0hHI";
+/**
+ * แฮชหลอกที่ใช้เผาเวลาให้เท่ากับการตรวจ PIN จริง เมื่อไม่พบรหัสพนักงานในระบบ
+ *
+ * จำนวนรอบต้องตรงกับ ITERATIONS ใน pin-security.ts เสมอ ถ้าไม่ตรง
+ * verifyHashedPin จะคืน false ทันทีโดยไม่คำนวณ ทำให้เวลาตอบกลับต่างกัน
+ * และกลับมาเดารหัสพนักงานจากการจับเวลาได้อีก
+ */
+export const DUMMY_PIN_HASH = "pbkdf2$100000$P5oBQtN3Ib3GPdPnzskTMQ$Wr11PEwGBBvD2ZC0frihcx0lKazHOUVXDBpVwhVa8Gc";
 
 export type LockState = { locked: false } | { locked: true; minutesLeft: number };
 

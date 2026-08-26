@@ -1,4 +1,14 @@
-const ITERATIONS = 120_000;
+/**
+ * Cloudflare Workers จำกัด PBKDF2 ไว้ที่ 100,000 รอบ ขอเกินกว่านี้จะได้
+ * "Pbkdf2 failed: iteration counts above 100000 are not supported"
+ *
+ * โค้ดเดิมตั้งไว้ 120,000 ซึ่งเกินเพดาน แปลว่า hashPin() โยน error ทุกครั้งที่ถูกเรียก
+ * ที่ผ่านมาไม่มีใครเจอเพราะไม่เคยมีการสร้าง PIN แบบแฮชจริงเลย — บัญชี ADMIN
+ * ใช้การเทียบกับ environment variable ตรงๆ ส่วนเมนู "เพิ่มผู้ใช้งาน" ก็ใช้ไม่ได้
+ * มาตลอดโดยไม่มีใครรู้ เพราะมันเรียก hashPin เหมือนกัน
+ */
+const MAX_ITERATIONS = 100_000;
+const ITERATIONS = MAX_ITERATIONS;
 
 function toBase64Url(bytes: Uint8Array) {
   let binary = "";
@@ -43,7 +53,9 @@ export async function verifyHashedPin(pin: string, stored: string) {
   try {
     const [algorithm, iterationText, saltText, hashText] = stored.split("$");
     const iterations = Number(iterationText);
-    if (algorithm !== "pbkdf2" || !Number.isInteger(iterations) || iterations < 10_000 || !saltText || !hashText) return false;
+    // เพดานบนต้องเช็คด้วย ไม่งั้นแฮชที่บันทึกไว้เกิน 100,000 รอบจะทำให้ deriveBits
+    // โยน error แทนที่จะบอกว่า PIN ไม่ถูกต้อง
+    if (algorithm !== "pbkdf2" || !Number.isInteger(iterations) || iterations < 10_000 || iterations > MAX_ITERATIONS || !saltText || !hashText) return false;
     const expected = fromBase64Url(hashText);
     const actual = await derive(pin, fromBase64Url(saltText), iterations);
     return secureEqual(actual, expected);
