@@ -2,33 +2,19 @@
   "version": "7",
   "dialect": "sqlite",
   "entries": [
-    {
-      "idx": 0,
-      "version": "6",
-      "when": 1784026649572,
-      "tag": "0000_dark_nemesis",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "6",
-      "when": 1784028516914,
-      "tag": "0001_organic_mongoose",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "6",
-      "when": 1784628716848,
-      "tag": "0002_breezy_roxanne_simpson",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "6",
-      "when": 1784642725724,
-      "tag": "0003_cloud_due_seed",
-      "breakpoints": true
-    }
+    { "idx": 0, "version": "6", "when": 1784026649572, "tag": "0000_dark_nemesis", "breakpoints": true },
+    { "idx": 1, "version": "6", "when": 1784028516914, "tag": "0001_organic_mongoose", "breakpoints": true },
+    { "idx": 2, "version": "6", "when": 1784628716848, "tag": "0002_breezy_roxanne_simpson", "breakpoints": true },
+    { "idx": 3, "version": "6", "when": 1784642725724, "tag": "0003_cloud_due_seed", "breakpoints": true },
+    { "idx": 4, "version": "6", "when": 1784700000000, "tag": "0004_cloudflare_auth", "breakpoints": true },
+    { "idx": 5, "version": "6", "when": 1784800000000, "tag": "0005_user_permissions", "breakpoints": true },
+    { "idx": 6, "version": "6", "when": 1784900000000, "tag": "0006_split_workflow_permissions", "breakpoints": true },
+    { "idx": 7, "version": "6", "when": 1785000000000, "tag": "0007_part_images", "breakpoints": true },
+    { "idx": 8, "version": "6", "when": 1785100000000, "tag": "0008_stock_core", "breakpoints": true },
+    { "idx": 9, "version": "6", "when": 1785200000000, "tag": "0009_stock_traceability", "breakpoints": true },
+    { "idx": 10, "version": "6", "when": 1785300000000, "tag": "0010_login_throttle", "breakpoints": true },
+    { "idx": 11, "version": "6", "when": 1785400000000, "tag": "0011_pin_rotation", "breakpoints": true },
+    { "idx": 12, "version": "6", "when": 1785500000000, "tag": "0012_delivery_tag_receipts", "breakpoints": true },
+    { "idx": 13, "version": "6", "when": 1785600000000, "tag": "0013_performance_indexes", "breakpoints": true }
   ]
 }

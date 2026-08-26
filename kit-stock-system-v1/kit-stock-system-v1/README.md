@@ -1,4 +1,79 @@
-# KIT Delivery Due Control v2.8.14 — สรุปยอด Tag สะสมตาม Job
+# KIT Delivery Due Control v2.9.0 — ซ่อมการติดตั้ง ฐานข้อมูล และความปลอดภัยบัญชี
+
+รุ่นนี้ไม่ได้เพิ่มฟีเจอร์ใหม่ แต่ซ่อมสิ่งที่ทำให้ติดตั้งใหม่ไม่สำเร็จมาตลอด
+
+## ติดตั้งหรืออัปเกรด
+
+**ฐานข้อมูลที่ใช้งานอยู่แล้ว** (เคยรัน `database-upgrade-*.sql` ด้วยมือ) — รัน baseline ครั้งเดียวก่อน:
+
+```
+npm install
+npm run db:baseline      # ครั้งเดียวเท่านั้น บอก wrangler ว่า migration เก่ามีอยู่แล้ว
+npm run db:migrate       # รันเฉพาะ 0010, 0011, 0013
+npm run check            # typecheck + lint + test ต้องผ่านทั้งหมด
+npm run deploy
+```
+
+**ฐานข้อมูลใหม่ที่ยังว่าง** — ข้าม `db:baseline` แล้วรัน `npm run db:migrate` ได้เลย
+
+หรือใช้ `INSTALL-MAC-LINUX.sh` / `INSTALL-WINDOWS.bat` ซึ่งทำตามลำดับนี้ให้อัตโนมัติ
+
+> **สำคัญ:** ต้องรัน migration ก่อน deploy เสมอ โค้ดรุ่นนี้ต้องการตาราง
+> `app_login_attempts` และคอลัมน์ `app_users.must_change_pin`
+
+## สิ่งที่แก้ใน v2.9.0
+
+**ติดตั้งใหม่แล้วใช้งานได้จริง**
+
+- ตัวติดตั้งเดิมเรียก `database-upgrade-v2.3-part-images.sql` และ `-v2.7-stock.sql`
+  ที่ไม่มีอยู่ในรีโป จึงหยุดกลางคันก่อนถึง deploy และก่อนตั้ง PIN แอดมินเสมอ
+- ตาราง `part_images`, `stock_parts`, `stock_tags`, `stock_allocations`
+  และ `delivery_tag_receipts` ไม่มี `CREATE TABLE` อยู่ที่ไหนเลยในรีโป
+  สร้างขึ้นใหม่จาก `db/schema.ts` เป็น migration `0007`, `0008` และ `0012`
+- migration เดิมแตกเป็นสองชุด (`drizzle/` กับ `migrations/`) และ `wrangler.jsonc`
+  ชี้ไปที่ `drizzle/` ซึ่งเป็นสาขาที่เลิกใช้แล้ว ทำให้ `d1 migrations apply`
+  ไม่เคยรัน `0004` เป็นต้นไป — ตอนนี้เหลือชุดเดียวที่ `migrations/` ครบ 0000–0013
+
+**ความปลอดภัยบัญชี**
+
+- ใส่การจำกัดจำนวนครั้งที่กรอก PIN ผิด: ผิด 5 ครั้งล็อก 15 นาที
+  เดิมไม่มีอะไรหยุดการไล่เดา PIN 6 หลักซึ่งมีแค่ 1,000,000 ค่า
+- ตอบกลับด้วยเวลาเท่ากันเมื่อไม่พบรหัสพนักงาน เพื่อไม่ให้จับเวลาแยกได้
+  ว่ารหัสไหนมีอยู่ในระบบ
+- เพิ่มหน้า `/change-pin` ให้ทุกบัญชีเปลี่ยน PIN ตัวเองได้ รวมถึง admin
+  ซึ่งเดิมเปลี่ยนไม่ได้เลย เพราะถูก seed เป็นค่า `ENV_INITIAL_ADMIN_PIN`
+  แล้วเทียบกับ environment variable แบบข้อความล้วน
+- บัญชีที่ยังใช้ PIN ตั้งต้นถูกบังคับตั้ง PIN ใหม่ก่อนเข้าหน้าอื่น
+  และ PIN ใหม่ถูกเก็บเป็น PBKDF2 hash
+- ออกจากระบบเปลี่ยนเป็น POST เดิมเป็น GET จึงถูกเตะออกได้ด้วยการฝัง `<img>`
+- ไม่ส่งข้อความ error ดิบจาก D1 กลับไปหาผู้ใช้อีก และเพิ่ม security header พื้นฐาน
+
+**ความถูกต้องของข้อมูล**
+
+- สแกนรับเข้า Stock ซ้ำ เดิมตอบ 201 สำเร็จทั้งที่ไม่ได้บันทึกอะไร ตอนนี้ตอบ 409
+- ล้าง session ที่หมดอายุทุกครั้งที่มีคนเข้าสู่ระบบ เดิมไม่เคยล้างเลย
+- เพิ่ม index บนคอลัมน์ที่ join จริง (`delivery_tag_scans.due_line_id`,
+  `delivery_due_lines.import_id`, `app_sessions.user_id` และอื่นๆ)
+
+**เครื่องมือ**
+
+- `npm run typecheck` ใช้ได้แล้วและผ่าน 0 error เดิม `tsc` พัง 10 error
+  และไม่มี script ให้รัน จึงไม่มีใครรู้
+- `npm test` ผ่านครบ 16/16 เดิมเทสต์ตัวแรกพังด้วย `worker is not a function`
+- `npm run check` รวม typecheck + lint + test ไว้ในคำสั่งเดียว
+- ลบ script ที่ชี้ไฟล์ที่ไม่มีอยู่ (`db:upgrade:v23`, `db:upgrade:v27`,
+  และ `db:generate` ที่เรียก `scripts/sites-env.sh`)
+
+## ยังไม่ได้แก้ในรุ่นนี้
+
+- race condition ตอนจัดงาน (`stage`) ที่ทำให้จัดเกินของจริงได้
+- `DB.batch` ตอนตัดยอดไม่ได้ตรวจ `meta.changes` จึงเงียบเมื่อ guard ไม่ผ่าน
+- `xlsx@0.18.5` ยังมีช่องโหว่ ต้องย้ายไป SheetJS CDN
+- โค้ดตายใน `app/employees/` และตารางรุ่นเก่าใน `db/schema.ts`
+
+---
+
+## v2.8.14 — สรุปยอด Tag สะสมตาม Job
 
 อัปเดต v2.8.14:
 

@@ -9,6 +9,7 @@ export type CloudUser = {
   email: string;
   role: string;
   permissions: PermissionKey[];
+  mustChangePin: boolean;
 };
 
 export const SESSION_COOKIE = "kit_session";
@@ -38,7 +39,10 @@ export function hasPermission(user: Pick<CloudUser, "role" | "permissions">, per
   return user.role === "admin" || user.permissions.includes(permission);
 }
 
-type CloudUserRow = Omit<CloudUser, "permissions"> & { permissionCsv?: string };
+type CloudUserRow = Omit<CloudUser, "permissions" | "mustChangePin"> & {
+  permissionCsv?: string;
+  mustChangePin: number;
+};
 
 export async function getCurrentUser(): Promise<CloudUser | null> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
@@ -46,38 +50,39 @@ export async function getCurrentUser(): Promise<CloudUser | null> {
   const db = getRuntimeEnv().DB;
   if (!db) throw new Error("ไม่พบการเชื่อมต่อฐานข้อมูล D1");
   const expires = new Date().toISOString();
-  let row: CloudUserRow | null = null;
-  try {
-    row = await db.prepare(`
-      SELECT u.id, u.employee_code AS employeeCode, u.display_name AS displayName,
-        u.email, u.role,
-        coalesce((SELECT group_concat(p.permission_key)
-          FROM app_user_permissions p WHERE p.user_id = u.id), '') AS permissionCsv
-      FROM app_sessions s
-      INNER JOIN app_users u ON u.id = s.user_id
-      WHERE s.id = ?1 AND s.expires_at > ?2 AND u.active = 1
-      LIMIT 1
-    `).bind(token, expires).first<CloudUserRow>();
-  } catch (error) {
-    if (!(error instanceof Error) || !error.message.includes("app_user_permissions")) throw error;
-    row = await db.prepare(`
-      SELECT u.id, u.employee_code AS employeeCode, u.display_name AS displayName,
-        u.email, u.role
-      FROM app_sessions s
-      INNER JOIN app_users u ON u.id = s.user_id
-      WHERE s.id = ?1 AND s.expires_at > ?2 AND u.active = 1
-      LIMIT 1
-    `).bind(token, expires).first<CloudUserRow>();
-  }
+  // เดิมตรงนี้มี try/catch ที่ดักด้วยการอ่านข้อความ error ว่ามีคำว่า
+  // "app_user_permissions" หรือไม่ เพื่อชดเชยกรณีที่ตารางยังไม่ถูกสร้าง
+  // ตอนนี้ migration ครบทั้ง 0000–0012 อยู่ในชุดเดียวและ deploy รันหลัง db:migrate
+  // เสมอ จึงไม่ต้องเดาจากข้อความ error อีก
+  const row = await db.prepare(`
+    SELECT u.id, u.employee_code AS employeeCode, u.display_name AS displayName,
+      u.email, u.role, u.must_change_pin AS mustChangePin,
+      coalesce((SELECT group_concat(p.permission_key)
+        FROM app_user_permissions p WHERE p.user_id = u.id), '') AS permissionCsv
+    FROM app_sessions s
+    INNER JOIN app_users u ON u.id = s.user_id
+    WHERE s.id = ?1 AND s.expires_at > ?2 AND u.active = 1
+    LIMIT 1
+  `).bind(token, expires).first<CloudUserRow>();
   if (!row) return null;
   const permissions = row.permissionCsv
     ? normalizePermissions(row.permissionCsv, row.role)
     : defaultPermissions(row.role);
-  return { id: row.id, employeeCode: row.employeeCode, displayName: row.displayName, email: row.email, role: row.role, permissions };
+  return {
+    id: row.id,
+    employeeCode: row.employeeCode,
+    displayName: row.displayName,
+    email: row.email,
+    role: row.role,
+    permissions,
+    mustChangePin: Number(row.mustChangePin) === 1,
+  };
 }
 
 export async function requireCloudUser(): Promise<CloudUser> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  // บัญชีที่ยังใช้ PIN ตั้งต้นเข้าหน้าอื่นไม่ได้จนกว่าจะตั้ง PIN ของตัวเอง
+  if (user.mustChangePin) redirect("/change-pin");
   return user;
 }

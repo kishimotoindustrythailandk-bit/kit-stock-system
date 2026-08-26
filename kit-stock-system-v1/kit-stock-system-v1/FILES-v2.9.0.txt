@@ -1,0 +1,93 @@
+KIT Delivery Due Control v2.9.0 — รายการไฟล์สำหรับวางทับ
+========================================================
+
+วิธีใช้
+-------
+แตกไฟล์ zip นี้ แล้วลากทุกอย่างข้างในไปวางทับที่โฟลเดอร์โปรเจกต์เดิม
+(โฟลเดอร์ที่มี package.json อยู่ข้างใน) โครงสร้างข้างในตรงกันอยู่แล้ว
+ให้เลือก "แทนที่ไฟล์เดิม" ทั้งหมด
+
+ถ้าอัปโหลดผ่านหน้าเว็บ GitHub ให้ลากไปวางที่:
+    kit-stock-system-v1/kit-stock-system-v1/
+
+
+ต้องทำด้วยมือ 1 อย่าง — ลบโฟลเดอร์ drizzle/
+--------------------------------------------
+การวางไฟล์ทับไม่ลบไฟล์เก่าให้ จึงต้องลบเอง:
+
+    kit-stock-system-v1/kit-stock-system-v1/drizzle/     <-- ลบทั้งโฟลเดอร์
+
+โฟลเดอร์นี้เป็น migration สาขาที่เลิกใช้แล้ว (auth รุ่น employees)
+ถ้าไม่ลบก็ไม่พัง เพราะ wrangler.jsonc ชี้ไปที่ migrations/ แล้ว
+แต่ลบออกจะได้ไม่สับสนว่าชุดไหนคือของจริง
+
+
+ไฟล์ใหม่ (13)
+-------------
+app/api/auth/change-pin/route.ts          เปลี่ยน PIN ตัวเอง ใช้ได้ทุก role รวม admin
+app/change-pin/page.tsx                   หน้าตั้ง PIN ใหม่
+app/change-pin/change-pin-form.tsx        ฟอร์มตั้ง PIN ใหม่
+app/login-throttle.ts                     จำกัดการเดา PIN ผิด 5 ครั้งล็อก 15 นาที
+migrations/0007_part_images.sql           ตาราง part_images (เดิมไม่มีในรีโป)
+migrations/0008_stock_core.sql            stock_parts, stock_tags, stock_allocations (เดิมไม่มีในรีโป)
+migrations/0009_stock_traceability.sql    stock_picks, stock_dispatch_links
+migrations/0010_login_throttle.sql        ตาราง app_login_attempts
+migrations/0011_pin_rotation.sql          คอลัมน์ app_users.must_change_pin
+migrations/0012_delivery_tag_receipts.sql ตาราง delivery_tag_receipts (เดิมไม่มีในรีโป)
+migrations/0013_performance_indexes.sql   index บนคอลัมน์ที่ join จริง
+scripts/baseline-existing-d1.sql          ใช้ครั้งเดียวกับฐานข้อมูลที่ใช้งานอยู่แล้ว
+worker-configuration.d.ts                 type ของ Cloudflare (ไฟล์นี้ระบบสร้างเองได้ ไม่ใส่ก็ได้)
+
+
+ไฟล์ที่วางทับของเดิม (17)
+-------------------------
+.gitignore
+INSTALL-MAC-LINUX.sh                      เขียนใหม่ ใช้ db:baseline + db:migrate
+INSTALL-WINDOWS.bat                       เขียนใหม่ ใช้ db:baseline + db:migrate
+README.md                                 เพิ่มขั้นตอนติดตั้ง v2.9.0 ไว้ด้านบน
+app/api/auth/login/route.ts               ใส่ rate limit + บังคับเปลี่ยน PIN ตั้งต้น
+app/api/auth/logout/route.ts              เปลี่ยนจาก GET เป็น POST
+app/api/stock/route.ts                    สแกนรับเข้าซ้ำตอบ 409 แทน 201 ปลอม
+app/cloudflare-auth.ts                    อ่าน must_change_pin, ลบ try/catch ที่เดาจากข้อความ error
+app/delivery-control-app.tsx              ปุ่มออกจากระบบยิง POST
+app/pin-security.ts                       แก้ type ให้ตรงกับ BufferSource
+eslint.config.mjs                         ไม่ lint ไฟล์ที่ระบบ generate
+migrations/meta/_journal.json             เพิ่ม 0004-0013 เข้า journal
+package.json                              v2.9.0 + script typecheck/check/db:migrate
+package-lock.json                         ตามเลขเวอร์ชันใหม่
+tests/rendered-html.test.mjs              แก้ worker.fetch() เทสต์ตัวแรกที่พังมาตลอด
+worker/index.ts                           security header + แก้ type
+wrangler.jsonc                            migrations_dir ชี้ไป migrations/ แทน drizzle/
+
+
+หลังวางไฟล์เสร็จ ให้รันตามลำดับนี้
+----------------------------------
+1) npm install
+
+2) ฐานข้อมูลที่ใช้งานอยู่แล้ว (ของจริงตอนนี้) ต้องรันบรรทัดนี้ครั้งเดียว:
+
+       npm run db:baseline
+
+   ถ้าเป็นฐานข้อมูลใหม่ที่ยังว่างเปล่า ให้ข้ามข้อนี้
+
+3) npm run db:migrate        รัน migration ที่ยังไม่เคยรัน (0010, 0011, 0013)
+
+4) npm run check             typecheck + lint + test ต้องผ่านทั้งหมด
+
+5) npm run deploy
+
+6) เข้าสู่ระบบด้วยรหัส ADMIN — ระบบจะบังคับให้ตั้ง PIN ใหม่ทันที
+
+
+ข้อควรระวัง
+-----------
+* ต้องรัน db:baseline ก่อน db:migrate ถ้าเป็นฐานข้อมูลเดิม
+  ไม่อย่างนั้น wrangler จะพยายามรัน migration 0000-0009 ซ้ำแล้วพัง
+  เพราะไฟล์เก่าเป็น CREATE TABLE และ ALTER TABLE ตรงๆ ไม่ใช่แบบ idempotent
+
+* ต้องรัน migration ก่อน deploy เสมอ
+  โค้ดรุ่นนี้ต้องการตาราง app_login_attempts และคอลัมน์ must_change_pin
+  ถ้า deploy ก่อน จะเข้าสู่ระบบไม่ได้จนกว่าจะรัน migration
+
+* ข้อมูลเดิมทั้งหมดไม่ถูกแตะ ทดสอบเส้นทางนี้กับฐานจำลองแล้ว
+  baseline มาร์ก 11 ไฟล์ แล้ว migrate รันเฉพาะ 0010, 0011, 0013

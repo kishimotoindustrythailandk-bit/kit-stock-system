@@ -10,7 +10,10 @@
       "binding": "DB",
       "database_name": "kit-stock-db",
       "database_id": "501d0e19-8572-4a8c-ad19-1d2b1346d7d9",
-      "migrations_dir": "drizzle"
+      // migrations/ คือชุดเดียวที่ใช้จริง ตรงกับ out ใน drizzle.config.ts
+      // เดิมชี้ไปที่ drizzle/ ซึ่งเป็นสาขาที่เลิกใช้แล้ว (auth รุ่น employees)
+      // ทำให้ migrations apply ไม่เคยรัน 0004 เป็นต้นไปเลย
+      "migrations_dir": "migrations"
     }
   ],
   "r2_buckets": [

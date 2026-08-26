@@ -1,6 +1,6 @@
 {
   "name": "kit-stock-system-cloudflare",
-  "version": "2.8.14",
+  "version": "2.9.0",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -10,16 +10,14 @@
     "build": "vinext build",
     "preview": "npm run build && wrangler dev --config dist/server/wrangler.json",
     "deploy": "npm run build && wrangler deploy --config dist/server/wrangler.json",
-    "db:upgrade": "wrangler d1 execute DB --remote --file=database-upgrade-due.sql",
-    "db:upgrade:v22": "wrangler d1 execute DB --remote --file=database-upgrade-v2.2-users-scan.sql",
-    "db:upgrade:v23": "wrangler d1 execute DB --remote --file=database-upgrade-v2.3-part-images.sql",
-    "db:upgrade:v27": "wrangler d1 execute DB --remote --file=database-upgrade-v2.7-stock.sql",
-    "db:upgrade:v28": "wrangler d1 execute DB --remote --file=database-upgrade-v2.8-traceability.sql",
-    "db:upgrade:v288": "wrangler d1 execute DB --remote --file=database-upgrade-v2.8.8-user-permissions.sql",
-    "db:upgrade:v289": "wrangler d1 execute DB --remote --file=database-upgrade-v2.8.9-split-workflow-permissions.sql",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs",
+    "db:baseline": "wrangler d1 execute DB --remote --file=scripts/baseline-existing-d1.sql",
+    "db:migrate": "wrangler d1 migrations apply DB --remote",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:generate": "drizzle-kit generate",
+    "typecheck": "wrangler types && tsc --noEmit",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate"
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "check": "npm run typecheck && npm run lint && npm run test"
   },
   "dependencies": {
     "@types/qrcode": "^1.5.6",

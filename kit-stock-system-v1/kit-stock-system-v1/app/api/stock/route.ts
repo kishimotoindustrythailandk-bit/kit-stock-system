@@ -311,6 +311,12 @@ export async function POST(request: Request) {
         status: "in_stock", receivedByName: user.displayName, receivedByCode: user.employeeCode,
         receivedAt: sql`CURRENT_TIMESTAMP`,
       }).where(and(eq(stockTags.id, tag.id), eq(stockTags.status, "printed"))).returning();
+      // ถ้ามีคนสแกน Tag ใบเดียวกันแซงไปเสี้ยววินาที เงื่อนไข status = 'printed'
+      // จะไม่ตรงแล้ว returning() คืนอาเรย์ว่าง เดิมโค้ดยังตอบ 201 พร้อม tag: undefined
+      // ทำให้หน้างานเห็นว่าสแกนสำเร็จ ทั้งที่ระบบไม่ได้บันทึกอะไรเลย
+      if (!updated) {
+        return Response.json({ error: "Tag นี้เพิ่งถูกสแกนรับเข้า Stock ไปแล้ว กรุณารีเฟรชหน้าจอ" }, { status: 409 });
+      }
       return Response.json({ action: "received", tag: updated }, { status: 201 });
     }
 

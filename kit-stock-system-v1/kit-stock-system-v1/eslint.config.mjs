@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // ไฟล์ที่ wrangler types สร้างให้ ไม่ต้อง lint
+    "worker-configuration.d.ts",
   ]),
 ]);
 
