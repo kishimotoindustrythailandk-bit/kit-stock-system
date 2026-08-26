@@ -32,34 +32,55 @@ interface ExecutionContext {
  * document.write ก่อน ไม่อย่างนั้นจะพิมพ์ Tag ไม่ออกโดยไม่มีใครรู้สาเหตุ
  */
 function withSecurityHeaders(response: Response): Response {
-  const headers = new Headers(response.headers);
-  headers.set("x-content-type-options", "nosniff");
-  headers.set("x-frame-options", "DENY");
-  headers.set("referrer-policy", "strict-origin-when-cross-origin");
-  headers.set("strict-transport-security", "max-age=31536000; includeSubDomains");
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  // ห้ามให้ฟังก์ชันนี้ทำให้ทั้งเว็บล่มเด็ดขาด
+  // การสร้าง Response ใหม่มีหลายกรณีที่ workerd โยน exception เช่น
+  // การอัปเกรด WebSocket (101), response ที่ห้ามมี body (204/205/304)
+  // หรือ body ที่ถูกอ่านไปแล้ว ถ้าห่อไม่ได้ก็ส่งของเดิมกลับไปตรงๆ ดีกว่าเว็บพัง
+  if (response.status === 101 || response.status === 204 || response.status === 205 || response.status === 304) {
+    return response;
+  }
+  try {
+    const headers = new Headers(response.headers);
+    headers.set("x-content-type-options", "nosniff");
+    headers.set("x-frame-options", "DENY");
+    headers.set("referrer-policy", "strict-origin-when-cross-origin");
+    headers.set("strict-transport-security", "max-age=31536000; includeSubDomains");
+    return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  } catch {
+    return response;
+  }
 }
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    globalThis.__KIT_RUNTIME_ENV__ = env;
-    const url = new URL(request.url);
+    try {
+      globalThis.__KIT_RUNTIME_ENV__ = env;
+      const url = new URL(request.url);
 
-    // เก็บ binding ไว้ในตัวแปรก่อน มิฉะนั้น TypeScript จะลืมว่าเช็ค undefined ไปแล้ว
-    // เมื่อโค้ดเข้าไปอยู่ใน callback ของ transformImage
-    const images = env.IMAGES;
-    if (url.pathname === "/_vinext/image" && images) {
-      const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
-      return handleImageOptimization(request, {
-        fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url))),
-        transformImage: async (body, { width, format, quality }) => {
-          const result = await images.input(body).transform(width > 0 ? { width } : {}).output({ format, quality });
-          return result.response();
-        },
-      }, allowedWidths);
+      // เก็บ binding ไว้ในตัวแปรก่อน มิฉะนั้น TypeScript จะลืมว่าเช็ค undefined ไปแล้ว
+      // เมื่อโค้ดเข้าไปอยู่ใน callback ของ transformImage
+      const images = env.IMAGES;
+      if (url.pathname === "/_vinext/image" && images) {
+        const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
+        return handleImageOptimization(request, {
+          fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url))),
+          transformImage: async (body, { width, format, quality }) => {
+            const result = await images.input(body).transform(width > 0 ? { width } : {}).output({ format, quality });
+            return result.response();
+          },
+        }, allowedWidths);
+      }
+
+      return withSecurityHeaders(await handler.fetch(request, env, ctx));
+    } catch (error) {
+      // ถ้าไม่ดักตรงนี้ Cloudflare จะขึ้นหน้า Error 1101 ซึ่งไม่บอกอะไรเลย
+      // console.error ไปโผล่ที่ Workers Logs พร้อม stack เต็ม ใช้ไล่ปัญหาได้จริง
+      console.error("worker fetch failed", request.method, new URL(request.url).pathname, error);
+      return new Response("ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง", {
+        status: 500,
+        headers: { "content-type": "text/plain; charset=utf-8", "x-content-type-options": "nosniff" },
+      });
     }
-
-    return withSecurityHeaders(await handler.fetch(request, env, ctx));
   },
 };
 
