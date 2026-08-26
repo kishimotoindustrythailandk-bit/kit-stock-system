@@ -38,18 +38,35 @@ export async function POST(request: Request) {
     if (!currentValid) return Response.json({ error: "PIN เดิมไม่ถูกต้อง" }, { status: 403 });
 
     const sessionId = (await cookies()).get(SESSION_COOKIE)?.value ?? "";
+    const newHash = await hashPin(newPin);
 
-    await db.batch([
-      db.prepare("UPDATE app_users SET pin_hash = ?1, must_change_pin = 0 WHERE id = ?2")
-        .bind(await hashPin(newPin), user.id),
+    // แยกเป็นคนละคำสั่งแทน batch เดียว เพื่อให้รู้ว่าพังขั้นไหนถ้ามีปัญหา
+    // และเพื่อไม่ให้การเก็บกวาดที่ไม่สำคัญทำให้การเปลี่ยน PIN ทั้งอันล้มเหลว
+    await db.prepare("UPDATE app_users SET pin_hash = ?1, must_change_pin = 0 WHERE id = ?2")
+      .bind(newHash, user.id).run();
+
+    // ตั้งแต่บรรทัดนี้ลงไปคือการเก็บกวาด PIN ใหม่ถูกบันทึกเรียบร้อยแล้ว
+    // ถ้าล้มเหลวก็ไม่ควรบอกผู้ใช้ว่าเปลี่ยนไม่สำเร็จ เพราะมันสำเร็จไปแล้วจริงๆ
+    try {
       // เตะ session อื่นของบัญชีนี้ออกทั้งหมด เก็บไว้เฉพาะเครื่องที่กำลังเปลี่ยน PIN
-      db.prepare("DELETE FROM app_sessions WHERE user_id = ?1 AND id <> ?2").bind(user.id, sessionId),
-      db.prepare("DELETE FROM app_login_attempts WHERE employee_code = ?1").bind(user.employeeCode),
-    ]);
+      await db.prepare("DELETE FROM app_sessions WHERE user_id = ?1 AND id <> ?2")
+        .bind(user.id, sessionId).run();
+    } catch (error) {
+      console.error("change-pin: ล้าง session อื่นไม่สำเร็จ", error);
+    }
+    try {
+      await db.prepare("DELETE FROM app_login_attempts WHERE employee_code = ?1")
+        .bind(user.employeeCode).run();
+    } catch (error) {
+      console.error("change-pin: ล้างตัวนับ login ไม่สำเร็จ", error);
+    }
 
     return Response.json({ ok: true });
   } catch (error) {
     console.error("change-pin failed", error);
-    return Response.json({ error: "เปลี่ยน PIN ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง" }, { status: 500 });
+    // ใส่ข้อความจริงสั้นๆ ต่อท้ายเพื่อให้หน้างานอ่านออกและแจ้งได้ตรงจุด
+    // ไม่มีข้อมูลผู้ใช้หรือ PIN อยู่ในข้อความเหล่านี้
+    const hint = error instanceof Error ? error.message.slice(0, 160) : String(error).slice(0, 160);
+    return Response.json({ error: `เปลี่ยน PIN ไม่สำเร็จ (${hint})` }, { status: 500 });
   }
 }
