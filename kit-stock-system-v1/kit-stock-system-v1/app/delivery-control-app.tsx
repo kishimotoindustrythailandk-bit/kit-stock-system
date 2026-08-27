@@ -307,6 +307,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [bulkImageRunning, setBulkImageRunning] = useState(false);
   const [bulkImageProgress, setBulkImageProgress] = useState({ done: 0, total: 0 });
   const [bulkImageFailed, setBulkImageFailed] = useState<Array<{ name: string; reason: string }>>([]);
+  const [partImageNeedle, setPartImageNeedle] = useState("");
   const [deletingImportId, setDeletingImportId] = useState<number | null>(null);
   const [stock, setStock] = useState<StockPayload>({ parts: [], tags: [], allocations: [], picks: [], dispatchLinks: [] });
   const [stockLoading, setStockLoading] = useState(false);
@@ -1510,6 +1511,13 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }
 
   function renderSettings() {
+    // ตัวแปรธรรมดา ไม่ใช่ useMemo เพราะ renderSettings() เป็นฟังก์ชันที่ถูกเรียก
+    // แบบมีเงื่อนไข ไม่ใช่คอมโพเนนต์ การเรียก hook ในนี้จะผิดกฎ Hooks
+    const imageNeedle = partImageNeedle.trim().toLowerCase();
+    const visiblePartImages = imageNeedle
+      ? partImages.filter((item) => [item.materialCode, item.materialDescription, item.originalName, item.updatedByName]
+          .some((value) => String(value || "").toLowerCase().includes(imageNeedle)))
+      : partImages;
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <>
       <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.8.14</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
@@ -1547,7 +1555,26 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <b>ไฟล์ที่อัปโหลดไม่สำเร็จ</b>
           <ul>{bulkImageFailed.map((item) => <li key={item.name}><code>{item.name}</code><small>{item.reason}</small></li>)}</ul>
         </div>}
-        {partImagesLoading ? <div className="inline-loading">กำลังโหลดรูปชิ้นงาน…</div> : partImages.length ? <div className="part-image-list">{partImages.map((item) => <article key={item.materialCode}><PartImage materialCode={item.materialCode} compact /><div><b>{item.materialCode}</b><p>{item.materialDescription || item.originalName}</p><small>แก้ไขโดย {item.updatedByName || "Admin"} · {formatDateTime(item.updatedAt)}</small></div><button className="tiny-button danger-outline" onClick={() => void deletePartImage(item.materialCode)}>ลบรูป</button></article>)}</div> : <Empty title="ยังไม่มีรูปชิ้นงาน" text="เลือก Material Code และอัปโหลดรูป รูปจะแสดงทันทีหลังสแกน Tag" />}
+        {partImages.length > 0 && <div className="part-image-toolbar">
+          <input
+            className="part-image-search"
+            value={partImageNeedle}
+            onChange={(e) => setPartImageNeedle(e.target.value)}
+            placeholder="ค้นหารูปด้วย Part No., ชื่อชิ้นงาน หรือชื่อไฟล์"
+            autoComplete="off"
+          />
+          {partImageNeedle && <button type="button" className="tiny-button" onClick={() => setPartImageNeedle("")}>ล้างคำค้น</button>}
+          <small>{partImageNeedle
+            ? `พบ ${fmt(visiblePartImages.length)} จาก ${fmt(partImages.length)} รูป`
+            : `ทั้งหมด ${fmt(partImages.length)} รูป`}</small>
+        </div>}
+        {partImagesLoading
+          ? <div className="inline-loading">กำลังโหลดรูปชิ้นงาน…</div>
+          : !partImages.length
+            ? <Empty title="ยังไม่มีรูปชิ้นงาน" text="เลือก Material Code และอัปโหลดรูป รูปจะแสดงทันทีหลังสแกน Tag" />
+            : !visiblePartImages.length
+              ? <Empty title="ไม่พบรูปที่ค้นหา" text="ลองเปลี่ยนคำค้น หรือกดล้างคำค้นเพื่อดูทั้งหมด" />
+              : <div className="part-image-list scrollable">{visiblePartImages.map((item) => <article key={item.materialCode}><PartImage materialCode={item.materialCode} compact /><div><b>{item.materialCode}</b><p>{item.materialDescription || item.originalName}</p><small>แก้ไขโดย {item.updatedByName || "Admin"} · {formatDateTime(item.updatedAt)}</small></div><button className="tiny-button danger-outline" onClick={() => void deletePartImage(item.materialCode)}>ลบรูป</button></article>)}</div>}
       </Card>
       <div className="settings-grid"><Card title="ตั้งค่าการตัดยอด"><Toggle keyName="partial" title="อนุญาตให้ตัดยอดบางส่วน" text="Tag หนึ่งใบสามารถตัดยอดไม่ครบ Due ได้" /><Toggle keyName="confirm" title="ยืนยันก่อนตัดยอดทุกครั้ง" text="แสดงยอดก่อนและหลังให้ตรวจสอบก่อนบันทึก" /></Card><Card title="ตั้งค่าการสแกน"><Toggle keyName="autoFocus" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" title="เสียงแจ้งเตือนเมื่อสำเร็จ" text="เปิดเสียงยืนยันหลังตัดยอดเรียบร้อย" /></Card></div>
       <Card title="รูปแบบการแสดงผล"><div className="form-grid"><label><span>ภาษา</span><select><option>ภาษาไทย</option></select></label><label><span>เขตเวลา</span><select><option>(GMT+07:00) Bangkok, Thailand</option></select></label><label><span>รูปแบบวันที่</span><select><option>DD/MM/YYYY</option></select></label><label><span>หน่วยเริ่มต้น</span><select><option>ชิ้น (PC)</option></select></label></div><div className="save-row"><button className="button primary" onClick={saveSettings}>▣ บันทึกการตั้งค่า</button></div></Card>
