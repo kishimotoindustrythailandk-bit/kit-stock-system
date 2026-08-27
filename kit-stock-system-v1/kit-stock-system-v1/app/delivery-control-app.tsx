@@ -303,6 +303,10 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [partImageCode, setPartImageCode] = useState("");
   const [partImageFile, setPartImageFile] = useState<File | null>(null);
   const [partImageSaving, setPartImageSaving] = useState(false);
+  const [bulkImageFiles, setBulkImageFiles] = useState<File[]>([]);
+  const [bulkImageRunning, setBulkImageRunning] = useState(false);
+  const [bulkImageProgress, setBulkImageProgress] = useState({ done: 0, total: 0 });
+  const [bulkImageFailed, setBulkImageFailed] = useState<Array<{ name: string; reason: string }>>([]);
   const [deletingImportId, setDeletingImportId] = useState<number | null>(null);
   const [stock, setStock] = useState<StockPayload>({ parts: [], tags: [], allocations: [], picks: [], dispatchLinks: [] });
   const [stockLoading, setStockLoading] = useState(false);
@@ -435,6 +439,63 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     } finally {
       setPartImageSaving(false);
     }
+  }
+
+  /**
+   * แปลงชื่อไฟล์เป็น Material Code
+   *
+   * ตัดนามสกุลออก ตัดเลขสำเนาแบบ " (1)" ที่ Windows เติมให้เวลาชื่อซ้ำ
+   * แล้วแปลงเป็นตัวพิมพ์ใหญ่ ให้ตรงกับที่ระบบเก็บ Part No.
+   */
+  function materialCodeFromFileName(name: string) {
+    return name
+      .replace(/\.[^.]+$/, "")
+      .replace(/\s*\(\d+\)\s*$/, "")
+      .trim()
+      .toUpperCase();
+  }
+
+  /**
+   * อัปโหลดรูปหลายไฟล์ในคราวเดียว โดยใช้ชื่อไฟล์เป็น Material Code
+   *
+   * ส่งทีละไฟล์ผ่าน API เดิม ไม่ได้เพิ่มเส้นทางใหม่ที่ฝั่ง server
+   * ส่งทีละไฟล์เพื่อไม่ให้ยิงพร้อมกันจนโดนจำกัด และเพื่อให้รู้ว่าไฟล์ไหนล้มเหลว
+   */
+  async function uploadPartImagesBulk(event: FormEvent) {
+    event.preventDefault();
+    if (!bulkImageFiles.length) return;
+    setBulkImageRunning(true);
+    setNotice(null);
+    setBulkImageFailed([]);
+    setBulkImageProgress({ done: 0, total: bulkImageFiles.length });
+
+    const failed: Array<{ name: string; reason: string }> = [];
+    let saved = 0;
+
+    for (const [index, file] of bulkImageFiles.entries()) {
+      const materialCode = materialCodeFromFileName(file.name);
+      try {
+        if (!materialCode) throw new Error("ชื่อไฟล์ว่าง ตั้งชื่อไฟล์ให้ตรงกับ Part No.");
+        const form = new FormData();
+        form.set("materialCode", materialCode);
+        form.set("image", file);
+        const response = await fetch("/api/part-images", { method: "POST", body: form });
+        const data = await response.json() as { error?: string };
+        if (!response.ok) throw new Error(data.error || "อัปโหลดไม่สำเร็จ");
+        saved += 1;
+      } catch (caught) {
+        failed.push({ name: file.name, reason: caught instanceof Error ? caught.message : "อัปโหลดไม่สำเร็จ" });
+      }
+      setBulkImageProgress({ done: index + 1, total: bulkImageFiles.length });
+    }
+
+    setBulkImageFailed(failed);
+    setNotice(failed.length
+      ? { type: "error", text: `อัปโหลดสำเร็จ ${fmt(saved)} รูป ไม่สำเร็จ ${fmt(failed.length)} รูป ดูรายการด้านล่าง` }
+      : { type: "success", text: `อัปโหลดรูปชิ้นงานสำเร็จทั้งหมด ${fmt(saved)} รูป` });
+    setBulkImageFiles([]);
+    setBulkImageRunning(false);
+    await loadPartImages();
   }
 
   async function deletePartImage(materialCode: string) {
@@ -1436,6 +1497,32 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <button className="button primary" disabled={partImageSaving || !partImageCode.trim() || !partImageFile}>{partImageSaving ? "กำลังอัปโหลด…" : "⇧ บันทึกรูปชิ้นงาน"}</button>
         </form>
         <p className="part-image-help">รองรับ JPG, PNG และ WebP ขนาดไม่เกิน 5 MB · หากอัปโหลด Material Code เดิม ระบบจะแทนที่รูปเก่า</p>
+
+        <form className="part-image-upload bulk" onSubmit={uploadPartImagesBulk}>
+          <label className="part-file bulk-file">
+            <span>อัปโหลดหลายรูปพร้อมกัน — ตั้งชื่อไฟล์ให้ตรงกับ Part No.</span>
+            <input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={bulkImageRunning}
+              onChange={(e) => { setBulkImageFiles([...(e.target.files || [])]); setBulkImageFailed([]); }} />
+          </label>
+          <button className="button primary" disabled={bulkImageRunning || !bulkImageFiles.length}>
+            {bulkImageRunning
+              ? `กำลังอัปโหลด ${fmt(bulkImageProgress.done)}/${fmt(bulkImageProgress.total)}…`
+              : `⇧ อัปโหลด ${bulkImageFiles.length ? fmt(bulkImageFiles.length) + " รูป" : "ทั้งหมด"}`}
+          </button>
+        </form>
+        <p className="part-image-help">
+          ตัวอย่าง ไฟล์ชื่อ <code>BK02J964G12-F.jpg</code> จะถูกบันทึกเป็นรูปของ Part <code>BK02J964G12-F</code> อัตโนมัติ
+          · ระบบตัดเลขสำเนาแบบ <code>(1)</code> ท้ายชื่อไฟล์ให้เอง · อัปโหลดทีละไฟล์ตามลำดับ ปิดหน้าจอระหว่างอัปโหลดไม่ได้
+        </p>
+        {bulkImageFiles.length > 0 && !bulkImageRunning && <div className="bulk-preview">
+          <b>จะบันทึกเป็น Part เหล่านี้</b>
+          <ul>{bulkImageFiles.slice(0, 12).map((file) => <li key={file.name}><code>{materialCodeFromFileName(file.name)}</code><small>{file.name}</small></li>)}</ul>
+          {bulkImageFiles.length > 12 && <small>และอีก {fmt(bulkImageFiles.length - 12)} ไฟล์</small>}
+        </div>}
+        {bulkImageFailed.length > 0 && <div className="bulk-preview failed">
+          <b>ไฟล์ที่อัปโหลดไม่สำเร็จ</b>
+          <ul>{bulkImageFailed.map((item) => <li key={item.name}><code>{item.name}</code><small>{item.reason}</small></li>)}</ul>
+        </div>}
         {partImagesLoading ? <div className="inline-loading">กำลังโหลดรูปชิ้นงาน…</div> : partImages.length ? <div className="part-image-list">{partImages.map((item) => <article key={item.materialCode}><PartImage materialCode={item.materialCode} compact /><div><b>{item.materialCode}</b><p>{item.materialDescription || item.originalName}</p><small>แก้ไขโดย {item.updatedByName || "Admin"} · {formatDateTime(item.updatedAt)}</small></div><button className="tiny-button danger-outline" onClick={() => void deletePartImage(item.materialCode)}>ลบรูป</button></article>)}</div> : <Empty title="ยังไม่มีรูปชิ้นงาน" text="เลือก Material Code และอัปโหลดรูป รูปจะแสดงทันทีหลังสแกน Tag" />}
       </Card>
       <div className="settings-grid"><Card title="ตั้งค่าการตัดยอด"><Toggle keyName="partial" title="อนุญาตให้ตัดยอดบางส่วน" text="Tag หนึ่งใบสามารถตัดยอดไม่ครบ Due ได้" /><Toggle keyName="confirm" title="ยืนยันก่อนตัดยอดทุกครั้ง" text="แสดงยอดก่อนและหลังให้ตรวจสอบก่อนบันทึก" /></Card><Card title="ตั้งค่าการสแกน"><Toggle keyName="autoFocus" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" title="เสียงแจ้งเตือนเมื่อสำเร็จ" text="เปิดเสียงยืนยันหลังตัดยอดเรียบร้อย" /></Card></div>

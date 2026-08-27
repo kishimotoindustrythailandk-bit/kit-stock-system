@@ -625,3 +625,16 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
   .selected-due-strip > strong { grid-column: 1 / -1; padding-top: 7px; border-top: 1px solid #e6edf6; text-align: right; }
   .linked-stock-tags { display: grid; }
 }
+
+/* v2.9.4 — อัปโหลดรูปชิ้นงานหลายไฟล์พร้อมกัน */
+.part-image-upload.bulk { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--line, #dbe3ed); }
+.part-image-upload.bulk .bulk-file { grid-column: 1 / -1; }
+.bulk-preview { margin-top: 10px; padding: 12px 14px; border: 1px solid #dbe5f2; border-left: 3px solid #075fd7; border-radius: 8px; background: #f6faff; }
+.bulk-preview.failed { border-color: #f0c5cb; border-left-color: #b92f42; background: #fff5f6; }
+.bulk-preview b { display: block; font-size: 12px; margin-bottom: 8px; color: #123765; }
+.bulk-preview.failed b { color: #b92f42; }
+.bulk-preview ul { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.bulk-preview li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font-size: 12px; }
+.bulk-preview li code { font-weight: 700; color: #123765; }
+.bulk-preview.failed li code { color: #b92f42; }
+.bulk-preview li small { color: #718096; }
