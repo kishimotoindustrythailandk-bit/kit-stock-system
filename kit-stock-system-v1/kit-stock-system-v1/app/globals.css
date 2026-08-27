@@ -638,3 +638,10 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .bulk-preview li code { font-weight: 700; color: #123765; }
 .bulk-preview.failed li code { color: #b92f42; }
 .bulk-preview li small { color: #718096; }
+
+/* v2.9.4 — ช่องเลือก Part แบบพิมพ์ค้นหาได้ */
+.stock-part-picked { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; margin-top: -4px; padding: 9px 12px; border-radius: 8px; background: #eef5ff; border: 1px solid #cfe0f8; }
+.stock-part-picked b { font-size: 13px; color: #0b3f8f; }
+.stock-part-picked span { font-size: 12px; color: #46566b; }
+.stock-rule-note.warn { border-color: #f0d8b0; background: #fdf6e9; }
+.stock-rule-note.warn b { color: #97590a; }

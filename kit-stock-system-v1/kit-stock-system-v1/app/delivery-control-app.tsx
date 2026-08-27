@@ -1296,6 +1296,12 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       latestAt: string;
     }>()).values()).sort((a, b) => b.latestAt.localeCompare(a.latestAt));
     const selectedStockPart = stock.parts.find((item) => item.materialCode === stockTagForm.materialCode);
+    // ห้ามใช้ useMemo ตรงนี้ renderTags() เป็นฟังก์ชันธรรมดาที่ถูกเรียกแบบมีเงื่อนไข
+    // ไม่ใช่คอมโพเนนต์ การเรียก hook ในนี้จะผิดกฎ Hooks และพังตอนรัน
+    // filter() คืนอาเรย์ใหม่อยู่แล้ว การ sort จึงไม่กระทบ stock.parts ตัวจริง
+    const activeStockParts = stock.parts
+      .filter((item) => item.active)
+      .sort((a, b) => a.materialCode.localeCompare(b.materialCode));
     const plannedTotalQty = Number(stockTagForm.qty || 0);
     const plannedBoxCount = selectedStockPart?.standardQty && plannedTotalQty > 0
       ? Math.ceil(plannedTotalQty / selectedStockPart.standardQty)
@@ -1329,9 +1335,27 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       </Card>}
       <Card title="2. สร้างและพิมพ์ Tag ก่อนส่งเข้า Stock">
           <form className="stock-tag-form" onSubmit={createStockTag}>
-            <label><span>เลือก Part *</span><select value={stockTagForm.materialCode} onChange={(e) => {
-              setStockTagForm((current) => ({ ...current, materialCode: e.target.value, qty: "" }));
-            }} required><option value="">— เลือก Part —</option>{stock.parts.filter((item) => item.active).map((item) => <option key={item.materialCode} value={item.materialCode}>{item.materialCode} · {item.partName}</option>)}</select></label>
+            <label><span>เลือก Part *</span><input
+              list="stock-part-codes"
+              value={stockTagForm.materialCode}
+              onChange={(e) => {
+                // เก็บเป็นตัวพิมพ์ใหญ่เสมอ ให้ตรงกับที่ระบบเก็บ Part No. ไว้
+                setStockTagForm((current) => ({ ...current, materialCode: e.target.value.toUpperCase(), qty: "" }));
+              }}
+              placeholder="พิมพ์ Part No. หรือกดลูกศรเพื่อเลือกจากรายการ"
+              autoComplete="off"
+              spellCheck={false}
+              required
+            /></label>
+            <datalist id="stock-part-codes">{activeStockParts.map((item) => <option key={item.materialCode} value={item.materialCode}>{item.partName}{item.customer ? ` · ${item.customer}` : ""}</option>)}</datalist>
+            {stockTagForm.materialCode && !selectedStockPart && <div className="stock-rule-note warn">
+              <b>ยังไม่พบ Part นี้ในทะเบียน</b>
+              <p>พิมพ์ต่อให้ครบ หรือเลือกจากรายการที่ขึ้นมา · มี Part ในทะเบียนทั้งหมด {fmt(activeStockParts.length)} รายการ</p>
+            </div>}
+            {selectedStockPart && <div className="stock-part-picked">
+              <b>{selectedStockPart.materialCode}</b>
+              <span>{selectedStockPart.partName}{selectedStockPart.customer ? ` · ${selectedStockPart.customer}` : ""}</span>
+            </div>}
             <div className="two-fields"><label><span>จำนวนงานรวมของ Job *</span><input type="number" min="1" value={stockTagForm.qty} onChange={(e) => setStockTagForm((current) => ({ ...current, qty: e.target.value }))} required /></label><label><span>Job *</span><input value={stockTagForm.jobNo} onChange={(e) => setStockTagForm((current) => ({ ...current, jobNo: e.target.value.toUpperCase() }))} required /></label></div>
             <label><span>วันที่ผลิต *</span><input type="date" value={stockTagForm.productionDate} onChange={(e) => setStockTagForm((current) => ({ ...current, productionDate: e.target.value }))} required /></label>
             {selectedStockPart && selectedStockPart.standardQty > 0 && plannedBoxCount > 0 && <div className="stock-rule-note"><b>ระบบจะสร้าง {fmt(plannedBoxCount)} Tag</b><p>บรรจุได้สูงสุด {fmt(selectedStockPart.standardQty)} ชิ้น/กล่อง · กล่องสุดท้าย {fmt(plannedTotalQty - (selectedStockPart.standardQty * (plannedBoxCount - 1)))} ชิ้น</p></div>}
