@@ -58,8 +58,22 @@ export async function GET(request: Request) {
     const headers = new Headers();
     object.writeHttpMetadata(headers);
     headers.set("content-type", row.contentType || headers.get("content-type") || "image/jpeg");
-    headers.set("cache-control", "private, max-age=300");
+    // URL ของรูปอ้างด้วย materialCode จึงไม่เปลี่ยนเลยเวลาอัปโหลดรูปใหม่ทับ
+    // เดิมตั้ง max-age=300 เบราว์เซอร์จึงใช้รูปเก่าในแคชต่ออีก 5 นาทีโดยไม่ถามเซิร์ฟเวอร์
+    // ผู้ใช้เห็นว่า "อัปโหลดสำเร็จแต่รูปไม่เปลี่ยน" ทั้งที่ระบบบันทึกถูกต้องแล้ว
+    //
+    // no-cache ไม่ได้แปลว่าห้ามแคช แต่แปลว่าต้องถามเซิร์ฟเวอร์ก่อนใช้ทุกครั้ง
+    // ถ้ารูปไม่เปลี่ยน etag จะตรงกันและได้ 304 กลับมา ไม่ต้องโหลดไฟล์ใหม่
+    headers.set("cache-control", "private, no-cache");
     headers.set("etag", object.httpEtag);
+
+    // no-cache สั่งให้เบราว์เซอร์ถามทุกครั้ง ถ้าไม่ตอบ 304 ให้ด้วยก็จะกลายเป็น
+    // โหลดไฟล์เต็มทุกครั้ง เปลืองเน็ตมากบนมือถือหน้างานที่เปิดรูปบ่อย
+    const cachedTag = request.headers.get("if-none-match");
+    if (cachedTag && cachedTag.split(",").some((tag) => tag.trim().replace(/^W\//, "") === object.httpEtag)) {
+      return new Response(null, { status: 304, headers });
+    }
+
     return new Response(object.body, { headers });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "โหลดรูปชิ้นงานไม่สำเร็จ" }, { status: 500 });

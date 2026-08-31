@@ -251,10 +251,18 @@ function Empty({ title = "ยังไม่มีข้อมูล", text = "�
   return <div className="empty"><span>▦</span><strong>{title}</strong><p>{text}</p></div>;
 }
 
-function PartImage({ materialCode, compact = false }: { materialCode: string; compact?: boolean }) {
+/**
+ * รูปชิ้นงาน
+ *
+ * version คือเวลาที่รูปถูกแก้ไขล่าสุด ใส่ต่อท้าย URL เพื่อให้เบราว์เซอร์รู้ว่า
+ * เป็นคนละรูปกับที่เคยแคชไว้ มิฉะนั้นอัปโหลดรูปใหม่ทับแล้วจะยังเห็นรูปเก่า
+ * เพราะ URL เดิมอ้างด้วย materialCode อย่างเดียว
+ */
+function PartImage({ materialCode, compact = false, version }: { materialCode: string; compact?: boolean; version?: string }) {
   const [failedCode, setFailedCode] = useState("");
   if (failedCode === materialCode) return <div className={`part-photo-fallback ${compact ? "compact" : ""}`}><span>◈</span><small>ยังไม่มีรูป</small></div>;
-  return <div className={`part-photo ${compact ? "compact" : ""}`}><img src={`/api/part-images?materialCode=${encodeURIComponent(materialCode)}`} alt={`รูปชิ้นงาน ${materialCode}`} onError={() => setFailedCode(materialCode)} /></div>;
+  const source = `/api/part-images?materialCode=${encodeURIComponent(materialCode)}${version ? `&v=${encodeURIComponent(version)}` : ""}`;
+  return <div className={`part-photo ${compact ? "compact" : ""}`}><img src={source} alt={`รูปชิ้นงาน ${materialCode}`} onError={() => setFailedCode(materialCode)} /></div>;
 }
 
 export default function DeliveryControlApp({ user, signOutPath }: { user: { id: number; employeeCode: string; displayName: string; email: string; role: string; permissions: PageKey[] }; signOutPath: string }) {
@@ -1574,7 +1582,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
             ? <Empty title="ยังไม่มีรูปชิ้นงาน" text="เลือก Material Code และอัปโหลดรูป รูปจะแสดงทันทีหลังสแกน Tag" />
             : !visiblePartImages.length
               ? <Empty title="ไม่พบรูปที่ค้นหา" text="ลองเปลี่ยนคำค้น หรือกดล้างคำค้นเพื่อดูทั้งหมด" />
-              : <div className="part-image-list scrollable">{visiblePartImages.map((item) => <article key={item.materialCode}><PartImage materialCode={item.materialCode} compact /><div><b>{item.materialCode}</b><p>{item.materialDescription || item.originalName}</p><small>แก้ไขโดย {item.updatedByName || "Admin"} · {formatDateTime(item.updatedAt)}</small></div><button className="tiny-button danger-outline" onClick={() => void deletePartImage(item.materialCode)}>ลบรูป</button></article>)}</div>}
+              : <div className="part-image-list scrollable">{visiblePartImages.map((item) => <article key={item.materialCode}><PartImage materialCode={item.materialCode} compact version={item.updatedAt} /><div><b>{item.materialCode}</b><p>{item.materialDescription || item.originalName}</p><small>แก้ไขโดย {item.updatedByName || "Admin"} · {formatDateTime(item.updatedAt)}</small></div><button className="tiny-button danger-outline" onClick={() => void deletePartImage(item.materialCode)}>ลบรูป</button></article>)}</div>}
       </Card>
       <div className="settings-grid"><Card title="ตั้งค่าการตัดยอด"><Toggle keyName="partial" title="อนุญาตให้ตัดยอดบางส่วน" text="Tag หนึ่งใบสามารถตัดยอดไม่ครบ Due ได้" /><Toggle keyName="confirm" title="ยืนยันก่อนตัดยอดทุกครั้ง" text="แสดงยอดก่อนและหลังให้ตรวจสอบก่อนบันทึก" /></Card><Card title="ตั้งค่าการสแกน"><Toggle keyName="autoFocus" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" title="เสียงแจ้งเตือนเมื่อสำเร็จ" text="เปิดเสียงยืนยันหลังตัดยอดเรียบร้อย" /></Card></div>
       <Card title="รูปแบบการแสดงผล"><div className="form-grid"><label><span>ภาษา</span><select><option>ภาษาไทย</option></select></label><label><span>เขตเวลา</span><select><option>(GMT+07:00) Bangkok, Thailand</option></select></label><label><span>รูปแบบวันที่</span><select><option>DD/MM/YYYY</option></select></label><label><span>หน่วยเริ่มต้น</span><select><option>ชิ้น (PC)</option></select></label></div><div className="save-row"><button className="button primary" onClick={saveSettings}>▣ บันทึกการตั้งค่า</button></div></Card>
