@@ -207,6 +207,30 @@ function formatDateTime(value: string) {
   return new Intl.DateTimeFormat("th-TH", { dateStyle: "short", timeStyle: "short" }).format(date);
 }
 
+/** แปลงเวลาจากฐานข้อมูล (UTC ไม่มีโซนต่อท้าย) เป็น Date ตามเวลาเครื่องผู้ใช้ */
+function toLocalDate(value: string) {
+  if (!value) return null;
+  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatTime(value: string) {
+  const date = toLocalDate(value);
+  if (!date) return "—";
+  return new Intl.DateTimeFormat("th-TH", { hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
+/** วันนี้ตามเวลาเครื่องผู้ใช้ ไม่ใช่ UTC มิฉะนั้นยอดตอนเย็นจะข้ามวันผิด */
+function isToday(value: string) {
+  const date = toLocalDate(value);
+  if (!date) return false;
+  const now = new Date();
+  return date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate();
+}
+
 function html(value: unknown) {
   return String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character] || character);
 }
@@ -1230,29 +1254,138 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   };
 
   function renderDashboard() {
-    return <>
+    // renderDashboard() เป็นฟังก์ชันธรรมดาที่ถูกเรียกแบบมีเงื่อนไข ห้ามใช้ hook ในนี้
+    const remainingItems = summary.partial + summary.pending;
+    const share = (value: number) => (summary.items ? Math.round((value / summary.items) * 1000) / 10 : 0);
+
+    // สามสถานะนี้เป็นสี "สถานะ" ไม่ใช่สีแยกชุดข้อมูล เขียว/ส้ม/แดงจึงสื่อความหมายตรงตัว
+    // ผ่านการตรวจค่าความต่างสำหรับผู้มีภาวะตาบอดสีแล้ว (ค่าต่างต่ำสุด 18.3)
+    const segments = [
+      { key: "completed", label: "ส่งออกครบ", value: summary.completed, className: "ok" },
+      { key: "remaining", label: "ค้างเหลือ", value: remainingItems, className: "warn" },
+      { key: "over", label: "เกิน Due", value: summary.over, className: "crit" },
+    ].filter((item) => item.value > 0);
+
+    // โดนัทวาดด้วย SVG เส้นรอบวง 2πr โดย r = 54
+    const CIRCUMFERENCE = 2 * Math.PI * 54;
+    const GAP = segments.length > 1 ? 3 : 0;
+    let offset = 0;
+    const arcs = segments.map((item) => {
+      const length = summary.items ? (item.value / summary.items) * CIRCUMFERENCE : 0;
+      const arc = { ...item, length: Math.max(length - GAP, 0.5), offset };
+      offset += length;
+      return arc;
+    });
+
+    const pendingDues = filtered
+      .filter((due) => ["partial", "pending"].includes(stateOf(due)))
+      .slice()
+      .sort((a, b) => a.deliveryDate.localeCompare(b.deliveryDate) || a.deliveryTime.localeCompare(b.deliveryTime))
+      .slice(0, 5);
+
+    // ป้ายวันที่สื่อความเร่งด่วนจริง ไม่ใช่แค่สถานะ pending/partial
+    // เทียบด้วยสตริง YYYY-MM-DD ตามเวลาเครื่องผู้ใช้ จึงไม่มีปัญหาข้ามวันจาก UTC
+    const todayKey = (() => {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    })();
+    const soonKey = (() => {
+      const soon = new Date();
+      soon.setDate(soon.getDate() + 2);
+      return `${soon.getFullYear()}-${String(soon.getMonth() + 1).padStart(2, "0")}-${String(soon.getDate()).padStart(2, "0")}`;
+    })();
+    const urgency = (deliveryDate: string) => {
+      if (!deliveryDate) return "";
+      if (deliveryDate <= todayKey) return "hot";
+      if (deliveryDate <= soonKey) return "soon";
+      return "";
+    };
+
+    const scannedToday = payload.scans.filter((scan) => isToday(scan.createdAt));
+    const plannedPieces = payload.dues.reduce((sum, due) => sum + Number(due.reqQty || 0), 0);
+
+    return <div className="home">
       <section className="hero">
-        <div className="hero-copy"><span>DELIVERY DUE CONTROL</span><h2>แผนส่งงานและตัดยอด<br />ด้วย QR Tag</h2><p>นำเข้า Excel ของลูกค้า ตรวจ Due และสแกน Tag เพื่อตัดยอดแบบทันที</p><button className="button white" onClick={() => go("plan")}>⇧ นำเข้าแผนส่งงาน Excel</button></div>
+        <div className="hero-copy">
+          <span>DELIVERY DUE CONTROL</span>
+          <h2>แผนส่งงานและตัดยอด<br />ด้วย <em>QR Tag</em></h2>
+          <p>นำเข้า Excel ของลูกค้า ตรวจ Due และสแกน Tag เพื่อตัดยอดแบบทันที</p>
+          <button className="button white" onClick={() => go("plan")}>⇧ นำเข้าแผนส่งงาน Excel</button>
+        </div>
         <div className="hero-art" role="img" aria-label="รถส่งสินค้าและกล่อง QR"><img src="/kit-due-hero.png" alt="" /></div>
       </section>
-      <div className="metrics four">
-        <MetricCard tone="blue" icon="▤" label="Due ทั้งหมด" value={fmt(summary.items)} suffix="รายการ" />
-        <MetricCard tone="green" icon="✓" label="ส่งออกแล้ว" value={fmt(summary.completed)} suffix="รายการ" note={`${completePct}%`} />
-        <MetricCard tone="orange" icon="◷" label="ยังขาด" value={fmt(summary.partial + summary.pending)} suffix="รายการ" />
-        <MetricCard tone="red" icon="!" label="ผิดปกติ" value={fmt(summary.over)} suffix="รายการ" />
+
+      <div className="stat-row">
+        <article className="stat-tile blue"><span className="stat-icon">▤</span><div><small>Due ทั้งหมด</small><b>{fmt(summary.items)}</b><em>รายการ</em></div></article>
+        <article className="stat-tile green"><span className="stat-icon">✓</span><div><small>ส่งออกแล้ว</small><b>{fmt(summary.completed)}</b><em>รายการ · {share(summary.completed)}%</em></div></article>
+        <article className="stat-tile orange"><span className="stat-icon">◷</span><div><small>ค้างตัดยอด</small><b>{fmt(remainingItems)}</b><em>รายการ</em></div></article>
+        <article className="stat-tile red"><span className="stat-icon">!</span><div><small>เกิน Due</small><b>{fmt(summary.over)}</b><em>รายการ</em></div></article>
       </div>
-      <div className="dashboard-grid">
-        <Card title="สถานะส่งงานตาม Due">
-          <div className="donut-layout"><div className="donut" style={{ "--complete": `${completePct * 3.6}deg` } as React.CSSProperties}><span><b>{summary.items}</b>รายการ</span></div><div className="legend"><p><i className="green" />ส่งออกครบ <b>{summary.completed}</b></p><p><i className="orange" />คงเหลือ <b>{summary.partial + summary.pending}</b></p><p><i className="red" />เกิน Due <b>{summary.over}</b></p></div></div>
+
+      <div className="home-grid">
+        <Card title="สถานะส่งงานตาม Due" className="chart-card">
+          {summary.items ? <>
+            <div className="chart-body">
+            <div className="donut-wrap">
+              <svg viewBox="0 0 120 120" className="donut-svg" role="img" aria-label={`ส่งออกครบ ${summary.completed} ค้างเหลือ ${remainingItems} เกิน Due ${summary.over} จากทั้งหมด ${summary.items} รายการ`}>
+                <circle className="donut-track" cx="60" cy="60" r="54" />
+                {arcs.map((arc) => <circle
+                  key={arc.key}
+                  className={`donut-arc ${arc.className}`}
+                  cx="60" cy="60" r="54"
+                  strokeDasharray={`${arc.length} ${CIRCUMFERENCE - arc.length}`}
+                  strokeDashoffset={-arc.offset}
+                ><title>{arc.label} {fmt(arc.value)} รายการ ({share(arc.value)}%)</title></circle>)}
+              </svg>
+              <div className="donut-center"><b>{fmt(summary.items)}</b><small>รายการ</small></div>
+            </div>
+            <ul className="donut-legend">
+              <li><i className="ok" /><span>ส่งออกครบ</span><b>{fmt(summary.completed)}</b><em>{share(summary.completed)}%</em></li>
+              <li><i className="warn" /><span>ค้างเหลือ</span><b>{fmt(remainingItems)}</b><em>{share(remainingItems)}%</em></li>
+              <li><i className="crit" /><span>เกิน Due</span><b>{fmt(summary.over)}</b><em>{share(summary.over)}%</em></li>
+            </ul>
+            </div>
+            <footer className="chart-foot">
+              <small>อัปเดตล่าสุด {formatDateTime(new Date().toISOString())}</small>
+              <button className="tiny-button" onClick={() => void loadDue()}>↻ รีเฟรช</button>
+            </footer>
+          </> : <Empty title="ยังไม่มีข้อมูล Due" text="นำเข้าแผนส่งงานเพื่อเริ่มดูภาพรวม" />}
         </Card>
-        <Card title="อัปเดตล่าสุด" action={<button className="text-button" onClick={() => go("history")}>ดูทั้งหมด →</button>}>
-          {payload.scans.length ? <div className="activity-list">{payload.scans.slice(0, 5).map((scan) => <button key={scan.id} onClick={() => { setSelectedScan(scan); go("history"); }}><span className="activity-icon">✓</span><div><b>{scan.fact} / {scan.materialCode}</b><small>Tag {scan.tagId} · {fmt(scan.qty)} {scan.unit}</small></div><time>{formatDateTime(scan.createdAt)}</time></button>)}</div> : <Empty text="รายการสแกนล่าสุดจะแสดงที่นี่" />}
+
+        <Card title="Due ที่ค้างตัดยอด (รายการล่าสุด)" action={<button className="text-button" onClick={() => go("plan")}>ดูทั้งหมด →</button>}>
+          {pendingDues.length ? <div className="pending-list">{pendingDues.map((due) => <button key={due.id} className="pending-row" onClick={() => go("plan")}>
+            <span className={`date-pill ${urgency(due.deliveryDate)}`}>{formatDate(due.deliveryDate)}</span>
+            <span className="pending-main"><b>{due.materialCode}</b><small>{due.materialDescription || `${due.fact}${due.line ? ` / ${due.line}` : ""}`}</small></span>
+            <span className="pending-qty">{fmt(Math.max(Number(due.reqQty) - Number(due.scannedQty), 0))}</span>
+          </button>)}</div> : <Empty title="ไม่มี Due ค้าง" text="ทุกรายการตามตัวกรองปัจจุบันตัดยอดครบแล้ว" />}
         </Card>
+
+        <div className="home-side">
+          <Card title="เมนูด่วน">
+            <div className="quick-tiles">
+              <button className="qt blue" onClick={() => go("plan")}><span>⇧</span>นำเข้าแผนงาน</button>
+              <button className="qt purple" onClick={() => go("tags")}><span>▤</span>สร้างและพิมพ์ Tag</button>
+              <button className="qt green" onClick={() => go("stock")}><span>▦</span>รับเข้า Stock</button>
+              <button className="qt orange" onClick={() => go(user.role === "inspector" ? "dispatch" : "arrange")}><span>⌗</span>{user.role === "inspector" ? "ตรวจและขายออก" : "จัดงาน"}</button>
+            </div>
+          </Card>
+          <Card title="อัปเดตล่าสุด" action={<button className="text-button" onClick={() => go("history")}>ดูทั้งหมด →</button>}>
+            {payload.scans.length ? <ol className="feed">{payload.scans.slice(0, 5).map((scan) => <li key={scan.id}>
+              <time>{formatTime(scan.createdAt)}</time>
+              <i className="feed-dot ok" />
+              <div><b>สแกน Tag {scan.tagId}</b><small>{scan.fact} · {scan.materialCode} · {fmt(scan.qty)} {scan.unit}</small></div>
+            </li>)}</ol> : <Empty title="ยังไม่มีความเคลื่อนไหว" text="รายการสแกนล่าสุดจะแสดงที่นี่" />}
+          </Card>
+        </div>
       </div>
-      <Card title="เมนูด่วน" className="quick-panel"><div className="quick-actions"><button onClick={() => go("plan")}><span>⇧</span>นำเข้าแผนงาน</button><button onClick={() => go("tags")}><span>▤</span>สร้างและพิมพ์ Tag</button><button onClick={() => go("stock")}><span>▦</span>รับเข้า Stock</button><button onClick={() => go(user.role === "inspector" ? "dispatch" : "arrange")}><span>⌗</span>{user.role === "inspector" ? "ตรวจและขายออก" : "จัดงาน"}</button></div></Card>
-      <Card title="Due ที่ยังขาด (รายการล่าสุด)" action={<button className="text-button" onClick={() => go("plan")}>ดูทั้งหมด →</button>}><DueTable rows={filtered.filter((due) => ["partial", "pending"].includes(stateOf(due)))} limit={5} /></Card>
-      <div className="summary-strip"><div><span>▣</span><small>วันที่มีแผนส่งงาน</small><b>{dates.length}</b></div><div><span>▥</span><small>FAC ทั้งหมด</small><b>{facts.length}</b></div><div><span>◈</span><small>รายการทั้งหมด</small><b>{fmt(payload.dues.length)}</b></div><div><span>□</span><small>ชิ้นงานตามแผน</small><b>{fmt(payload.dues.reduce((sum, due) => sum + due.reqQty, 0))}</b></div></div>
-    </>;
+
+      <div className="stat-row bottom">
+        <article className="stat-tile blue"><span className="stat-icon">▣</span><div><small>สแกนแล้ววันนี้</small><b>{fmt(scannedToday.length)}</b><em>รายการ</em></div></article>
+        <article className="stat-tile purple"><span className="stat-icon">▥</span><div><small>FAC ทั้งหมด</small><b>{fmt(facts.length)}</b><em>โรงงาน</em></div></article>
+        <article className="stat-tile teal"><span className="stat-icon">◈</span><div><small>รายการทั้งหมด</small><b>{fmt(payload.dues.length)}</b><em>รายการ</em></div></article>
+        <article className="stat-tile amber"><span className="stat-icon">□</span><div><small>ชิ้นงานตามแผน</small><b>{fmt(plannedPieces)}</b><em>ชิ้น</em></div></article>
+      </div>
+    </div>;
   }
 
   function renderTags() {
@@ -1528,7 +1661,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       : partImages;
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <>
-      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.8.14</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
+      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.9.7</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
       <Card title="รูปชิ้นงานสำหรับหน้าสแกน" action={<button className="button secondary" onClick={() => void loadPartImages()}>↻ รีเฟรช</button>}>
         <form className="part-image-upload" onSubmit={uploadPartImage}>
           <label><span>Material / Part No. *</span><input list="part-material-codes" value={partImageCode} onChange={(e) => setPartImageCode(e.target.value.toUpperCase())} placeholder="เช่น ABC-1234" required /></label>
@@ -1631,7 +1764,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
       <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.8.14</span></div></div>
+      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.9.7</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">

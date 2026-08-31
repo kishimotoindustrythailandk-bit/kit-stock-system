@@ -653,3 +653,124 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .part-image-toolbar small { color: #718096; font-size: 11px; white-space: nowrap; }
 .part-image-list.scrollable { max-height: 460px; overflow-y: auto; padding: 2px 8px 2px 2px; }
 @media (max-width: 520px) { .part-image-list.scrollable { max-height: 380px; } }
+
+/* ============================================================
+   v2.9.7 — หน้าหลักโฉมใหม่
+   สีสถานะสามสีผ่านการตรวจค่าความต่างสำหรับผู้มีภาวะตาบอดสีแล้ว
+   (ค่าต่างต่ำสุด 18.3 · ปกติ 23.9) และทุกส่วนมีตัวเลขกำกับ ไม่ได้สื่อด้วยสีอย่างเดียว
+   ============================================================ */
+:root {
+  --viz-ok: #117A4E;
+  --viz-warn: #EA9A12;
+  --viz-crit: #C9312F;
+}
+
+.home { display: flex; flex-direction: column; gap: 18px; }
+
+/* ---- แถบหัวเรื่อง ---- */
+.home .hero { position: relative; overflow: hidden; border-radius: 18px; background: linear-gradient(115deg, #0b4fd0 0%, #2f6ff0 45%, #6c5ce7 100%); }
+.home .hero-copy h2 em { font-style: normal; color: #ffd76a; }
+
+/* ---- การ์ดตัวเลขสรุป ---- */
+.stat-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.stat-tile { display: flex; align-items: center; gap: 14px; padding: 16px 18px; border: 1px solid var(--line); border-radius: 16px; background: #fff; }
+.stat-tile .stat-icon { display: grid; place-items: center; flex: none; width: 52px; height: 52px; border-radius: 14px; font-size: 22px; color: #fff; }
+.stat-tile div { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.stat-tile small { font-size: 11px; color: #6b7a90; }
+.stat-tile b { font-size: 27px; font-weight: 700; line-height: 1.15; color: #12203a; font-variant-numeric: tabular-nums; }
+.stat-tile em { font-style: normal; font-size: 10.5px; color: #8290a5; }
+.stat-tile.blue { background: linear-gradient(135deg, #f2f7ff, #fff); } .stat-tile.blue .stat-icon { background: linear-gradient(135deg, #2f7bf0, #1450c8); }
+.stat-tile.green { background: linear-gradient(135deg, #f0fbf4, #fff); } .stat-tile.green .stat-icon { background: linear-gradient(135deg, #22a35f, #117A4E); }
+.stat-tile.orange { background: linear-gradient(135deg, #fff8ec, #fff); } .stat-tile.orange .stat-icon { background: linear-gradient(135deg, #f6a723, #EA9A12); }
+.stat-tile.red { background: linear-gradient(135deg, #fff2f2, #fff); } .stat-tile.red .stat-icon { background: linear-gradient(135deg, #e04a48, #C9312F); }
+.stat-tile.purple { background: linear-gradient(135deg, #f7f4ff, #fff); } .stat-tile.purple .stat-icon { background: linear-gradient(135deg, #8b6cf0, #6c4bd4); }
+.stat-tile.teal { background: linear-gradient(135deg, #effbfa, #fff); } .stat-tile.teal .stat-icon { background: linear-gradient(135deg, #23a9a0, #12817a); }
+.stat-tile.amber { background: linear-gradient(135deg, #fffaec, #fff); } .stat-tile.amber .stat-icon { background: linear-gradient(135deg, #f0b429, #d18f06); }
+
+/* ---- ผังสามคอลัมน์ ---- */
+.home-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr) minmax(0, 0.95fr); gap: 14px; }
+.home-side { display: flex; flex-direction: column; gap: 14px; }
+
+/* Card คอมโพเนนต์ render เป็น .panel ไม่ใช่ .card */
+.home-grid > .panel { height: 100%; }
+.home-side { min-width: 0; }
+.chart-card { display: flex; flex-direction: column; }
+/* จัดโดนัทกับคำอธิบายให้อยู่กลางพื้นที่ที่เหลือ ไม่ให้ลอยติดขอบบน
+   เวลาคอลัมน์ขวายืดยาวกว่า ส่วนแถบเวลาอัปเดตยึดไว้ล่างสุดเสมอ */
+.chart-body { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+
+/* ---- โดนัท ---- */
+.donut-wrap { position: relative; width: 190px; margin: 4px auto 2px; }
+.donut-svg { width: 190px; height: 190px; transform: rotate(-90deg); }
+.donut-track { fill: none; stroke: #eef2f7; stroke-width: 13; }
+.donut-arc { fill: none; stroke-width: 13; stroke-linecap: butt; transition: opacity .15s; }
+.donut-arc:hover { opacity: .78; cursor: help; }
+.donut-arc.ok { stroke: var(--viz-ok); }
+.donut-arc.warn { stroke: var(--viz-warn); }
+.donut-arc.crit { stroke: var(--viz-crit); }
+.donut-center { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; }
+.donut-center b { display: block; font-size: 34px; font-weight: 700; color: #12203a; font-variant-numeric: tabular-nums; }
+.donut-center small { color: #7c8aa0; font-size: 11px; }
+
+.donut-legend { display: flex; flex-direction: column; gap: 8px; margin: 14px 0 0; padding: 0; list-style: none; }
+.donut-legend li { display: grid; grid-template-columns: 12px 1fr auto auto; align-items: center; gap: 9px; font-size: 12.5px; color: #46566b; }
+.donut-legend i { width: 11px; height: 11px; border-radius: 3px; }
+.donut-legend i.ok { background: var(--viz-ok); }
+.donut-legend i.warn { background: var(--viz-warn); }
+.donut-legend i.crit { background: var(--viz-crit); }
+.donut-legend b { font-size: 13.5px; color: #12203a; font-variant-numeric: tabular-nums; }
+.donut-legend em { font-style: normal; min-width: 46px; text-align: right; color: #7c8aa0; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.chart-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; padding-top: 11px; border-top: 1px solid var(--line); }
+.chart-foot small { color: #8290a5; font-size: 11px; }
+
+/* ---- ตาราง Due ค้าง ---- */
+.pending-list { display: flex; flex-direction: column; }
+.pending-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; width: 100%; padding: 12px 4px; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: none; cursor: pointer; }
+.pending-row:last-child { border-bottom: 0; }
+.pending-row:hover { background: #f6faff; }
+.date-pill { padding: 4px 9px; border-radius: 7px; background: #eef4ff; color: #1450c8; font-size: 11px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.date-pill.hot { background: #fdeeee; color: var(--viz-crit); }
+.date-pill.soon { background: #fdf4e3; color: #a06a05; }
+.pending-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pending-main b { font-size: 13px; color: #12203a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pending-main small { font-size: 11px; color: #7c8aa0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pending-qty { font-size: 17px; font-weight: 700; color: var(--viz-crit); font-variant-numeric: tabular-nums; }
+
+/* ---- เมนูด่วน ---- */
+.quick-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.qt { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; min-height: 84px; padding: 12px 8px; border: 0; border-radius: 14px; color: #fff; font-size: 12px; font-weight: 600; line-height: 1.35; text-align: center; cursor: pointer; }
+.qt span { font-size: 20px; }
+.qt:hover { filter: brightness(1.06); }
+.qt.blue { background: linear-gradient(135deg, #3d86f5, #1450c8); }
+.qt.purple { background: linear-gradient(135deg, #9b7bf5, #6c4bd4); }
+.qt.green { background: linear-gradient(135deg, #2bb56c, #117A4E); }
+.qt.orange { background: linear-gradient(135deg, #f7ac33, #de8a06); }
+
+/* ---- ไทม์ไลน์ ---- */
+.feed { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.feed li { display: grid; grid-template-columns: auto 12px 1fr; align-items: start; gap: 10px; padding: 9px 2px; }
+.feed li + li { border-top: 1px solid var(--line); }
+.feed time { font-size: 11px; color: #8290a5; font-variant-numeric: tabular-nums; padding-top: 2px; }
+.feed-dot { width: 9px; height: 9px; margin-top: 5px; border-radius: 50%; }
+.feed-dot.ok { background: var(--viz-ok); }
+.feed li div { min-width: 0; }
+.feed li b { display: block; font-size: 12.5px; color: #12203a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feed li small { display: block; font-size: 11px; color: #7c8aa0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- จอเล็ก ---- */
+@media (max-width: 1180px) {
+  .home-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .home-side { grid-column: 1 / -1; flex-direction: row; }
+  .home-side > * { flex: 1; }
+}
+@media (max-width: 900px) {
+  .stat-row { grid-template-columns: 1fr 1fr; }
+  .home-grid { grid-template-columns: 1fr; }
+  .home-side { flex-direction: column; }
+}
+@media (max-width: 520px) {
+  .stat-row { grid-template-columns: 1fr; }
+  .stat-tile b { font-size: 24px; }
+  .donut-wrap, .donut-svg { width: 168px; }
+  .donut-svg { height: 168px; }
+}
