@@ -1312,7 +1312,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <p>นำเข้า Excel ของลูกค้า ตรวจ Due และสแกน Tag เพื่อตัดยอดแบบทันที</p>
           <button className="button white" onClick={() => go("plan")}>⇧ นำเข้าแผนส่งงาน Excel</button>
         </div>
-        <div className="hero-art" role="img" aria-label="รถส่งสินค้าและกล่อง QR"><img src="/kit-due-hero.png" alt="" /></div>
+        <div className="hero-art" role="img" aria-label="รถขนส่งสินค้าในเส้นทางโรงงาน"><img src="/dashboard-delivery-hero.png" alt="" /></div>
       </section>
 
       <div className="stat-row">
