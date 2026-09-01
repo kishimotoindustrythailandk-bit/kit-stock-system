@@ -821,9 +821,20 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       });
       const data = await response.json() as { error?: string };
       if (!response.ok) throw new Error(data.error || "บันทึก Part ไม่สำเร็จ");
+      const savedCode = stockPartForm.materialCode.trim().toUpperCase();
+      if (partImageFile) {
+        const form = new FormData();
+        form.set("materialCode", savedCode);
+        form.set("image", partImageFile);
+        const imageResponse = await fetch("/api/part-images", { method: "POST", body: form });
+        const imageData = await imageResponse.json() as { error?: string };
+        if (!imageResponse.ok) throw new Error(imageData.error || "บันทึก Part สำเร็จ แต่บันทึกรูปไม่สำเร็จ");
+      }
       setStockPartForm({ materialCode: "", partName: "", customer: "", standardQty: "" });
-      setNotice({ type: "success", text: "บันทึก Part ในทะเบียน Stock แล้ว" });
-      await loadStock();
+      setPartImageCode("");
+      setPartImageFile(null);
+      setNotice({ type: "success", text: partImageFile ? "บันทึกข้อมูลและรูปชิ้นงานแล้ว" : "บันทึก Part ในทะเบียน Stock แล้ว" });
+      await Promise.all([loadStock(), loadPartImages()]);
     } catch (caught) {
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "บันทึก Part ไม่สำเร็จ" });
     } finally {
@@ -1397,93 +1408,61 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       || item.materialCode.toLowerCase().includes(partNeedle)
       || item.partName.toLowerCase().includes(partNeedle)
       || item.customer.toLowerCase().includes(partNeedle));
-    const imageNeedle = partImageNeedle.trim().toLowerCase();
-    const visiblePartImages = imageNeedle
-      ? partImages.filter((item) => [item.materialCode, item.materialDescription, item.originalName, item.updatedByName].some((value) => String(value || "").toLowerCase().includes(imageNeedle)))
-      : partImages;
-    return <>
-      <div className="metrics four">
-        <MetricCard tone="blue" icon="▦" label="Part ในระบบ" value={fmt(stock.parts.length)} suffix="รายการ" />
-        <MetricCard tone="green" icon="▣" label="มีรูปชิ้นงาน" value={fmt(partImages.length)} suffix="Part" />
-        <MetricCard tone="orange" icon="◷" label="ยังไม่มีรูป" value={fmt(Math.max(stock.parts.length - partImages.length, 0))} suffix="Part" />
-        <MetricCard tone="purple" icon="✓" label="Part ใช้งานอยู่" value={fmt(stock.parts.filter((item) => item.active).length)} suffix="รายการ" />
+    const activeParts = stock.parts.filter((item) => item.active).length;
+    const inactiveParts = stock.parts.length - activeParts;
+    const formImage = partImages.find((item) => item.materialCode === stockPartForm.materialCode.trim().toUpperCase());
+    const editPart = (part: StockPart) => {
+      setStockPartForm({ materialCode: part.materialCode, partName: part.partName, customer: part.customer, standardQty: String(part.standardQty || "") });
+      setPartImageCode(part.materialCode);
+      setPartImageFile(null);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+    const clearPartForm = () => {
+      setStockPartForm({ materialCode: "", partName: "", customer: "", standardQty: "" });
+      setPartImageCode("");
+      setPartImageFile(null);
+    };
+    return <div className="parts-home">
+      <div className="part-stat-row">
+        <article className="part-stat blue"><span>▦</span><div><small>Part ในระบบ</small><b>{fmt(stock.parts.length)}</b><em>รายการ</em></div></article>
+        <article className="part-stat green"><span>✓</span><div><small>Active</small><b>{fmt(activeParts)}</b><em>Part</em></div></article>
+        <article className="part-stat orange"><span>◷</span><div><small>ยกเลิก</small><b>{fmt(inactiveParts)}</b><em>Part</em></div></article>
+        <article className="part-stat purple"><span>◇</span><div><small>มีรูปชิ้นงาน</small><b>{fmt(partImages.length)}</b><em>รายการ</em></div></article>
       </div>
-      {user.role === "admin" && <Card title="ทะเบียน Part ทั้งหมด" action={<div className="user-actions"><input ref={partFileInput} type="file" accept=".xlsx,.xls" hidden onChange={importPartExcel} /><button className="button primary" disabled={stockSaving} onClick={() => partFileInput.current?.click()}>⇧ นำเข้า Part Excel</button><button className="button secondary" disabled={stockSaving || !payload.dues.length} onClick={() => void syncDueParts()}>⇩ นำ Part ทั้งหมดจาก Due</button></div>}>
-        <form className="stock-form-grid" onSubmit={saveStockPart}>
-          <label><span>Part / Material No. *</span><input value={stockPartForm.materialCode} onChange={(e) => setStockPartForm((current) => ({ ...current, materialCode: e.target.value.toUpperCase() }))} required /></label>
+
+      {user.role === "admin" && <Card className="part-editor-card" title={stockPartForm.materialCode ? "แก้ไข Part" : "เพิ่ม / แก้ไข Part"} action={<div className="user-actions"><input ref={partFileInput} type="file" accept=".xlsx,.xls" hidden onChange={importPartExcel} /><button className="button secondary" disabled={stockSaving} onClick={() => partFileInput.current?.click()}>⇧ นำเข้า Part Excel</button><button className="button primary" form="part-editor-form" disabled={stockSaving}>▣ {stockSaving ? "กำลังบันทึก…" : "บันทึก Part"}</button></div>}>
+        <form id="part-editor-form" className="part-editor-grid" onSubmit={saveStockPart}>
+          <label><span>Part / Material No. *</span><input value={stockPartForm.materialCode} onChange={(e) => { const code=e.target.value.toUpperCase(); setStockPartForm((current) => ({ ...current, materialCode: code })); setPartImageCode(code); }} required /></label>
           <label><span>ชื่อชิ้นงาน *</span><input value={stockPartForm.partName} onChange={(e) => setStockPartForm((current) => ({ ...current, partName: e.target.value }))} required /></label>
           <label><span>ลูกค้า</span><input value={stockPartForm.customer} onChange={(e) => setStockPartForm((current) => ({ ...current, customer: e.target.value }))} /></label>
           <label><span>จำนวนสูงสุดต่อกล่อง *</span><input type="number" min="1" value={stockPartForm.standardQty} onChange={(e) => setStockPartForm((current) => ({ ...current, standardQty: e.target.value }))} required /></label>
-          <button className="button primary" disabled={stockSaving}>＋ บันทึก Part</button>
+          <div className="part-photo-editor">
+            <div className="part-current-photo">{stockPartForm.materialCode ? <PartImage materialCode={stockPartForm.materialCode} version={formImage?.updatedAt} /> : <span>▧</span>}</div>
+            <label className="part-change-photo"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setPartImageFile(e.target.files?.[0] || null)} /><b>⇧ {formImage ? "เปลี่ยนรูป" : "เพิ่มรูป"}</b><small>{partImageFile?.name || "JPG, PNG, WebP (ไม่เกิน 5MB)"}</small></label>
+          </div>
         </form>
-        <p className="part-image-help">Excel รองรับคอลัมน์: Part / Material No., Part Name, Customer และ Max Qty per Box (จำนวนสูงสุดต่อกล่อง) · ระบบจะเพิ่ม Part ใหม่และอัปเดต Part เดิมตาม Part No. · อัปโหลดและจัดการรูปชิ้นงานได้จากส่วนด้านล่างของหน้านี้</p>
-        <div className="part-registry-toolbar">
-          <input value={partSearch} onChange={(event) => setPartSearch(event.target.value)} placeholder="ค้นหา Part No., ชื่อชิ้นงาน หรือลูกค้า" />
-          <button type="button" className="button secondary danger-outline" disabled={Boolean(deletingPartCode) || !stock.parts.length} onClick={() => void deleteUnusedStockParts()}>
-            {deletingPartCode === "__ALL__" ? "กำลังลบ…" : "ลบ Part ที่ยังไม่ใช้งานทั้งหมด"}
-          </button>
-        </div>
-        {visibleParts.length ? <div className="table-wrap mobile-table-wrap part-registry-table"><table className="mobile-card-table"><thead><tr><th>Part / Material No.</th><th>ชื่อชิ้นงาน</th><th>ลูกค้า</th><th className="num">สูงสุด/กล่อง</th><th>จัดการ</th></tr></thead><tbody>{visibleParts.slice(0, 200).map((part) => {
-          const hasTag = stock.tags.some((tag) => tag.materialCode === part.materialCode);
-          return <tr key={part.materialCode}><td data-label="Part"><b>{part.materialCode}</b></td><td data-label="ชื่อชิ้นงาน">{part.partName}</td><td data-label="ลูกค้า">{part.customer || "—"}</td><td data-label="สูงสุด/กล่อง" className="num">{part.standardQty > 0 ? `${fmt(part.standardQty)} ชิ้น` : "ยังไม่กำหนด"}</td><td data-label="จัดการ">{hasTag ? <span className="muted">มีประวัติ Stock</span> : <button type="button" className="tiny-button danger-outline" disabled={Boolean(deletingPartCode)} onClick={() => void deleteStockPart(part)}>{deletingPartCode === part.materialCode ? "กำลังลบ…" : "ลบ Part"}</button>}</td></tr>;
-        })}</tbody></table></div> : <Empty title="ไม่พบ Part" text={partNeedle ? "ลองเปลี่ยนคำค้นหา" : "ยังไม่มี Part ในทะเบียน Stock"} />}
+        <div className="part-editor-foot"><span>Excel รองรับคอลัมน์: Part / Material No., Part Name, Customer และ Max Qty per Box</span>{stockPartForm.materialCode && <button type="button" className="tiny-button" onClick={clearPartForm}>＋ เพิ่ม Part ใหม่</button>}</div>
       </Card>}
-      <Card title="รูปชิ้นงานสำหรับหน้าสแกน" action={<button className="button secondary" onClick={() => void loadPartImages()}>↻ รีเฟรช</button>}>
-        <form className="part-image-upload" onSubmit={uploadPartImage}>
-          <label><span>Material / Part No. *</span><input list="part-material-codes" value={partImageCode} onChange={(e) => setPartImageCode(e.target.value.toUpperCase())} placeholder="เช่น ABC-1234" required /></label>
-          <datalist id="part-material-codes">{[...new Set(payload.dues.map((due) => due.materialCode))].sort().map((code) => <option key={code} value={code} />)}</datalist>
-          <label className="part-file"><span>ไฟล์รูป *</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setPartImageFile(e.target.files?.[0] || null)} required /></label>
-          <button className="button primary" disabled={partImageSaving || !partImageCode.trim() || !partImageFile}>{partImageSaving ? "กำลังอัปโหลด…" : "⇧ บันทึกรูปชิ้นงาน"}</button>
-        </form>
-        <p className="part-image-help">รองรับ JPG, PNG และ WebP ขนาดไม่เกิน 5 MB · หากอัปโหลด Material Code เดิม ระบบจะแทนที่รูปเก่า</p>
 
-        <form className="part-image-upload bulk" onSubmit={uploadPartImagesBulk}>
-          <label className="part-file bulk-file">
-            <span>อัปโหลดหลายรูปพร้อมกัน — ตั้งชื่อไฟล์ให้ตรงกับ Part No.</span>
-            <input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={bulkImageRunning}
-              onChange={(e) => { setBulkImageFiles([...(e.target.files || [])]); setBulkImageFailed([]); }} />
-          </label>
-          <button className="button primary" disabled={bulkImageRunning || !bulkImageFiles.length}>
-            {bulkImageRunning
-              ? `กำลังอัปโหลด ${fmt(bulkImageProgress.done)}/${fmt(bulkImageProgress.total)}…`
-              : `⇧ อัปโหลด ${bulkImageFiles.length ? fmt(bulkImageFiles.length) + " รูป" : "ทั้งหมด"}`}
-          </button>
-        </form>
-        <p className="part-image-help">
-          ตัวอย่าง ไฟล์ชื่อ <code>BK02J964G12-F.jpg</code> จะถูกบันทึกเป็นรูปของ Part <code>BK02J964G12-F</code> อัตโนมัติ
-          · ระบบตัดเลขสำเนาแบบ <code>(1)</code> ท้ายชื่อไฟล์ให้เอง · อัปโหลดทีละไฟล์ตามลำดับ ปิดหน้าจอระหว่างอัปโหลดไม่ได้
-        </p>
-        {bulkImageFiles.length > 0 && !bulkImageRunning && <div className="bulk-preview">
-          <b>จะบันทึกเป็น Part เหล่านี้</b>
-          <ul>{bulkImageFiles.slice(0, 12).map((file) => <li key={file.name}><code>{materialCodeFromFileName(file.name)}</code><small>{file.name}</small></li>)}</ul>
-          {bulkImageFiles.length > 12 && <small>และอีก {fmt(bulkImageFiles.length - 12)} ไฟล์</small>}
-        </div>}
-        {bulkImageFailed.length > 0 && <div className="bulk-preview failed">
-          <b>ไฟล์ที่อัปโหลดไม่สำเร็จ</b>
-          <ul>{bulkImageFailed.map((item) => <li key={item.name}><code>{item.name}</code><small>{item.reason}</small></li>)}</ul>
-        </div>}
-        {partImages.length > 0 && <div className="part-image-toolbar">
-          <input
-            className="part-image-search"
-            value={partImageNeedle}
-            onChange={(e) => setPartImageNeedle(e.target.value)}
-            placeholder="ค้นหารูปด้วย Part No., ชื่อชิ้นงาน หรือชื่อไฟล์"
-            autoComplete="off"
-          />
-          {partImageNeedle && <button type="button" className="tiny-button" onClick={() => setPartImageNeedle("")}>ล้างคำค้น</button>}
-          <small>{partImageNeedle
-            ? `พบ ${fmt(visiblePartImages.length)} จาก ${fmt(partImages.length)} รูป`
-            : `ทั้งหมด ${fmt(partImages.length)} รูป`}</small>
-        </div>}
-        {partImagesLoading
-          ? <div className="inline-loading">กำลังโหลดรูปชิ้นงาน…</div>
-          : !partImages.length
-            ? <Empty title="ยังไม่มีรูปชิ้นงาน" text="เลือก Material Code และอัปโหลดรูป รูปจะแสดงทันทีหลังสแกน Tag" />
-            : !visiblePartImages.length
-              ? <Empty title="ไม่พบรูปที่ค้นหา" text="ลองเปลี่ยนคำค้น หรือกดล้างคำค้นเพื่อดูทั้งหมด" />
-              : <div className="part-image-list scrollable">{visiblePartImages.map((item) => <article key={item.materialCode}><PartImage materialCode={item.materialCode} compact version={item.updatedAt} /><div><b>{item.materialCode}</b><p>{item.materialDescription || item.originalName}</p><small>แก้ไขโดย {item.updatedByName || "Admin"} · {formatDateTime(item.updatedAt)}</small></div><button className="tiny-button danger-outline" onClick={() => void deletePartImage(item.materialCode)}>ลบรูป</button></article>)}</div>}
+      <Card className="part-list-card" title="รายการ Part ทั้งหมด" action={<div className="part-list-actions"><input value={partSearch} onChange={(e) => setPartSearch(e.target.value)} placeholder="⌕ ค้นหา Part No., ชื่อชิ้นงาน หรือลูกค้า..." /><button className="button secondary" onClick={() => void Promise.all([loadStock(), loadPartImages()])}>↻ รีเฟรช</button></div>}>
+        {visibleParts.length ? <div className="part-modern-table">
+          <div className="part-modern-head"><span>Part / Material No.</span><span>ชื่อชิ้นงาน</span><span>ลูกค้า</span><span>จำนวนสูงสุดต่อกล่อง</span><span>สถานะ</span><span>จัดการ</span></div>
+          {visibleParts.slice(0, 100).map((part) => {
+            const image = partImages.find((item) => item.materialCode === part.materialCode);
+            const hasTag = stock.tags.some((tag) => tag.materialCode === part.materialCode);
+            return <div className="part-modern-row" key={part.materialCode}>
+              <span className="part-code-cell"><PartImage materialCode={part.materialCode} compact version={image?.updatedAt} /><span><b>{part.materialCode}</b><small>{image ? "มีรูปชิ้นงาน" : "ยังไม่มีรูป"}</small></span></span>
+              <span>{part.partName}</span><span>{part.customer || "—"}</span><span>{part.standardQty > 0 ? fmt(part.standardQty) + " ชิ้น" : "ยังไม่กำหนด"}</span>
+              <span><em className={"part-active " + (part.active ? "on" : "off")}>{part.active ? "ใช้งาน" : "ยกเลิก"}</em></span>
+              <span className="part-row-actions"><button className="tiny-button" onClick={() => editPart(part)}>✎ แก้ไข</button>{hasTag ? <small>มีประวัติ Stock</small> : <button className="tiny-button danger-outline" disabled={Boolean(deletingPartCode)} onClick={() => void deleteStockPart(part)}>♲ {deletingPartCode === part.materialCode ? "กำลังลบ…" : "ลบ"}</button>}</span>
+            </div>;
+          })}
+          <footer><span>แสดง 1 - {fmt(Math.min(visibleParts.length,100))} จาก {fmt(visibleParts.length)} รายการ</span>{visibleParts.length > 100 && <small>กรุณาค้นหาเพื่อกรองรายการที่ต้องการ</small>}</footer>
+        </div> : <Empty title="ไม่พบ Part" text={partNeedle ? "ลองเปลี่ยนคำค้นหา" : "ยังไม่มี Part ในทะเบียน Stock"} />}
       </Card>
-    </>;
+
+      {user.role === "admin" && <details className="part-bulk-panel"><summary>อัปโหลดรูปหลาย Part พร้อมกัน</summary><form className="part-image-upload bulk" onSubmit={uploadPartImagesBulk}><label className="part-file bulk-file"><span>ตั้งชื่อไฟล์ให้ตรงกับ Part No.</span><input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={bulkImageRunning} onChange={(e) => { setBulkImageFiles([...(e.target.files || [])]); setBulkImageFailed([]); }} /></label><button className="button primary" disabled={bulkImageRunning || !bulkImageFiles.length}>{bulkImageRunning ? "กำลังอัปโหลด " + fmt(bulkImageProgress.done) + "/" + fmt(bulkImageProgress.total) + "…" : "⇧ อัปโหลด " + (bulkImageFiles.length ? fmt(bulkImageFiles.length) + " รูป" : "ทั้งหมด")}</button></form>{bulkImageFailed.length > 0 && <div className="bulk-preview failed"><b>ไฟล์ที่อัปโหลดไม่สำเร็จ</b><ul>{bulkImageFailed.map((item) => <li key={item.name}><code>{item.name}</code><small>{item.reason}</small></li>)}</ul></div>}</details>}
+    </div>;
   }
 
   function renderTags() {
