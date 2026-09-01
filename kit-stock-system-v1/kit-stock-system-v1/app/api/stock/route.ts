@@ -218,6 +218,29 @@ export async function POST(request: Request) {
       return Response.json({ success: true, deleted: result.meta.changes });
     }
 
+    if (action === "clear_test_stock") {
+      if (user.role !== "admin" || !hasPermission(user, "stock")) {
+        return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ล้างข้อมูล Stock" }, { status: 403 });
+      }
+      const { DB } = getRuntimeEnv();
+      if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
+      const results = await DB.batch([
+        DB.prepare("DELETE FROM stock_dispatch_links"),
+        DB.prepare("DELETE FROM stock_allocations"),
+        DB.prepare("DELETE FROM stock_picks"),
+        DB.prepare("DELETE FROM stock_tags"),
+      ]);
+      return Response.json({
+        success: true,
+        deleted: {
+          dispatchLinks: results[0].meta.changes,
+          allocations: results[1].meta.changes,
+          picks: results[2].meta.changes,
+          tags: results[3].meta.changes,
+        },
+      });
+    }
+
     if (action === "delete_tag") {
       if (user.role !== "admin" || !hasPermission(user, "tags")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ลบ Tag" }, { status: 403 });
       const tagId = clean(body.tagId, 120).toUpperCase();
