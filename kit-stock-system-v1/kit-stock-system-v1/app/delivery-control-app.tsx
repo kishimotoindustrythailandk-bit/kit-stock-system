@@ -325,6 +325,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [arrangeDueId, setArrangeDueId] = useState("");
   const [arrangeTag, setArrangeTag] = useState("");
   const [arrangeQty, setArrangeQty] = useState("");
+  const [arrangeDueSearch, setArrangeDueSearch] = useState("");
+  const [arrangeListPage, setArrangeListPage] = useState(1);
   const [arrangementPreview, setArrangementPreview] = useState<ArrangementPreview | null>(null);
   const [filterDate, setFilterDate] = useState("");
   const [planPage, setPlanPage] = useState(1);
@@ -1838,6 +1840,91 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   function renderScan(scanMode: "arrange" | "dispatch") {
     const progress = tagPreview ? Math.min(100, Math.round((tagPreview.due.projectedQty / tagPreview.due.reqQty) * 100)) : 0;
     const selectedArrangeDue = payload.dues.find((due) => String(due.id) === effectiveArrangeDueId);
+    if (scanMode === "arrange") {
+      const completedCount = payload.dues.filter((due) => Number(due.scannedQty) >= Number(due.reqQty)).length;
+      const overdueCount = payload.dues.filter((due) => dueDeadlinePassed(due) && Number(due.scannedQty) < Number(due.reqQty)).length;
+      const remainingCount = payload.dues.filter((due) => Number(due.scannedQty) < Number(due.reqQty)).length;
+      const needle = arrangeDueSearch.trim().toLowerCase();
+      const arrangeRows = arrangeableDues.filter((due) => !needle || [due.materialCode, due.materialDescription, due.doNo, due.fact, due.line, due.site, formatDate(due.deliveryDate), due.deliveryTime].join(" ").toLowerCase().includes(needle));
+      const arrangePageSize = 8;
+      const arrangePages = Math.max(1, Math.ceil(arrangeRows.length / arrangePageSize));
+      const safeArrangePage = Math.min(arrangeListPage, arrangePages);
+      const pageRows = arrangeRows.slice((safeArrangePage - 1) * arrangePageSize, safeArrangePage * arrangePageSize);
+      const pickedTotal = stock.picks.reduce((sum, item) => sum + Number(item.pickedQty || 0), 0);
+      return <>
+        <div className="arrange-summary-grid">
+          <MetricCard tone="blue" icon="▦" label="งานทั้งหมด" value={fmt(payload.dues.length)} suffix="รายการ" />
+          <MetricCard tone="green" icon="✓" label="ครบตามแผน" value={fmt(completedCount)} suffix="รายการ" />
+          <MetricCard tone="orange" icon="◷" label="คงเหลือ" value={fmt(remainingCount)} suffix="รายการ" />
+          <MetricCard tone="red" icon="!" label="เกิน Due" value={fmt(overdueCount)} suffix="รายการ" />
+          <article className="arrange-brand-card"><span>◇</span><div><b>จัดงานด้วย KIT Tag</b><small>เลือก Due แล้วสแกน Tag เพื่อบันทึกงานรอขายออก</small></div></article>
+        </div>
+
+        <div className="arrange-workspace">
+          <section className="arrange-scan-panel">
+            <header className="arrange-section-head"><span>⌗</span><div><h3>สแกน KIT Stock Tag</h3><p>เลือก Due ทางขวา แล้วสแกน Tag ของงานที่ต้องการจัด</p></div><button className="camera-button arrange-camera-button" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>▣ เปิดกล้อง</button></header>
+            <div className="arrange-scan-body">
+              <button type="button" className="arrange-camera-zone" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>
+                <span>⌗</span><b>{checkingTag ? "กำลังบันทึกงาน…" : "พร้อมสแกน KIT Tag"}</b><small>ยิงบาร์โค้ด หรือแตะเพื่อเปิดกล้องโทรศัพท์</small><i />
+              </button>
+              <div className="arrange-result-card">
+                {arrangementPreview ? <>
+                  <div className="arrange-success"><span>✓</span><b>จัดงานสำเร็จ!</b></div>
+                  <div className="arrange-part-result"><PartImage materialCode={arrangementPreview.due.materialCode} compact /><div><small>Part No.</small><b>{arrangementPreview.due.materialCode}</b><p>{arrangementPreview.due.materialDescription || "ไม่ระบุชื่อชิ้นงาน"}</p></div></div>
+                  <dl><div><dt>Job</dt><dd>{arrangementPreview.tag.jobNo}</dd></div><div><dt>Due ทั้งหมด</dt><dd>{fmt(arrangementPreview.due.reqQty)} ชิ้น</dd></div><div><dt>จัดครั้งนี้</dt><dd>{fmt(arrangementPreview.pick.pickedQty)} ชิ้น</dd></div><div><dt>คงเหลือ</dt><dd>{fmt(arrangementPreview.due.remainingQty)} ชิ้น</dd></div></dl>
+                </> : selectedArrangeDue ? <>
+                  <div className="arrange-waiting"><span>▦</span><b>Due ที่เลือก</b></div>
+                  <div className="arrange-part-result"><PartImage materialCode={selectedArrangeDue.materialCode} compact /><div><small>Part No.</small><b>{selectedArrangeDue.materialCode}</b><p>{selectedArrangeDue.materialDescription || "ไม่ระบุชื่อชิ้นงาน"}</p></div></div>
+                  <dl><div><dt>FAC / Line</dt><dd>{selectedArrangeDue.fact} / {selectedArrangeDue.line || "—"}</dd></div><div><dt>Due</dt><dd>{formatDate(selectedArrangeDue.deliveryDate)} {selectedArrangeDue.deliveryTime}</dd></div><div><dt>ต้องจัด</dt><dd>{fmt(selectedArrangeDue.reqQty)} ชิ้น</dd></div><div><dt>เหลือจัด</dt><dd>{fmt(selectedArrangeDue.reqQty - selectedArrangeDue.scannedQty - (selectedArrangeDue.arrangedQty || 0))} ชิ้น</dd></div></dl>
+                </> : <Empty title="กรุณาเลือก Due" text="เลือกรายการจากด้านขวาก่อนสแกน KIT Tag" />}
+              </div>
+            </div>
+            <form className="arrange-action-form" onSubmit={stageStockTag}>
+              <label><span>จำนวนที่จะจัด</span><input type="number" min="1" value={arrangeQty} onChange={(e) => setArrangeQty(e.target.value)} placeholder="อัตโนมัติตาม Due" /></label>
+              <label className="arrange-tag-field"><span>KIT Stock Tag *</span><input ref={tagInput} value={arrangeTag} onChange={(e) => { setArrangeTag(e.target.value); setArrangementPreview(null); }} placeholder="ยิง Tag แล้วเครื่องส่ง Enter" autoComplete="off" /></label>
+              <button className="button primary" disabled={!effectiveArrangeDueId || !arrangeTag.trim() || checkingTag}>{checkingTag ? "กำลังจัดงาน…" : "✓ ยืนยันจัดงาน"}</button>
+            </form>
+            <div className="arrange-help">ⓘ ขั้นตอนนี้บันทึกงาน “รอขายออก” เท่านั้น ยังไม่ลด Stock และ Due จนกว่าผู้ตรวจจะขายออก</div>
+          </section>
+
+          <aside className="arrange-due-panel">
+            <header><span>▤</span><div><h3>เลือก Due</h3><p>{fmt(arrangeRows.length)} รายการที่ยังจัดไม่ครบ</p></div></header>
+            <div className="arrange-due-search"><span>⌕</span><input value={arrangeDueSearch} onChange={(e) => { setArrangeDueSearch(e.target.value); setArrangeListPage(1); }} placeholder="ค้นหา Due, Job, Part No." /></div>
+            <div className="arrange-due-cards">
+              {arrangeRows.slice(0, 6).map((due) => {
+                const selected = String(due.id) === effectiveArrangeDueId;
+                const remaining = due.reqQty - due.scannedQty - (due.arrangedQty || 0);
+                return <button key={due.id} className={selected ? "selected" : ""} onClick={() => { setArrangeDueId(String(due.id)); setArrangementPreview(null); }}>
+                  <i>{selected ? "●" : "○"}</i><span>▦</span><div><b>{formatDate(due.deliveryDate)} · {due.fact}</b><small>{due.materialCode} · {due.deliveryTime}</small><em>เหลือจัด {fmt(remaining)} ชิ้น</em></div><strong>›</strong>
+                </button>;
+              })}
+              {!arrangeRows.length && <Empty title="ไม่พบ Due" text="ลองเปลี่ยนคำค้นหา หรือนำเข้าแผนส่งงาน" />}
+            </div>
+          </aside>
+        </div>
+
+        <Card className="arrange-list-panel" title={<><span className="arrange-list-icon">▣</span> รายการงานที่ต้องจัด <em>{fmt(arrangeRows.length)} รายการ</em></>} action={<span className="arrange-selected-label">{selectedArrangeDue ? `Due: ${formatDate(selectedArrangeDue.deliveryDate)} · ${selectedArrangeDue.fact}` : "ยังไม่ได้เลือก Due"}</span>}>
+          {pageRows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table arrange-table"><thead><tr><th>เลือก</th><th>รูปภาพ</th><th>Part No.</th><th>Part Name</th><th>DO / Seq</th><th className="num">ต้องจัด</th><th className="num">จัดแล้ว</th><th className="num">คงเหลือ</th><th>สถานะ</th></tr></thead><tbody>
+            {pageRows.map((due) => {
+              const remaining = due.reqQty - due.scannedQty - (due.arrangedQty || 0);
+              const selected = String(due.id) === effectiveArrangeDueId;
+              return <tr key={due.id} className={selected ? "selected-row" : ""} onClick={() => { setArrangeDueId(String(due.id)); setArrangementPreview(null); }}>
+                <td data-label="เลือก"><button className={`arrange-radio ${selected ? "selected" : ""}`}>{selected ? "●" : "○"}</button></td>
+                <td data-label="รูปภาพ"><PartImage materialCode={due.materialCode} compact /></td>
+                <td data-label="Part No."><b>{due.materialCode}</b><small>{due.fact} / {due.line || "—"}</small></td>
+                <td data-label="Part Name">{due.materialDescription || "—"}</td>
+                <td data-label="DO / Seq"><b>{due.doNo}</b><small>Seq {due.seq}</small></td>
+                <td data-label="ต้องจัด" className="num"><b>{fmt(due.reqQty)}</b></td>
+                <td data-label="จัดแล้ว" className="num"><b>{fmt(due.arrangedQty || 0)}</b></td>
+                <td data-label="คงเหลือ" className="num"><b>{fmt(remaining)}</b></td>
+                <td data-label="สถานะ"><span className={`status ${dueDeadlinePassed(due) ? "over" : Number(due.arrangedQty || 0) > 0 ? "partial" : "completed"}`}>{dueDeadlinePassed(due) ? "เกิน Due" : Number(due.arrangedQty || 0) > 0 ? "จัดบางส่วน" : "พร้อมจัด"}</span></td>
+              </tr>;
+            })}
+          </tbody></table></div> : <Empty title="ไม่มีรายการที่ต้องจัด" text="ทุกรายการจัดครบแล้ว หรือไม่พบข้อมูลตามคำค้นหา" />}
+          <div className="arrange-pagination"><span>แสดง {pageRows.length ? (safeArrangePage - 1) * arrangePageSize + 1 : 0} - {Math.min(safeArrangePage * arrangePageSize, arrangeRows.length)} จาก {fmt(arrangeRows.length)} รายการ</span><div><button disabled={safeArrangePage <= 1} onClick={() => setArrangeListPage((page) => Math.max(1, page - 1))}>«</button>{Array.from({ length: Math.min(arrangePages, 5) }, (_, index) => index + 1).map((page) => <button key={page} className={safeArrangePage === page ? "active" : ""} onClick={() => setArrangeListPage(page)}>{page}</button>)}{arrangePages > 5 && <em>… {arrangePages}</em>}<button disabled={safeArrangePage >= arrangePages} onClick={() => setArrangeListPage((page) => Math.min(arrangePages, page + 1))}>»</button></div><strong>จัดสะสม {fmt(pickedTotal)} ชิ้น</strong></div>
+        </Card>
+      </>;
+    }
     return <>
       <div className="scan-layout">
         <section className="scanner-card">
@@ -1910,7 +1997,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     // แบบมีเงื่อนไข ไม่ใช่คอมโพเนนต์ การเรียก hook ในนี้จะผิดกฎ Hooks
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <>
-      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.15.5</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
+      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.15.6</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
       <div className="settings-grid"><Card title="ตั้งค่าการตัดยอด"><Toggle keyName="partial" title="อนุญาตให้ตัดยอดบางส่วน" text="Tag หนึ่งใบสามารถตัดยอดไม่ครบ Due ได้" /><Toggle keyName="confirm" title="ยืนยันก่อนตัดยอดทุกครั้ง" text="แสดงยอดก่อนและหลังให้ตรวจสอบก่อนบันทึก" /></Card><Card title="ตั้งค่าการสแกน"><Toggle keyName="autoFocus" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" title="เสียงแจ้งเตือนเมื่อสำเร็จ" text="เปิดเสียงยืนยันหลังตัดยอดเรียบร้อย" /></Card></div>
       <Card title="รูปแบบการแสดงผล"><div className="form-grid"><label><span>ภาษา</span><select><option>ภาษาไทย</option></select></label><label><span>เขตเวลา</span><select><option>(GMT+07:00) Bangkok, Thailand</option></select></label><label><span>รูปแบบวันที่</span><select><option>DD/MM/YYYY</option></select></label><label><span>หน่วยเริ่มต้น</span><select><option>ชิ้น (PC)</option></select></label></div><div className="save-row"><button className="button primary" onClick={saveSettings}>▣ บันทึกการตั้งค่า</button></div></Card>
       {user.role === "admin" && <Card title="ล้างข้อมูลทดลอง"><div className="permission-note"><span>!</span><div><b>ล้างเฉพาะรายการ Stock</b><p>ลบ Tag Stock และประวัติการจัด/ขายออกทั้งหมด โดยเก็บทะเบียน Part รูปชิ้นงาน แผน Due และผู้ใช้งานไว้</p></div></div><div className="save-row"><button className="button danger" disabled={clearingTestStock || stock.tags.length === 0} onClick={() => void clearTestStock()}>{clearingTestStock ? "กำลังล้างข้อมูล…" : `ล้าง Stock ทดลอง ${fmt(stock.tags.length)} Tag`}</button></div></Card>}
@@ -1959,7 +2046,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
       <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.15.5</span></div></div>
+      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.15.6</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
