@@ -707,6 +707,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       for (const sheetName of workbook.SheetNames) {
         const sheet = workbook.Sheets[sheetName];
         const grid = xlsx.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: "" });
+        const isTimeSheet = /^\d{1,2}[.:]\d{2}(?:\s|$)/.test(sheetName.trim());
+        const sheetDeliveryDate = isTimeSheet ? normalizeDueDate(grid[1]?.[0]) : "";
+        const sheetDeliveryTime = isTimeSheet ? normalizeTime(grid[1]?.[1]) : "";
         let activeHeaders: string[] = [];
         const parsedRows: ImportRow[] = [];
 
@@ -729,9 +732,10 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           const doRaw = doSubGroup.split("|")[0] || text(valueAt(row, activeHeaders, alias.doNo));
           const doNo = doRaw.toUpperCase();
           const seq = number(valueAt(row, activeHeaders, alias.seq)) || rowIndex + 1;
-          const deliveryDate = normalizeDueDate(valueAt(row, activeHeaders, alias.date));
+          const rowDeliveryDate = normalizeDueDate(valueAt(row, activeHeaders, alias.date));
           const suppliedTime = normalizeTime(valueAt(row, activeHeaders, alias.time));
-          const deliveryTime = suppliedTime || "09:00";
+          const deliveryDate = sheetDeliveryDate || rowDeliveryDate;
+          const deliveryTime = sheetDeliveryTime || suppliedTime || "09:00";
           const deliverySpot = text(valueAt(row, activeHeaders, alias.shop)).toUpperCase();
           const filenameSite = selected.name.match(/SITE\s*([1-9])/i)?.[1] || "";
           const spotFactory = deliverySpot.match(/(?:^|[-_ ])F(?:AC)?\s*([1-9])(?:$|[-_ ])/i)?.[1] || "";
@@ -758,14 +762,15 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       // ไฟล์ FAC รวมใช้ทุกชีตรอบเวลา และไม่อ่าน Sheet1/vlookup/รอบเช้าเพื่อป้องกันข้อมูลซ้ำ
       const mcpSheets = candidates.filter((candidate) => /^mcp\s*site\s*[12](?:\s|$)/i.test(candidate.sheetName.trim()));
       const timeSheets = candidates.filter((candidate) => /^\d{1,2}[.:]\d{2}(?:\s|$)/.test(candidate.sheetName.trim()));
-      const rows = mcpSheets.length
-        ? mcpSheets.flatMap((candidate) => candidate.rows)
+      const selectedSheets = mcpSheets.length
+        ? mcpSheets
         : timeSheets.length
-          ? timeSheets.flatMap((candidate) => candidate.rows)
-          : candidates.sort((left, right) => right.rows.length - left.rows.length)[0]?.rows || [];
+          ? timeSheets
+          : candidates.sort((left, right) => right.rows.length - left.rows.length).slice(0, 1);
+      const rows = selectedSheets.flatMap((candidate) => candidate.rows);
       if (!rows.length) throw new Error("ไม่พบรายการ Due ที่ใช้งานได้ กรุณาตรวจสอบว่ามี Item No./Material Code, Due Qty/Req. Qty และวันที่ส่งงาน");
       setPreviewRows(rows);
-      setNotice({ type: "success", text: `อ่านไฟล์สำเร็จ ${fmt(rows.length)} รายการ รวม ${fmt(rows.reduce((sum, row) => sum + row.reqQty, 0))} ชิ้น` });
+      setNotice({ type: "success", text: `อ่านจากชีต ${selectedSheets.map((item) => item.sheetName.trim()).join(", ")} สำเร็จ ${fmt(rows.length)} รายการ รวม ${fmt(rows.reduce((sum, row) => sum + row.reqQty, 0))} ชิ้น` });
     } catch (caught) {
       setFile(null);
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "อ่านไฟล์ Excel ไม่สำเร็จ" });
@@ -1850,7 +1855,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     // แบบมีเงื่อนไข ไม่ใช่คอมโพเนนต์ การเรียก hook ในนี้จะผิดกฎ Hooks
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <>
-      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.15.1</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
+      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.15.2</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
       <div className="settings-grid"><Card title="ตั้งค่าการตัดยอด"><Toggle keyName="partial" title="อนุญาตให้ตัดยอดบางส่วน" text="Tag หนึ่งใบสามารถตัดยอดไม่ครบ Due ได้" /><Toggle keyName="confirm" title="ยืนยันก่อนตัดยอดทุกครั้ง" text="แสดงยอดก่อนและหลังให้ตรวจสอบก่อนบันทึก" /></Card><Card title="ตั้งค่าการสแกน"><Toggle keyName="autoFocus" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" title="เสียงแจ้งเตือนเมื่อสำเร็จ" text="เปิดเสียงยืนยันหลังตัดยอดเรียบร้อย" /></Card></div>
       <Card title="รูปแบบการแสดงผล"><div className="form-grid"><label><span>ภาษา</span><select><option>ภาษาไทย</option></select></label><label><span>เขตเวลา</span><select><option>(GMT+07:00) Bangkok, Thailand</option></select></label><label><span>รูปแบบวันที่</span><select><option>DD/MM/YYYY</option></select></label><label><span>หน่วยเริ่มต้น</span><select><option>ชิ้น (PC)</option></select></label></div><div className="save-row"><button className="button primary" onClick={saveSettings}>▣ บันทึกการตั้งค่า</button></div></Card>
     </>;
@@ -1898,7 +1903,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
       <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.15.1</span></div></div>
+      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.15.2</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
