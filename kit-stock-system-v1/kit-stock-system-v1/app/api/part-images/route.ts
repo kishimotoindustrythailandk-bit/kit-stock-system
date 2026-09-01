@@ -16,7 +16,7 @@ const MAX_BYTES = 5 * 1024 * 1024;
 async function requireUser(adminOnly = false) {
   const user = await getCurrentUser();
   if (!user) return { error: Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 }) };
-  if (adminOnly && !hasPermission(user, "settings")) return { error: Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์จัดการรูปชิ้นงาน" }, { status: 403 }) };
+  if (adminOnly && !hasPermission(user, "parts") && !hasPermission(user, "settings")) return { error: Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์จัดการรูปชิ้นงาน" }, { status: 403 }) };
   return { user };
 }
 
@@ -32,7 +32,7 @@ export async function GET(request: Request) {
     if (!DB) return Response.json({ error: "ไม่พบการเชื่อมต่อ D1" }, { status: 500 });
     const materialCode = cleanMaterialCode(new URL(request.url).searchParams.get("materialCode"));
     if (!materialCode) {
-      if (!auth.user || !hasPermission(auth.user, "settings")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ดูทะเบียนรูปชิ้นงาน" }, { status: 403 });
+      if (!auth.user || (!hasPermission(auth.user, "parts") && !hasPermission(auth.user, "settings"))) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ดูทะเบียนรูปชิ้นงาน" }, { status: 403 });
       const result = await DB.prepare(`
         SELECT p.material_code AS materialCode, p.object_key AS objectKey,
           p.original_name AS originalName, p.content_type AS contentType,
