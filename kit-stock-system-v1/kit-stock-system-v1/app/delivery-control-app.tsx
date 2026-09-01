@@ -348,6 +348,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [stockLoading, setStockLoading] = useState(false);
   const [stockPartForm, setStockPartForm] = useState({ materialCode: "", partName: "", customer: "", standardQty: "" });
   const [partSearch, setPartSearch] = useState("");
+  const [partPage, setPartPage] = useState(1);
+  const [partPageSize, setPartPageSize] = useState(10);
   const [tagSearch, setTagSearch] = useState("");
   const [deletingPartCode, setDeletingPartCode] = useState("");
   const [deletingStockTagId, setDeletingStockTagId] = useState("");
@@ -1409,6 +1411,18 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       || item.partName.toLowerCase().includes(partNeedle)
       || item.customer.toLowerCase().includes(partNeedle));
     const activeParts = stock.parts.filter((item) => item.active).length;
+    const partTotalPages = Math.max(1, Math.ceil(visibleParts.length / partPageSize));
+    const safePartPage = Math.min(partPage, partTotalPages);
+    const partStartIndex = (safePartPage - 1) * partPageSize;
+    const paginatedParts = visibleParts.slice(partStartIndex, partStartIndex + partPageSize);
+    const partPageButtons: Array<number | "…"> = [];
+    for (let current = 1; current <= partTotalPages; current += 1) {
+      if (current === 1 || current === partTotalPages || Math.abs(current - safePartPage) <= 1) {
+        partPageButtons.push(current);
+      } else if (partPageButtons[partPageButtons.length - 1] !== "…") {
+        partPageButtons.push("…");
+      }
+    }
     const inactiveParts = stock.parts.length - activeParts;
     const formImage = partImages.find((item) => item.materialCode === stockPartForm.materialCode.trim().toUpperCase());
     const editPart = (part: StockPart) => {
@@ -1444,10 +1458,10 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         <div className="part-editor-foot"><span>Excel รองรับคอลัมน์: Part / Material No., Part Name, Customer และ Max Qty per Box</span>{stockPartForm.materialCode && <button type="button" className="tiny-button" onClick={clearPartForm}>＋ เพิ่ม Part ใหม่</button>}</div>
       </Card>}
 
-      <Card className="part-list-card" title="รายการ Part ทั้งหมด" action={<div className="part-list-actions"><input value={partSearch} onChange={(e) => setPartSearch(e.target.value)} placeholder="⌕ ค้นหา Part No., ชื่อชิ้นงาน หรือลูกค้า..." /><button className="button secondary" onClick={() => void Promise.all([loadStock(), loadPartImages()])}>↻ รีเฟรช</button></div>}>
+      <Card className="part-list-card" title="รายการ Part ทั้งหมด" action={<div className="part-list-actions"><input value={partSearch} onChange={(e) => { setPartSearch(e.target.value); setPartPage(1); }} placeholder="⌕ ค้นหา Part No., ชื่อชิ้นงาน หรือลูกค้า..." /><button className="button secondary" onClick={() => void Promise.all([loadStock(), loadPartImages()])}>↻ รีเฟรช</button></div>}>
         {visibleParts.length ? <div className="part-modern-table">
           <div className="part-modern-head"><span>Part / Material No.</span><span>ชื่อชิ้นงาน</span><span>ลูกค้า</span><span>จำนวนสูงสุดต่อกล่อง</span><span>สถานะ</span><span>จัดการ</span></div>
-          {visibleParts.slice(0, 100).map((part) => {
+          <div className="part-modern-body">{paginatedParts.map((part) => {
             const image = partImages.find((item) => item.materialCode === part.materialCode);
             const hasTag = stock.tags.some((tag) => tag.materialCode === part.materialCode);
             return <div className="part-modern-row" key={part.materialCode}>
@@ -1456,8 +1470,16 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
               <span><em className={"part-active " + (part.active ? "on" : "off")}>{part.active ? "ใช้งาน" : "ยกเลิก"}</em></span>
               <span className="part-row-actions"><button className="tiny-button" onClick={() => editPart(part)}>✎ แก้ไข</button>{hasTag ? <small>มีประวัติ Stock</small> : <button className="tiny-button danger-outline" disabled={Boolean(deletingPartCode)} onClick={() => void deleteStockPart(part)}>♲ {deletingPartCode === part.materialCode ? "กำลังลบ…" : "ลบ"}</button>}</span>
             </div>;
-          })}
-          <footer><span>แสดง 1 - {fmt(Math.min(visibleParts.length,100))} จาก {fmt(visibleParts.length)} รายการ</span>{visibleParts.length > 100 && <small>กรุณาค้นหาเพื่อกรองรายการที่ต้องการ</small>}</footer>
+          })}</div>
+          <footer>
+            <span>แสดง {fmt(partStartIndex + 1)} - {fmt(Math.min(partStartIndex + partPageSize, visibleParts.length))} จาก {fmt(visibleParts.length)} รายการ</span>
+            <nav className="part-pagination" aria-label="หน้ารายการ Part">
+              <button className="part-page-button" disabled={safePartPage === 1} onClick={() => setPartPage(Math.max(1, safePartPage - 1))}>‹</button>
+              {partPageButtons.map((item, index) => item === "…" ? <span className="part-page-dots" key={"dots-" + index}>…</span> : <button className={"part-page-button " + (item === safePartPage ? "active" : "")} key={item} onClick={() => setPartPage(item)}>{item}</button>)}
+              <button className="part-page-button" disabled={safePartPage === partTotalPages} onClick={() => setPartPage(Math.min(partTotalPages, safePartPage + 1))}>›</button>
+            </nav>
+            <label className="part-page-size">แสดงต่อหน้า <select value={partPageSize} onChange={(e) => { setPartPageSize(Number(e.target.value)); setPartPage(1); }}><option value={10}>10</option><option value={20}>20</option><option value={50}>50</option></select></label>
+          </footer>
         </div> : <Empty title="ไม่พบ Part" text={partNeedle ? "ลองเปลี่ยนคำค้นหา" : "ยังไม่มี Part ในทะเบียน Stock"} />}
       </Card>
 
@@ -1734,7 +1756,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     // แบบมีเงื่อนไข ไม่ใช่คอมโพเนนต์ การเรียก hook ในนี้จะผิดกฎ Hooks
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <>
-      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.11.0</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
+      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.11.1</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
       <div className="settings-grid"><Card title="ตั้งค่าการตัดยอด"><Toggle keyName="partial" title="อนุญาตให้ตัดยอดบางส่วน" text="Tag หนึ่งใบสามารถตัดยอดไม่ครบ Due ได้" /><Toggle keyName="confirm" title="ยืนยันก่อนตัดยอดทุกครั้ง" text="แสดงยอดก่อนและหลังให้ตรวจสอบก่อนบันทึก" /></Card><Card title="ตั้งค่าการสแกน"><Toggle keyName="autoFocus" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" title="เสียงแจ้งเตือนเมื่อสำเร็จ" text="เปิดเสียงยืนยันหลังตัดยอดเรียบร้อย" /></Card></div>
       <Card title="รูปแบบการแสดงผล"><div className="form-grid"><label><span>ภาษา</span><select><option>ภาษาไทย</option></select></label><label><span>เขตเวลา</span><select><option>(GMT+07:00) Bangkok, Thailand</option></select></label><label><span>รูปแบบวันที่</span><select><option>DD/MM/YYYY</option></select></label><label><span>หน่วยเริ่มต้น</span><select><option>ชิ้น (PC)</option></select></label></div><div className="save-row"><button className="button primary" onClick={saveSettings}>▣ บันทึกการตั้งค่า</button></div></Card>
     </>;
@@ -1782,7 +1804,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
       <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.11.0</span></div></div>
+      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.11.1</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
