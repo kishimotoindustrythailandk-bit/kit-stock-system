@@ -888,3 +888,68 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
   .stock-stat{min-height:112px}
   .stock-receive-card .panel-head,.stock-latest-card .panel-head{margin:-16px -14px 15px;padding:13px 14px}
 }
+
+
+/* v2.16.0 — unified vivid summary cards across every page */
+.stat-tile,.part-stat,.tag-stat,.plan-stat,.metric-card{
+  position:relative;
+  overflow:hidden;
+  border-width:1.5px;
+  box-shadow:0 12px 28px rgba(31,73,141,.13);
+  transition:transform .18s ease,box-shadow .18s ease;
+}
+.stat-tile:hover,.part-stat:hover,.tag-stat:hover,.plan-stat:hover,.metric-card:hover{
+  transform:translateY(-2px);
+  box-shadow:0 16px 34px rgba(31,73,141,.18);
+}
+.stat-tile.blue,.part-stat.blue,.plan-stat.blue,.tone-blue.metric-card{
+  border-color:#8fbdff;background:linear-gradient(135deg,#e4f1ff 0%,#b9d8ff 100%);
+}
+.stat-tile.green,.part-stat.green,.tag-stat.green,.plan-stat.green,.tone-green.metric-card{
+  border-color:#78d8a5;background:linear-gradient(135deg,#e0faeb 0%,#abeac7 100%);
+}
+.stat-tile.orange,.part-stat.orange,.tag-stat.orange,.plan-stat.orange,.tone-orange.metric-card{
+  border-color:#ffc66b;background:linear-gradient(135deg,#fff3d4 0%,#ffd58a 100%);
+}
+.stat-tile.red,.plan-stat.red,.tone-red.metric-card{
+  border-color:#ff9aac;background:linear-gradient(135deg,#ffe7eb 0%,#ffb5c1 100%);
+}
+.stat-tile.purple,.part-stat.purple,.tag-stat.purple,.tone-purple.metric-card{
+  border-color:#bea0ff;background:linear-gradient(135deg,#f1e9ff 0%,#d6c1ff 100%);
+}
+.stat-tile.teal{
+  border-color:#6bd7ce;background:linear-gradient(135deg,#e0fbf8 0%,#afeae5 100%);
+}
+.stat-tile.amber{
+  border-color:#f3c95b;background:linear-gradient(135deg,#fff8dc 0%,#ffe39a 100%);
+}
+.tag-stat.blue{
+  border-color:#8fbdff;background:linear-gradient(135deg,#e4f1ff 0%,#b9d8ff 100%);
+}
+.tone-gray.metric-card{
+  border-color:#bac7da;background:linear-gradient(135deg,#f2f5f9 0%,#dce4ee 100%);
+}
+.part-stat>span,.tag-stat>span,.metric-icon,.stat-tile .stat-icon{
+  box-shadow:0 9px 22px rgba(20,55,120,.20);
+}
+.tag-stat>span,.metric-icon{
+  color:#fff!important;
+  border:5px solid rgba(255,255,255,.55);
+}
+.tag-stat.blue>span,.tone-blue .metric-icon{background:linear-gradient(135deg,#1189ff,#304ee8)}
+.tag-stat.green>span,.tone-green .metric-icon{background:linear-gradient(135deg,#22cf7c,#069956)}
+.tag-stat.orange>span,.tone-orange .metric-icon{background:linear-gradient(135deg,#ffb72c,#ff7b12)}
+.tag-stat.purple>span,.tone-purple .metric-icon{background:linear-gradient(135deg,#a45bf4,#6633dc)}
+.tone-red .metric-icon{background:linear-gradient(135deg,#ff6078,#e82f4c)}
+.tone-gray .metric-icon{background:linear-gradient(135deg,#8293aa,#596b85)}
+.stat-tile small,.part-stat small,.tag-stat small,.plan-stat small,.metric-label{
+  color:#344b70;font-weight:800;
+}
+.stat-tile b,.part-stat b,.tag-stat b,.plan-stat b,.metric-card strong{
+  color:#102451;font-weight:800;
+}
+.compact .metric-card{box-shadow:0 10px 24px rgba(31,73,141,.11)}
+@media(max-width:760px){
+  .stat-tile,.part-stat,.tag-stat,.plan-stat,.metric-card{min-height:102px}
+  .stat-tile:hover,.part-stat:hover,.tag-stat:hover,.plan-stat:hover,.metric-card:hover{transform:none}
+}
