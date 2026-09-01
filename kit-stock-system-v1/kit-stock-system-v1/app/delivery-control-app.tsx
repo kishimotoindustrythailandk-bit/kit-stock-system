@@ -656,37 +656,79 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       if (!/\.xlsx?$/i.test(selected.name)) throw new Error("กรุณาเลือกไฟล์ Excel .xlsx หรือ .xls");
       const xlsx = await import("xlsx");
       const workbook = xlsx.read(await selected.arrayBuffer(), { type: "array", cellDates: true });
-      const sheet = workbook.Sheets.Sheet1 ?? workbook.Sheets[workbook.SheetNames[0]];
-      const grid = xlsx.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: "" });
-      const headerIndex = grid.findIndex((row) => row.map(text).includes("Material Code") && row.map(text).includes("Req. Qty"));
-      if (headerIndex < 0) throw new Error("ไม่พบหัวตาราง Material Code และ Req. Qty ในไฟล์");
-      const headers = grid[headerIndex].map(text);
-      const at = (row: unknown[], name: string) => row[headers.indexOf(name)];
-      const grouped = new Map<string, ImportRow>();
-      for (const row of grid.slice(headerIndex + 1)) {
-        const materialCode = text(at(row, "Material Code")).toUpperCase();
-        const reqQty = number(at(row, "Req. Qty"));
-        if (!materialCode || materialCode.includes("ผลรวม") || reqQty <= 0) continue;
-        const doSubGroup = text(at(row, "DO Sub-Group"));
-        const doNo = (doSubGroup.split("|")[0] || text(at(row, "Delivery Order No."))).toUpperCase();
-        const seq = number(at(row, "Seq."));
-        const deliveryDate = normalizeDate(at(row, "Delivery Date"), xlsx);
-        const deliveryTime = normalizeTime(at(row, "Delivery Time"));
-        const fact = text(at(row, "Fact.")).toUpperCase();
-        const line = text(at(row, "Line")).toUpperCase();
-        const shop = text(at(row, "Shop")).toUpperCase();
-        if (!doNo || !seq || !deliveryDate || !deliveryTime || !fact) continue;
-        const sourceKey = [doNo, materialCode, seq, deliveryDate, deliveryTime, fact, line, shop].join("|");
-        const current = grouped.get(sourceKey);
-        if (current) current.reqQty += reqQty;
-        else grouped.set(sourceKey, {
-          sourceKey, doNo, seq, materialCode,
-          materialDescription: text(at(row, "Material Description")),
-          site: text(at(row, "Site")).toUpperCase(), fact, line, shop, reqQty, deliveryDate, deliveryTime,
-        });
+      const normalized = (value: unknown) => text(value).toLowerCase().replace(/[\s._/()\-]+/g, "");
+      const valueAt = (row: unknown[], headers: string[], aliases: string[]) => {
+        const index = headers.findIndex((header) => aliases.includes(header));
+        return index >= 0 ? row[index] : "";
+      };
+      const alias = {
+        material: ["materialcode", "materialno", "partno", "itemno"],
+        qty: ["reqqty", "dueqty", "quantity", "qty"],
+        description: ["materialdescription", "description", "partname"],
+        doNo: ["deliveryorderno", "dono", "pono", "ordernumber"],
+        doSubGroup: ["dosubgroup"],
+        seq: ["seq", "poitem", "item"],
+        date: ["deliverydate", "duedate"],
+        time: ["deliverytime", "duetime"],
+        fact: ["fact", "factory", "fac"],
+        line: ["line"],
+        shop: ["shop", "deliveryspot"],
+        site: ["site"],
+      };
+      const candidates: ImportRow[][] = [];
+
+      for (const sheetName of workbook.SheetNames) {
+        const sheet = workbook.Sheets[sheetName];
+        const grid = xlsx.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: "" });
+        let activeHeaders: string[] = [];
+        const parsedRows: ImportRow[] = [];
+
+        for (let rowIndex = 0; rowIndex < grid.length; rowIndex += 1) {
+          const row = grid[rowIndex];
+          const normalizedRow = row.map(normalized);
+          const hasMaterial = normalizedRow.some((header) => alias.material.includes(header));
+          const hasQty = normalizedRow.some((header) => alias.qty.includes(header));
+          if (hasMaterial && hasQty) {
+            activeHeaders = normalizedRow;
+            continue;
+          }
+          if (!activeHeaders.length) continue;
+
+          const materialCode = text(valueAt(row, activeHeaders, alias.material)).toUpperCase();
+          const reqQty = number(valueAt(row, activeHeaders, alias.qty));
+          if (!materialCode || materialCode === "ITEM NO." || materialCode.includes("ผลรวม") || reqQty <= 0) continue;
+
+          const doSubGroup = text(valueAt(row, activeHeaders, alias.doSubGroup));
+          const doRaw = doSubGroup.split("|")[0] || text(valueAt(row, activeHeaders, alias.doNo));
+          const doNo = doRaw.toUpperCase();
+          const seq = number(valueAt(row, activeHeaders, alias.seq)) || rowIndex + 1;
+          const deliveryDate = normalizeDate(valueAt(row, activeHeaders, alias.date), xlsx);
+          const suppliedTime = normalizeTime(valueAt(row, activeHeaders, alias.time));
+          const deliveryTime = suppliedTime || "09:00";
+          const deliverySpot = text(valueAt(row, activeHeaders, alias.shop)).toUpperCase();
+          const filenameSite = selected.name.match(/SITE\s*([1-9])/i)?.[1] || "";
+          const spotFactory = deliverySpot.match(/(?:^|[-_ ])F(?:AC)?\s*([1-9])(?:$|[-_ ])/i)?.[1] || "";
+          const factRaw = text(valueAt(row, activeHeaders, alias.fact)).toUpperCase();
+          const fact = factRaw || (spotFactory ? `FAC${spotFactory}` : filenameSite ? `FAC${filenameSite}` : "FAC1");
+          const line = text(valueAt(row, activeHeaders, alias.line)).toUpperCase();
+          const shop = deliverySpot;
+          const siteRaw = text(valueAt(row, activeHeaders, alias.site)).toUpperCase();
+          const site = siteRaw || (/MCP/i.test(selected.name) ? "MCP" : deliverySpot);
+          if (!doNo || !deliveryDate) continue;
+
+          const baseKey = [doNo, materialCode, seq, deliveryDate, deliveryTime, fact, line, shop].join("|");
+          parsedRows.push({
+            sourceKey: `${baseKey}|ROW:${rowIndex + 1}`,
+            doNo, seq, materialCode,
+            materialDescription: text(valueAt(row, activeHeaders, alias.description)),
+            site, fact, line, shop, reqQty, deliveryDate, deliveryTime,
+          });
+        }
+        if (parsedRows.length) candidates.push(parsedRows);
       }
-      const rows = [...grouped.values()];
-      if (!rows.length) throw new Error("ไม่พบรายการ Due ที่ใช้งานได้ในไฟล์");
+
+      const rows = candidates.sort((left, right) => right.length - left.length)[0] || [];
+      if (!rows.length) throw new Error("ไม่พบรายการ Due ที่ใช้งานได้ กรุณาตรวจสอบว่ามี Item No./Material Code, Due Qty/Req. Qty และวันที่ส่งงาน");
       setPreviewRows(rows);
       setNotice({ type: "success", text: `อ่านไฟล์สำเร็จ ${fmt(rows.length)} รายการ รวม ${fmt(rows.reduce((sum, row) => sum + row.reqQty, 0))} ชิ้น` });
     } catch (caught) {
@@ -1768,7 +1810,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     // แบบมีเงื่อนไข ไม่ใช่คอมโพเนนต์ การเรียก hook ในนี้จะผิดกฎ Hooks
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <>
-      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.13.1</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
+      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.14.0</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
       <div className="settings-grid"><Card title="ตั้งค่าการตัดยอด"><Toggle keyName="partial" title="อนุญาตให้ตัดยอดบางส่วน" text="Tag หนึ่งใบสามารถตัดยอดไม่ครบ Due ได้" /><Toggle keyName="confirm" title="ยืนยันก่อนตัดยอดทุกครั้ง" text="แสดงยอดก่อนและหลังให้ตรวจสอบก่อนบันทึก" /></Card><Card title="ตั้งค่าการสแกน"><Toggle keyName="autoFocus" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" title="เสียงแจ้งเตือนเมื่อสำเร็จ" text="เปิดเสียงยืนยันหลังตัดยอดเรียบร้อย" /></Card></div>
       <Card title="รูปแบบการแสดงผล"><div className="form-grid"><label><span>ภาษา</span><select><option>ภาษาไทย</option></select></label><label><span>เขตเวลา</span><select><option>(GMT+07:00) Bangkok, Thailand</option></select></label><label><span>รูปแบบวันที่</span><select><option>DD/MM/YYYY</option></select></label><label><span>หน่วยเริ่มต้น</span><select><option>ชิ้น (PC)</option></select></label></div><div className="save-row"><button className="button primary" onClick={saveSettings}>▣ บันทึกการตั้งค่า</button></div></Card>
     </>;
@@ -1816,7 +1858,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
       <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.13.1</span></div></div>
+      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.14.0</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
