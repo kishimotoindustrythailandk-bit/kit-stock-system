@@ -828,3 +828,63 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 /* Guaranteed vivid arrange cards v2.15.8 */
 .arrange-color-card{position:relative;overflow:hidden;min-height:106px;display:flex;align-items:center;gap:14px;padding:17px 18px;border:1px solid;border-radius:16px;box-shadow:0 12px 25px rgba(25,65,125,.14)}.arrange-color-card:after{content:"";position:absolute;right:-25px;bottom:-48px;width:120px;height:105px;border-radius:50%;background:rgba(255,255,255,.45)}.arrange-color-card>span{position:relative;z-index:1;flex:0 0 62px;width:62px;height:62px;display:grid;place-items:center;color:#fff;border:8px solid rgba(255,255,255,.68);border-radius:50%;font-size:27px;font-weight:900;box-shadow:0 9px 19px rgba(20,62,130,.2)}.arrange-color-card>div{position:relative;z-index:1}.arrange-color-card small,.arrange-color-card b,.arrange-color-card em{display:block}.arrange-color-card small{font-size:11px;font-weight:900}.arrange-color-card b{margin-top:2px;color:#102b59;font-size:29px;line-height:1.05}.arrange-color-card em{margin-top:5px;color:#526888;font-size:10px;font-style:normal;font-weight:800}.arrange-color-card.blue small{color:#075eca}.arrange-color-card.green small{color:#087a48}.arrange-color-card.orange small{color:#aa5d00}.arrange-color-card.red small{color:#b42038}
 @media(max-width:720px){.arrange-color-card{min-height:94px;gap:9px;padding:12px}.arrange-color-card>span{flex-basis:48px;width:48px;height:48px;border-width:6px;font-size:21px}.arrange-color-card b{font-size:23px}.arrange-color-card small{font-size:9px}}
+
+
+/* v2.15.9 — vivid Stock dashboard, matched to Arrange */
+.stock-home{
+  padding:2px;
+  border-radius:22px;
+  background:
+    radial-gradient(circle at 4% 0%,rgba(39,130,246,.10),transparent 27%),
+    radial-gradient(circle at 98% 12%,rgba(124,58,237,.09),transparent 26%);
+}
+.stock-stat{
+  min-height:132px;
+  border-width:1.5px;
+  box-shadow:0 12px 28px rgba(31,73,141,.13);
+  transition:transform .18s ease,box-shadow .18s ease;
+}
+.stock-stat:hover{transform:translateY(-2px);box-shadow:0 16px 34px rgba(31,73,141,.18)}
+.stock-stat.blue{border-color:#8fbdff;background:linear-gradient(135deg,#e4f1ff 0%,#b9d8ff 100%)}
+.stock-stat.green{border-color:#78d8a5;background:linear-gradient(135deg,#e0faeb 0%,#abeac7 100%)}
+.stock-stat.orange{border-color:#ffc66b;background:linear-gradient(135deg,#fff3d4 0%,#ffd58a 100%)}
+.stock-stat.red{border-color:#ff9aac;background:linear-gradient(135deg,#ffe7eb 0%,#ffb5c1 100%)}
+.stock-stat>span{border:6px solid rgba(255,255,255,.58);width:64px;height:64px;border-radius:50%;box-shadow:0 10px 22px rgba(20,55,120,.22)}
+.stock-stat.blue>span{background:linear-gradient(135deg,#1189ff,#304ee8)}
+.stock-stat.green>span{background:linear-gradient(135deg,#22cf7c,#069956)}
+.stock-stat.orange>span{background:linear-gradient(135deg,#ffb72c,#ff7b12)}
+.stock-stat.red>span{background:linear-gradient(135deg,#ff6078,#e82f4c)}
+.stock-stat div small{color:#344b70;font-weight:800}
+.stock-stat div b{font-size:32px;font-weight:800}
+.stock-stat button{font-weight:800}
+.stock-receive-card,.stock-latest-card,.stock-status-card,.stock-trend-card,.stock-today-card{
+  border:1.5px solid #cbdcf6;
+  box-shadow:0 14px 34px rgba(31,73,141,.11);
+}
+.stock-receive-card{background:linear-gradient(180deg,#f8fbff 0%,#ffffff 42%)}
+.stock-latest-card{background:linear-gradient(180deg,#faf8ff 0%,#ffffff 36%)}
+.stock-receive-card .panel-head,.stock-latest-card .panel-head{
+  margin:-18px -20px 18px;
+  padding:15px 20px;
+  color:#fff;
+  border-radius:15px 15px 0 0;
+  background:linear-gradient(110deg,#078cf3 0%,#315fe7 55%,#823bea 100%);
+}
+.stock-latest-card .panel-head{background:linear-gradient(110deg,#176be9 0%,#6847eb 100%)}
+.stock-receive-card .panel-head h3,.stock-latest-card .panel-head h3{color:#fff}
+.stock-latest-card .stock-list-tools input{background:#fff;border-color:rgba(255,255,255,.65)}
+.stock-latest-card .stock-list-tools button{color:#fff;border-color:rgba(255,255,255,.55);background:rgba(255,255,255,.18)}
+.stock-camera-zone{box-shadow:0 14px 30px rgba(42,83,222,.24),inset 0 0 55px rgba(255,255,255,.10)}
+.stock-scan-count{color:#087747;background:linear-gradient(90deg,#e5faef,#f3efff)}
+.stock-latest-head{color:#fff;background:linear-gradient(90deg,#2377ef,#7641e8)}
+.stock-latest-row:nth-child(even){background:#f6f9ff}
+.stock-latest-row:hover{background:#edf4ff}
+.stock-guide{background:linear-gradient(135deg,#fff8e7,#fff2cd);box-shadow:0 6px 16px rgba(230,154,21,.10)}
+.stock-status-card{background:linear-gradient(145deg,#f2fff8,#ffffff 56%)}
+.stock-trend-card{background:linear-gradient(145deg,#f1f6ff,#ffffff 56%)}
+.stock-today-card{background:linear-gradient(145deg,#faf6ff,#ffffff)}
+@media(max-width:760px){
+  .stock-home{padding:0;background:transparent}
+  .stock-stat{min-height:112px}
+  .stock-receive-card .panel-head,.stock-latest-card .panel-head{margin:-16px -14px 15px;padding:13px 14px}
+}
