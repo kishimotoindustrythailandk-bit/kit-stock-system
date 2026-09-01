@@ -1536,28 +1536,54 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const reserved = receivedStockTags.reduce((sum, item) => sum + Number(item.reservedQty), 0);
     const available = Math.max(onHand - reserved, 0);
     const awaitingReceipt = stock.tags.filter((item) => item.status === "printed").length;
-    return <>
-      <div className="metrics four">
-        <MetricCard tone="blue" icon="▤" label="Tag รอรับเข้า" value={fmt(awaitingReceipt)} suffix="ใบ" />
-        <MetricCard tone="green" icon="□" label="Stock คงเหลือ" value={fmt(onHand)} suffix="ชิ้น" />
-        <MetricCard tone="orange" icon="◷" label="รอขายออก" value={fmt(reserved)} suffix="ชิ้น" />
-        <MetricCard tone="purple" icon="✓" label="พร้อมจัดงาน" value={fmt(available)} suffix="ชิ้น" />
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const receivedToday = receivedStockTags.filter((item) => (item.receivedAt || "").slice(0, 10) === todayKey).reduce((sum, item) => sum + Number(item.qty), 0);
+    const dispatchedToday = stock.dispatchLinks.filter((item) => (item.dispatchedAt || "").slice(0, 10) === todayKey).reduce((sum, item) => sum + Number(item.qty), 0);
+    const stockNeedle = tagSearch.trim().toLowerCase();
+    const recentStock = receivedStockTags.filter((item) => !stockNeedle || [item.tagId, item.materialCode, item.partName, item.jobNo].some((value) => String(value || "").toLowerCase().includes(stockNeedle))).slice(0, 6);
+    const totalForChart = Math.max(onHand, 1);
+    const readyPercent = Math.round((available / totalForChart) * 100);
+    const reservedPercent = Math.round((reserved / totalForChart) * 100);
+    const trendDays = Array.from({ length: 7 }, (_, offset) => {
+      const date = new Date();
+      date.setDate(date.getDate() - (6 - offset));
+      const key = date.toISOString().slice(0, 10);
+      return { key, label: String(date.getDate()) + "/" + String(date.getMonth() + 1), qty: receivedStockTags.filter((item) => (item.receivedAt || "").slice(0, 10) === key).reduce((sum, item) => sum + Number(item.qty), 0) };
+    });
+    const trendMax = Math.max(...trendDays.map((item) => item.qty), 1);
+    return <div className="stock-home">
+      <div className="stock-stat-row">
+        <article className="stock-stat blue"><span>◇</span><div><small>Tag รอรับเข้า</small><b>{fmt(awaitingReceipt)}</b><em>ใบ</em></div><button onClick={() => go("tags")}>ดูรายละเอียด →</button></article>
+        <article className="stock-stat green"><span>□</span><div><small>Stock คงเหลือ</small><b>{fmt(onHand)}</b><em>ชิ้น</em></div><button onClick={() => void loadStock()}>ดูรายละเอียด →</button></article>
+        <article className="stock-stat orange"><span>⇧</span><div><small>รอขายออก</small><b>{fmt(reserved)}</b><em>ชิ้น</em></div><button onClick={() => go("arrange")}>ดูรายละเอียด →</button></article>
+        <article className="stock-stat red"><span>✓</span><div><small>พร้อมจัดงาน</small><b>{fmt(available)}</b><em>ชิ้น</em></div><button onClick={() => go("arrange")}>ดูรายละเอียด →</button></article>
       </div>
-      <Card title="1. ยิง Tag รับงานเข้า Stock" action={<button type="button" className="camera-button" onClick={() => { setCameraPurpose("stock"); setCameraOpen(true); }}>▣ เปิดกล้องยิง Tag</button>}>
-        <div className="stock-scan-visual"><span>▦</span><b>พร้อมรับ Tag Stock</b><small>ใช้กล้องโทรศัพท์หรือเครื่องยิงส่ง Enter แล้วระบบบันทึกทันที</small></div>
-        <form className="manual-scan" onSubmit={receiveStockTag}><label><span>รหัส Tag Stock / ข้อมูล QR</span><input value={stockScan} onChange={(e) => setStockScan(e.target.value)} placeholder="ยิง Tag ที่สร้างจากเมนูพิมพ์ Tag" autoComplete="off" autoFocus /></label><button className="button primary" disabled={!stockScan.trim() || stockSaving}>{stockSaving ? "กำลังรับเข้า…" : "รับเข้า Stock"}</button></form>
-        <div className="stock-rule-note"><b>ขั้นตอนการทำงาน</b><p>สร้างและพิมพ์ Tag จากเมนู “พิมพ์ Tag” ก่อน จากนั้นนำ Tag มายิงหน้านี้เพื่อรับงานเข้า Stock ผู้จัดงานจะยิง KIT Tag เพื่อจองงาน และผู้ตรวจยิง Tag ลูกค้าเพื่อตัด Stock กับ Due จริง</p></div>
-      </Card>
-      <Card title="2. รายการ Stock" action={<button className="button secondary" onClick={() => void loadStock()}>↻ รีเฟรช</button>}>
-        {stockLoading ? <div className="inline-loading">กำลังโหลด Stock…</div> : receivedStockTags.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>Part / รูป</th><th>Job / วันที่ผลิต</th><th>Tag ID / กล่อง</th><th className="num">รับเข้า</th><th className="num">จองรอ</th><th className="num">คงเหลือ</th><th>สถานะ</th></tr></thead><tbody>{receivedStockTags.map((item) => {
-          const boxMatch = item.tagId.match(/-B(\d+)OF(\d+)$/);
-          return <tr key={item.id}><td data-label="Part"><div className="stock-part-cell"><PartImage materialCode={item.materialCode} compact /><div><b>{item.materialCode}</b><small>{item.partName}</small></div></div></td><td data-label="Job / วันที่"><b>{item.jobNo}</b><small>{formatDate(item.productionDate)}</small></td><td data-label="Tag ID / กล่อง"><b>{item.tagId}</b>{boxMatch && <small>กล่อง {Number(boxMatch[1])} / {Number(boxMatch[2])}</small>}</td><td data-label="รับเข้า" className="num">{fmt(item.qty)}</td><td data-label="จองรอ" className="num warning">{fmt(item.reservedQty)}</td><td data-label="คงเหลือ" className="num sent"><b>{fmt(item.remainingQty)}</b></td><td data-label="สถานะ"><span className={`status ${item.status === "depleted" ? "over" : item.reservedQty ? "partial" : "completed"}`}>{item.status === "depleted" ? "ขายออกหมด" : item.reservedQty ? "มีงานรอขาย" : "พร้อมใช้"}</span></td></tr>;
-        })}</tbody></table></div> : <Empty title="ยังไม่มี Stock" text="ยิง Tag รับงานเข้า Stock แล้วรายการจะแสดงที่นี่" />}
-      </Card>
+      <div className="stock-main-grid">
+        <Card className="stock-receive-card" title="1. สแกน Tag เพื่อรับเข้า Stock">
+          <button type="button" className="stock-camera-zone" onClick={() => { setCameraPurpose("stock"); setCameraOpen(true); }}><span>⌗</span><b>พร้อมสแกน Tag</b><small>นำ Tag มาแตะที่เครื่องสแกน</small></button>
+          <div className="stock-scan-count"><i /> สแกนแล้ว {fmt(receivedStockTags.length)} ใบ</div>
+          <form className="stock-receive-form" onSubmit={receiveStockTag}><input value={stockScan} onChange={(e) => setStockScan(e.target.value)} placeholder="เช่น TG-20250901-0001" autoComplete="off" autoFocus /><button className="button primary" disabled={!stockScan.trim() || stockSaving}>{stockSaving ? "กำลังบันทึก…" : "บันทึกรับเข้า Stock"}</button></form>
+          <div className="stock-guide"><b>↕ ขั้นตอนการทำงาน</b><p>สแกน Tag ทีละใบ เพื่อบันทึกรับเข้า Stock เข้าระบบอัตโนมัติ</p></div>
+        </Card>
+        <Card className="stock-latest-card" title="2. รายการ Stock ล่าสุด" action={<div className="stock-list-tools"><input value={tagSearch} onChange={(e) => setTagSearch(e.target.value)} placeholder="ค้นหา Tag / รายการสินค้า / Job..." /><button onClick={() => void loadStock()}>↻</button></div>}>
+          {stockLoading ? <div className="inline-loading">กำลังโหลด Stock…</div> : recentStock.length ? <><div className="stock-latest-head"><span>Tag / QR</span><span>รายการสินค้า</span><span>Job</span><span>วันที่รับเข้า</span><span>สถานะ</span><span>คงเหลือ</span></div><div className="stock-latest-list">{recentStock.map((item) => {
+            const itemAvailable = Math.max(Number(item.remainingQty) - Number(item.reservedQty), 0);
+            const statusClass = item.status === "depleted" ? "depleted" : Number(item.reservedQty) ? "reserved" : "ready";
+            const statusText = item.status === "depleted" ? "ขายออกหมด" : Number(item.reservedQty) ? "รอขายออก" : "พร้อมจัดงาน";
+            return <button key={item.id} className="stock-latest-row" onClick={() => setTagSearch(item.tagId)}><span className="tag-cell"><i>▦</i><b>{item.tagId}</b></span><span><b>{item.materialCode}</b><small>{item.partName}</small></span><span><b>{item.jobNo}</b></span><span><b>{item.receivedAt ? formatDate(item.receivedAt) : "—"}</b></span><span><em className={"stock-state " + statusClass}>{statusText}</em></span><span className="remain-cell"><b>{fmt(itemAvailable)}</b> ชิ้น <i>›</i></span></button>;
+          })}</div><button className="stock-view-all" onClick={() => setTagSearch("")}>ดูรายการทั้งหมด →</button></> : <Empty title="ยังไม่มี Stock" text={stockNeedle ? "ไม่พบรายการที่ค้นหา" : "ยิง Tag รับงานเข้า Stock แล้วรายการจะแสดงที่นี่"} />}
+        </Card>
+      </div>
+      <div className="stock-analytics-grid">
+        <Card className="stock-status-card" title="3. สรุปสถานะ Stock"><div className="stock-donut-wrap"><div className="stock-donut" style={{ "--ready-stock": String(readyPercent * 3.6) + "deg" } as React.CSSProperties}><span><b>{fmt(onHand)}</b><small>ชิ้น</small></span></div><ul><li><i className="ready" /><span>พร้อมจัดงาน</span><b>{fmt(available)} ชิ้น</b><em>{readyPercent}%</em></li><li><i className="reserved" /><span>รอขายออก</span><b>{fmt(reserved)} ชิ้น</b><em>{reservedPercent}%</em></li></ul></div></Card>
+        <Card className="stock-trend-card" title="แนวโน้ม 7 วันที่ผ่านมา"><div className="stock-trend-chart">{trendDays.map((item) => <div key={item.key} className="trend-column"><b>{item.qty ? fmt(item.qty) : ""}</b><i style={{ height: String(Math.max((item.qty / trendMax) * 100, 4)) + "%" }} /><span>{item.label}</span></div>)}</div></Card>
+        <aside className="stock-today-card"><div><span className="blue">⇩</span><p><small>รับเข้า (วันนี้)</small><b>{fmt(receivedToday)} ชิ้น</b></p></div><div><span className="green">⇧</span><p><small>เบิกออก (วันนี้)</small><b>{fmt(dispatchedToday)} ชิ้น</b></p></div><div><span className="purple">▤</span><p><small>คงเหลือรวม</small><b>{fmt(onHand)} ชิ้น</b></p></div></aside>
+      </div>
       <Card title="Traceability: Tag ลูกค้า ↔ KIT Tag ↔ Job">
         {stock.dispatchLinks.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>Tag ลูกค้า</th><th>KIT Tag / Job</th><th>Part / Due</th><th>ผลิต / รับเข้า</th><th className="num">จำนวน</th><th>ผู้จัด / ผู้ตรวจ</th></tr></thead><tbody>{stock.dispatchLinks.slice(0, 50).map((item) => <tr key={item.id}><td data-label="Tag ลูกค้า"><b>{item.customerTagId}</b></td><td data-label="KIT Tag / Job"><b>{item.stockTagCode}</b><small>Job {item.jobNo}</small></td><td data-label="Part / Due"><b>{item.materialCode}</b><small>{item.fact} / {item.line || "—"} · DO {item.doNo}</small></td><td data-label="ผลิต / รับเข้า"><b>{formatDate(item.productionDate)}</b><small>{item.receivedAt ? formatDateTime(item.receivedAt) : "—"}</small></td><td data-label="จำนวน" className="num"><b>{fmt(item.qty)}</b></td><td data-label="ผู้จัด / ผู้ตรวจ"><b>{item.pickedByName}</b><small>{item.dispatchedByName} · {formatDateTime(item.dispatchedAt)}</small></td></tr>)}</tbody></table></div> : <Empty title="ยังไม่มี Traceability ขายออก" text="เมื่อผู้ตรวจยิง Tag ลูกค้า ระบบจะแสดง KIT Tag, Job, วันที่ผลิต และวันที่รับเข้าที่ใช้จริง" />}
       </Card>
-    </>;
+
+    </div>;
   }
 
   function renderPlan() {
