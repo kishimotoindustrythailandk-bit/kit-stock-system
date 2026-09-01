@@ -319,6 +319,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [arrangeQty, setArrangeQty] = useState("");
   const [arrangementPreview, setArrangementPreview] = useState<ArrangementPreview | null>(null);
   const [filterDate, setFilterDate] = useState("");
+  const [planPage, setPlanPage] = useState(1);
+  const [planPageSize, setPlanPageSize] = useState(10);
   const [filterFact, setFilterFact] = useState("ALL");
   const [filterTime, setFilterTime] = useState("ALL");
   const [query, setQuery] = useState("");
@@ -1626,24 +1628,69 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }
 
   function renderPlan() {
-    return <>
-      <Card className="import-card" title={`สรุปแผนส่งงาน ${filterDate ? formatDate(filterDate) : "ทั้งหมด"}`} action={<button className="button primary" onClick={() => fileInput.current?.click()}>⇧ นำเข้าแผนส่งงาน Excel</button>}>
-        <input ref={fileInput} type="file" accept=".xlsx,.xls" hidden onChange={parseExcel} />
-        <div className="metrics four compact">
-          <MetricCard tone="blue" icon="▤" label="แผนทั้งหมด" value={fmt(summary.items)} suffix="รายการ" />
-          <MetricCard tone="green" icon="✓" label="ครบตามแผน" value={fmt(summary.completed)} suffix="รายการ" />
-          <MetricCard tone="orange" icon="◷" label="คงเหลือ" value={fmt(summary.partial + summary.pending)} suffix="รายการ" />
-          <MetricCard tone="red" icon="!" label="เกิน Due" value={fmt(summary.over)} suffix="รายการ" />
-        </div>
-        {(file || parsing) && <div className="import-preview"><div><span>XL</span><p><b>{file?.name}</b><small>{parsing ? "กำลังอ่านไฟล์…" : `${fmt(previewRows.length)} รายการ · ${fmt(previewRows.reduce((sum, row) => sum + row.reqQty, 0))} ชิ้น`}</small></p></div><button className="button primary" disabled={!previewRows.length || importing} onClick={importExcel}>{importing ? "กำลังนำเข้า…" : "ยืนยันนำเข้า"}</button></div>}
-      </Card>
-      <Card><Filters /></Card>
-      <Card title="รายการแผนส่งงาน" action={<span className="result-count">แสดง {fmt(filtered.length)} รายการ</span>}><DueTable rows={filtered} /></Card>
-      <div className="split-grid">
-        <Card title="สรุปแผนส่งงานตาม FAC"><div className="fac-cards">{facStats.length ? facStats.map((item) => <div key={item.fact}><b>{item.fact}</b><strong>{fmt(item.items)} รายการ</strong><small><i className="green" /> ครบ {item.completed} <i className="orange" /> คงเหลือ {item.remaining}</small></div>) : <Empty />}</div></Card>
-        <Card title="ประวัตินำเข้า Excel">{payload.imports.length ? <div className="mini-list">{payload.imports.map((item) => <div key={item.id}><span>XL</span><p><b>{item.fileName}</b><small>{fmt(item.rowCount)} รายการ · {fmt(item.totalQty)} ชิ้น · โดย {item.importedByName}</small></p><div className="import-history-actions"><time>{formatDateTime(item.createdAt)}</time><button className="tiny-button danger-outline" disabled={deletingImportId === item.id} onClick={() => void deleteImport(item)}>{deletingImportId === item.id ? "กำลังลบ…" : "ลบข้อมูล"}</button></div></div>)}</div> : <Empty />}</Card>
+    const planTotalPages = Math.max(1, Math.ceil(filtered.length / planPageSize));
+    const safePlanPage = Math.min(planPage, planTotalPages);
+    const planStartIndex = (safePlanPage - 1) * planPageSize;
+    const paginatedDues = filtered.slice(planStartIndex, planStartIndex + planPageSize);
+    const planPageButtons: Array<number | "…"> = [];
+    for (let current = 1; current <= planTotalPages; current += 1) {
+      if (current === 1 || current === planTotalPages || Math.abs(current - safePlanPage) <= 1) planPageButtons.push(current);
+      else if (planPageButtons[planPageButtons.length - 1] !== "…") planPageButtons.push("…");
+    }
+    const latestImport = payload.imports[0];
+    const resetPlanFilters = () => {
+      setFilterDate(""); setFilterFact("ALL"); setFilterTime("ALL"); setQuery(""); setPlanPage(1);
+    };
+
+    return <div className="plan-home">
+      <input ref={fileInput} type="file" accept=".xlsx,.xls" hidden onChange={parseExcel} />
+      <div className="plan-top-row">
+        <article className="plan-stat blue"><span>▤</span><div><small>แผนทั้งหมด</small><b>{fmt(summary.items)}</b><em>รายการ</em></div></article>
+        <article className="plan-stat green"><span>✓</span><div><small>ครบตามแผน</small><b>{fmt(summary.completed)}</b><em>รายการ</em></div></article>
+        <article className="plan-stat orange"><span>◷</span><div><small>คงเหลือ</small><b>{fmt(summary.partial + summary.pending)}</b><em>รายการ</em></div></article>
+        <article className="plan-stat red"><span>!</span><div><small>เกิน Due</small><b>{fmt(summary.over)}</b><em>รายการ</em></div></article>
+        <button className="plan-import-button" onClick={() => fileInput.current?.click()}>⇧ นำเข้าแผนส่งงาน Excel</button>
       </div>
-    </>;
+
+      <Card className="plan-filter-card" title="ค้นหาแผนส่งงาน">
+        <button className="mobile-filter-toggle" type="button" onClick={() => setFiltersOpen((open) => !open)} aria-expanded={filtersOpen}><span>⌄</span>{filtersOpen ? "ซ่อนตัวกรอง" : "แสดงตัวกรอง"}</button>
+        <div className={`plan-filter-grid ${filtersOpen ? "mobile-open" : ""}`}>
+          <label><span>วันที่ส่งงาน</span><select value={filterDate} onChange={(event) => { setFilterDate(event.target.value); setPlanPage(1); }}><option value="">ทุกวันที่</option>{dates.map((date) => <option key={date} value={date}>{formatDate(date)}</option>)}</select></label>
+          <label><span>โรงงาน (FAC)</span><select value={filterFact} onChange={(event) => { setFilterFact(event.target.value); setPlanPage(1); }}><option value="ALL">ทั้งหมด</option>{facts.map((fact) => <option key={fact}>{fact}</option>)}</select></label>
+          <label><span>เวลา</span><select value={filterTime} onChange={(event) => { setFilterTime(event.target.value); setPlanPage(1); }}><option value="ALL">ทั้งหมด</option>{times.map((time) => <option key={time}>{time}</option>)}</select></label>
+          <label><span>ค้นหา</span><input value={query} onChange={(event) => { setQuery(event.target.value); setPlanPage(1); }} placeholder="Material / Part No. / DO" /></label>
+          <button className="button primary" onClick={() => setPlanPage(1)}>⌕ ค้นหา</button>
+          <button className="button secondary" onClick={resetPlanFilters}>↻ ล้างค่า</button>
+        </div>
+        {(file || parsing) && <div className="import-preview plan-import-preview"><div><span>XL</span><p><b>{file?.name}</b><small>{parsing ? "กำลังอ่านไฟล์…" : `${fmt(previewRows.length)} รายการ · ${fmt(previewRows.reduce((sum, row) => sum + row.reqQty, 0))} ชิ้น`}</small></p></div><button className="button primary" disabled={!previewRows.length || importing} onClick={importExcel}>{importing ? "กำลังนำเข้า…" : "ยืนยันนำเข้า"}</button></div>}
+      </Card>
+
+      <Card className="plan-list-card" title={<span className="plan-list-title">▦ รายการแผนส่งงาน <em>{fmt(filtered.length)} รายการ</em></span> as unknown as string} action={<span className="plan-last-import">{latestImport ? `อัปโหลดล่าสุด: ${formatDateTime(latestImport.createdAt)} โดย ${latestImport.importedByName}` : "ยังไม่มีประวัตินำเข้า"}</span>}>
+        {paginatedDues.length ? <div className="plan-modern-table">
+          <div className="plan-modern-head"><span>วันที่ส่งงาน</span><span>โรงงาน (FAC)</span><span>เวลา</span><span>Part / Material No.</span><span>ลูกค้า / Site</span><span>Job / DO</span><span>จำนวน (ชิ้น)</span><span>สถานะ</span><span>จัดการ</span></div>
+          <div className="plan-modern-body">{paginatedDues.map((due) => {
+            const image = partImages.find((item) => item.materialCode === due.materialCode);
+            const importRow = payload.imports.find((item) => item.id === due.importId);
+            return <div className="plan-modern-row" key={due.id}>
+              <span><b>{formatDate(due.deliveryDate)}</b><small>{due.shop || "—"}</small></span>
+              <span><b>{due.fact}</b><small>{due.line || due.shop || "—"}</small></span>
+              <span><b>{due.deliveryTime}</b></span>
+              <span className="plan-part-cell"><PartImage materialCode={due.materialCode} compact version={image?.updatedAt} /><span><b>{due.materialCode}</b><small>{due.materialDescription || "—"}</small></span></span>
+              <span><b>{due.site || "—"}</b></span>
+              <span><b>{due.doNo}</b><small>Seq {due.seq}</small></span>
+              <span><b>{fmt(due.reqQty)} ชิ้น</b></span>
+              <span><em className={`status ${Number(due.arrangedQty) > 0 && stateOf(due) === "pending" ? "partial" : stateOf(due)}`}>{stateLabel(due)}</em></span>
+              <span>{importRow ? <button className="plan-delete-button" title="ลบชุด Excel ที่มีรายการนี้" disabled={deletingImportId === importRow.id} onClick={() => void deleteImport(importRow)}>{deletingImportId === importRow.id ? "…" : "♲"}</button> : "—"}</span>
+            </div>;
+          })}</div>
+          <footer>
+            <span>แสดง {fmt(planStartIndex + 1)} - {fmt(Math.min(planStartIndex + planPageSize, filtered.length))} จาก {fmt(filtered.length)} รายการ</span>
+            <nav className="part-pagination" aria-label="หน้ารายการแผนส่งงาน"><button className="part-page-button" disabled={safePlanPage === 1} onClick={() => setPlanPage(Math.max(1, safePlanPage - 1))}>«</button>{planPageButtons.map((item, index) => item === "…" ? <span className="part-page-dots" key={"plan-dots-" + index}>…</span> : <button className={"part-page-button " + (item === safePlanPage ? "active" : "")} key={item} onClick={() => setPlanPage(item)}>{item}</button>)}<button className="part-page-button" disabled={safePlanPage === planTotalPages} onClick={() => setPlanPage(Math.min(planTotalPages, safePlanPage + 1))}>»</button></nav>
+            <label className="part-page-size">แสดงต่อหน้า <select value={planPageSize} onChange={(event) => { setPlanPageSize(Number(event.target.value)); setPlanPage(1); }}><option value={10}>10</option><option value={20}>20</option><option value={50}>50</option></select></label>
+          </footer>
+        </div> : <Empty title="ไม่พบแผนส่งงาน" text="ลองเปลี่ยนวันที่ โรงงาน เวลา หรือคำค้นหา" />}
+      </Card>
+    </div>;
   }
 
   function renderScan(scanMode: "arrange" | "dispatch") {
@@ -1721,7 +1768,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     // แบบมีเงื่อนไข ไม่ใช่คอมโพเนนต์ การเรียก hook ในนี้จะผิดกฎ Hooks
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <>
-      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.12.1</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
+      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.13.0</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
       <div className="settings-grid"><Card title="ตั้งค่าการตัดยอด"><Toggle keyName="partial" title="อนุญาตให้ตัดยอดบางส่วน" text="Tag หนึ่งใบสามารถตัดยอดไม่ครบ Due ได้" /><Toggle keyName="confirm" title="ยืนยันก่อนตัดยอดทุกครั้ง" text="แสดงยอดก่อนและหลังให้ตรวจสอบก่อนบันทึก" /></Card><Card title="ตั้งค่าการสแกน"><Toggle keyName="autoFocus" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" title="เสียงแจ้งเตือนเมื่อสำเร็จ" text="เปิดเสียงยืนยันหลังตัดยอดเรียบร้อย" /></Card></div>
       <Card title="รูปแบบการแสดงผล"><div className="form-grid"><label><span>ภาษา</span><select><option>ภาษาไทย</option></select></label><label><span>เขตเวลา</span><select><option>(GMT+07:00) Bangkok, Thailand</option></select></label><label><span>รูปแบบวันที่</span><select><option>DD/MM/YYYY</option></select></label><label><span>หน่วยเริ่มต้น</span><select><option>ชิ้น (PC)</option></select></label></div><div className="save-row"><button className="button primary" onClick={saveSettings}>▣ บันทึกการตั้งค่า</button></div></Card>
     </>;
@@ -1769,7 +1816,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
       <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.12.1</span></div></div>
+      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.13.0</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
