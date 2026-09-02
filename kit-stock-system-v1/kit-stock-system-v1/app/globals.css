@@ -1222,3 +1222,10 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
   .arrange-summary-grid{display:none!important}
   .arrange-workspace{margin-top:0!important}
 }
+
+
+/* v2.18.4 — dispatch summary desktop only */
+@media(max-width:720px){
+  .dispatch-summary-grid{display:none!important}
+  .scan-layout{margin-top:0!important}
+}
