@@ -1202,3 +1202,8 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
  .scan-layout .cut-summary{grid-template-columns:105px 1fr;padding:12px}.scan-layout .progress-ring{width:92px;height:92px}
  .scan-layout+.panel{margin-top:12px}
 }
+
+
+/* v2.18.1 — hide arrange summary strip */
+.arrange-summary-grid{display:none!important}
+.arrange-workspace{margin-top:0}
