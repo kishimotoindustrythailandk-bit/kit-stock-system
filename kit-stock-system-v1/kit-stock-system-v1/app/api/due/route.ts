@@ -33,6 +33,88 @@ function parseCustomerTag(raw: string) {
   return parsed;
 }
 
+// ตรวจชิ้นงานก่อนขายออก: จับคู่ Tag ลูกค้ากับ Due ด้วยตรรกะเดียวกับการขายออก
+// แต่ "อ่านอย่างเดียว" ไม่แตะ Stock หรือ Due — ให้ผู้ตรวจเทียบรูป master กับของจริง
+// ในกล่องก่อน แล้วจึงไปกดขายออกจริง คืน verdict เสมอ (ไม่ throw) เพื่อบอกสาเหตุ
+// ที่หน้าจอได้ครบทุกกรณี
+async function verifyCustomerTag(rawPayload: string) {
+  const { DB } = getRuntimeEnv();
+  if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
+  const db = getDb();
+
+  let tag: ReturnType<typeof parseCustomerTag>;
+  try {
+    tag = parseCustomerTag(rawPayload);
+  } catch (error) {
+    return Response.json({ action: "verify", verdict: "bad_tag", message: error instanceof Error ? error.message : "อ่าน Tag ไม่ได้" });
+  }
+
+  const part = await DB.prepare("SELECT part_name AS partName, customer FROM stock_parts WHERE material_code = ?1 LIMIT 1")
+    .bind(tag.materialCode).first<{ partName: string; customer: string }>();
+  const image = await DB.prepare("SELECT 1 AS ok FROM part_images WHERE material_code = ?1 LIMIT 1")
+    .bind(tag.materialCode).first<{ ok: number }>();
+  const master = { materialCode: tag.materialCode, partName: part?.partName || "", customer: part?.customer || "", hasImage: !!image };
+
+  const dup = await db.select({ id: deliveryTagScans.id }).from(deliveryTagScans)
+    .where(eq(deliveryTagScans.tagId, tag.tagId)).limit(1);
+  if (dup.length) {
+    return Response.json({ action: "verify", verdict: "already", tag, master, message: "Tag นี้ถูกสแกนส่งออกและตัดยอดไปแล้ว" });
+  }
+
+  const matches = await db.select().from(deliveryDueLines).where(and(
+    eq(deliveryDueLines.doNo, tag.doNo),
+    eq(deliveryDueLines.materialCode, tag.materialCode),
+    eq(deliveryDueLines.seq, tag.seq),
+    eq(deliveryDueLines.deliveryDate, tag.deliveryDate),
+    eq(deliveryDueLines.line, tag.line),
+    eq(deliveryDueLines.shop, tag.shop),
+  )).limit(2);
+  if (!matches.length) {
+    return Response.json({ action: "verify", verdict: "no_due", tag, master, message: `ไม่พบ Due ที่ตรงกับ ${tag.materialCode} / Seq ${tag.seq} / ${tag.deliveryDate}` });
+  }
+  if (matches.length > 1) {
+    return Response.json({ action: "verify", verdict: "ambiguous", tag, master, message: "พบ Due ซ้ำมากกว่า 1 รายการ กรุณาให้ผู้ดูแลตรวจไฟล์นำเข้า" });
+  }
+  const due = matches[0];
+
+  const [currentRow] = await db.select({ total: sql<number>`coalesce(sum(${deliveryTagScans.qty}), 0)` })
+    .from(deliveryTagScans).where(eq(deliveryTagScans.dueLineId, due.id));
+  const alreadyQty = Number(currentRow?.total ?? 0);
+  const remainingDue = Math.max(due.reqQty - alreadyQty, 0);
+
+  const stagedRow = await DB.prepare(`
+    SELECT coalesce(sum(picked_qty - dispatched_qty), 0) AS avail
+    FROM stock_picks
+    WHERE due_line_id = ?1 AND status IN ('staged', 'partial') AND picked_qty > dispatched_qty
+  `).bind(due.id).first<{ avail: number }>();
+  const stagedAvail = Number(stagedRow?.avail ?? 0);
+
+  const dueInfo = {
+    id: due.id, doNo: due.doNo, seq: due.seq, materialCode: due.materialCode,
+    materialDescription: due.materialDescription, fact: due.fact, line: due.line,
+    shop: due.shop, site: due.site, reqQty: due.reqQty,
+    deliveryDate: due.deliveryDate, deliveryTime: due.deliveryTime,
+    alreadyQty, remainingDue,
+    projectedQty: alreadyQty + tag.qty,
+    remainingAfter: Math.max(due.reqQty - (alreadyQty + tag.qty), 0),
+  };
+
+  let verdict = "ready";
+  let message = "ตรงกับงานที่ต้องส่งออก — เทียบรูปกับของจริงแล้วขายออกได้เลย";
+  if (alreadyQty + tag.qty > due.reqQty) {
+    verdict = "over";
+    message = `จำนวนเกิน Due: รับได้อีก ${remainingDue} ชิ้น แต่ Tag นี้มี ${tag.qty} ชิ้น`;
+  } else if (stagedAvail < tag.qty) {
+    verdict = "short";
+    message = `งานที่จัดรอไว้ไม่พอ: ต้องใช้ ${tag.qty} ชิ้น แต่จัดรอขายไว้ ${stagedAvail} ชิ้น`;
+  } else if (!master.hasImage) {
+    verdict = "ready_noimg";
+    message = "ตรงกับงานที่ต้องส่งออก แต่ยังไม่มีรูป master ให้เทียบ — เพิ่มรูปได้ที่หน้าทะเบียน Part";
+  }
+
+  return Response.json({ action: "verify", verdict, message, tag, master, due: dueInfo, stagedAvail });
+}
+
 export async function GET() {
   try {
     const user = await getCurrentUser();
@@ -106,7 +188,8 @@ export async function POST(request: Request) {
     if (user.role !== "admin" && user.role !== "inspector") {
       return Response.json({ error: "เฉพาะผู้ตรวจงานหรือ Admin เท่านั้นที่สแกน Tag ลูกค้าเพื่อขายออกได้" }, { status: 403 });
     }
-    const payload = await request.json() as { rawPayload?: string };
+    const payload = await request.json() as { rawPayload?: string; mode?: string };
+    if (payload.mode === "verify") return await verifyCustomerTag(payload.rawPayload ?? "");
     const tag = parseCustomerTag(payload.rawPayload ?? "");
     const db = getDb();
     const duplicate = await db.select({ id: deliveryTagScans.id }).from(deliveryTagScans)
