@@ -1214,3 +1214,11 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
   .stock-home .stock-stat-row{display:none!important}
   .stock-home .stock-workspace{margin-top:0!important}
 }
+
+
+/* v2.18.3 — arrange summary desktop only */
+.arrange-summary-grid{display:grid!important}
+@media(max-width:720px){
+  .arrange-summary-grid{display:none!important}
+  .arrange-workspace{margin-top:0!important}
+}
