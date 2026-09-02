@@ -1065,3 +1065,74 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
   .login-v2 .login-copy p br{display:none}
   .login-v2 .login-input-wrap input{min-height:54px}
 }
+
+
+/* v2.17.2 — Login desktop composition correction */
+@media(min-width:821px){
+  .login-page.login-v2{
+    height:100svh;min-height:0;
+    padding:18px 46px;gap:26px;
+    overflow:hidden;
+  }
+  .login-v2 .login-card{
+    height:calc(100svh - 36px);min-height:0;
+    padding:30px 60px 18px;
+    overflow:hidden;
+  }
+  .login-v2 .login-brand b{font-size:60px}
+  .login-v2 .login-brand span{margin-top:5px}
+  .login-v2 .login-copy{margin:24px 0 18px}
+  .login-welcome-row h1{font-size:34px!important}
+  .login-welcome-row em{right:2px;bottom:-2px;font-size:52px}
+  .login-v2 .login-copy p{font-size:12px;line-height:1.65}
+  .login-v2 .login-form{gap:11px}
+  .login-v2 .login-input-wrap input{min-height:52px}
+  .login-v2 .login-submit{min-height:50px;margin-top:0}
+  .login-v2 .login-card footer{min-height:43px;margin-top:16px}
+  .login-copyright{padding-top:14px}
+  .login-v2 .login-visual{
+    height:calc(100svh - 36px);min-height:0;
+  }
+  .login-visual-copy{
+    top:12%!important;left:7%!important;width:52%!important;
+  }
+  .login-visual-copy h2{
+    margin:13px 0 22px!important;
+    font-size:clamp(34px,3vw,52px)!important;
+  }
+  .login-visual-copy ul{gap:13px}
+  .login-visual-copy li>i{width:47px;height:47px;border-width:6px}
+  .login-v2 .login-visual>img{
+    right:-2%;bottom:0;width:72%;height:66%;
+    object-position:68% 72%;
+  }
+  .login-benefits{
+    top:auto!important;left:7%!important;right:7%!important;bottom:2.5%!important;
+    width:auto!important;height:auto!important;
+    transform:none!important;
+    padding:14px 18px;
+  }
+  .login-benefits>div{padding:0 12px}
+  .login-benefits i{font-size:27px}
+  .login-route{top:5%!important}
+}
+@media(min-width:821px) and (max-height:760px){
+  .login-page.login-v2{padding:12px 34px}
+  .login-v2 .login-card,.login-v2 .login-visual{height:calc(100svh - 24px)}
+  .login-v2 .login-card{padding:22px 48px 12px}
+  .login-v2 .login-brand b{font-size:52px}
+  .login-v2 .login-copy{margin:15px 0 12px}
+  .login-welcome-row h1{font-size:29px!important}
+  .login-welcome-row em{font-size:42px}
+  .login-v2 .login-copy p{line-height:1.45}
+  .login-v2 .login-form{gap:8px}
+  .login-v2 .login-input-wrap input{min-height:46px}
+  .login-v2 .login-submit{min-height:46px}
+  .login-v2 .login-card footer{min-height:38px;margin-top:10px}
+  .login-copyright{padding-top:8px}
+  .login-visual-copy{top:8%!important}
+  .login-visual-copy h2{margin:8px 0 14px!important;font-size:clamp(30px,2.7vw,44px)!important}
+  .login-visual-copy ul{gap:8px}
+  .login-visual-copy li>i{width:40px;height:40px;border-width:5px}
+  .login-benefits{padding:10px 12px}
+}
