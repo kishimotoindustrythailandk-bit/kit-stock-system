@@ -4,7 +4,7 @@
 
 import { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
-type PageKey = "dashboard" | "stock" | "parts" | "tags" | "plan" | "arrange" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
+type PageKey = "dashboard" | "stock" | "parts" | "tags" | "plan" | "arrange" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
 
 type DueLine = {
   id: number;
@@ -121,6 +121,7 @@ const NAV: Array<{ key: PageKey; label: string; icon: string }> = [
   { key: "tags", label: "พิมพ์ Tag", icon: "▤" },
   { key: "plan", label: "แผนส่งงาน (Due)", icon: "▤" },
   { key: "arrange", label: "จัดงาน", icon: "⇥" },
+  { key: "verify", label: "ตรวจก่อนส่งออก", icon: "◉" },
   { key: "dispatch", label: "ตรวจและขายออก", icon: "⌗" },
   { key: "exports", label: "รายการส่งออก", icon: "▱" },
   { key: "reports", label: "รายงาน", icon: "▥" },
@@ -136,6 +137,7 @@ const PERMISSION_HELP: Record<PageKey, string> = {
   tags: "ทะเบียน Part สร้างและพิมพ์ Tag",
   plan: "นำเข้า ตรวจสอบ และลบแผน Due",
   arrange: "เลือก Due และยิง KIT Tag เพื่อจัดงานรอขาย",
+  verify: "สแกนเทียบรูป master ก่อนขายออก (ไม่ตัด Stock/Due)",
   dispatch: "ยิง Tag ลูกค้าเพื่อตัด Stock และ Due",
   exports: "ดูรายการที่ส่งออกแล้ว",
   reports: "ดูและส่งออกรายงาน",
@@ -151,12 +153,24 @@ const PAGE_SUBTITLE: Record<PageKey, string> = {
   tags: "ทะเบียน Part สร้าง Tag และพิมพ์ Tag รับงานเข้า Stock",
   plan: "ตรวจสอบแผนส่งงานจากไฟล์ Excel",
   arrange: "ผู้จัดงานเลือก Due แล้วยิง KIT Stock Tag เพื่อบันทึกงานรอขาย",
+  verify: "สแกนชิ้นงานในกล่องเพื่อเทียบรูป master และงานที่ต้องส่งออก ก่อนยืนยันขายออก",
   dispatch: "ผู้ตรวจยิง Tag ลูกค้าเพื่อขายออก ตัด Stock และ Due",
   exports: "รายการที่ตัดยอดและส่งออกแล้ว",
   reports: "สรุปผลการส่งงานตามวันและโรงงาน",
   history: "ตรวจสอบประวัติการสแกนและตัดยอด",
   settings: "กำหนดค่าการทำงานของระบบ",
   users: "ผู้ใช้งานที่มีสิทธิ์เข้าถึงระบบ",
+};
+
+type VerifyVerdict = "ready" | "ready_noimg" | "short" | "over" | "no_due" | "ambiguous" | "already" | "bad_tag";
+type VerifyResult = {
+  action: "verify";
+  verdict: VerifyVerdict;
+  message?: string;
+  tag?: { rawPayload: string; tagId: string; materialCode: string; qty: number; unit: string; doNo: string; seq: number; deliveryDate: string; line: string; shop: string; location: string };
+  master?: { materialCode: string; partName: string; customer: string; hasImage: boolean };
+  due?: { id: number; doNo: string; seq: number; materialCode: string; materialDescription: string; fact: string; line: string; shop: string; site: string; reqQty: number; deliveryDate: string; deliveryTime: string; alreadyQty: number; remainingDue: number; projectedQty: number; remainingAfter: number };
+  stagedAvail?: number;
 };
 
 function number(value: unknown) {
@@ -327,6 +341,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [rawTag, setRawTag] = useState("");
   const [tagPreview, setTagPreview] = useState<TagPreview | null>(null);
   const [checkingTag, setCheckingTag] = useState(false);
+  const [verifyRaw, setVerifyRaw] = useState("");
+  const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
+  const [verifyLoading, setVerifyLoading] = useState(false);
   const [arrangeDueId, setArrangeDueId] = useState("");
   const [arrangeTag, setArrangeTag] = useState("");
   const [arrangeQty, setArrangeQty] = useState("");
@@ -382,9 +399,15 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const tagInput = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const tagResultRef = useRef<HTMLElement>(null);
+  const verifyInput = useRef<HTMLInputElement>(null);
+  const verifyResultRef = useRef<HTMLElement>(null);
   const allowedPages = useMemo(() => {
     const keys: PageKey[] = user.role === "admin" ? NAV.map((item) => item.key) : (user.permissions?.length ? user.permissions : ["dashboard"]);
-    return new Set<PageKey>(["dashboard", ...keys]);
+    const set = new Set<PageKey>(["dashboard", ...keys]);
+    // หน้า "ตรวจก่อนส่งออก" เป็นตัวช่วยอ่านอย่างเดียวของขั้นตอนขายออก
+    // จึงเปิดให้อัตโนมัติกับทุกคนที่มีสิทธิ์ขายออก (dispatch) โดยไม่ต้องตั้งสิทธิ์แยก
+    if (set.has("dispatch")) set.add("verify");
+    return set;
   }, [user.permissions, user.role]);
 
   async function loadDue() {
@@ -631,6 +654,12 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
               if (cameraPurpose === "stock") {
                 setStockScan(value);
                 void receiveStockTag(value);
+                return;
+              }
+              if (page === "verify") {
+                setVerifyRaw(value);
+                setVerifyResult(null);
+                void verifyTag(value);
                 return;
               }
               const arrangeMode = page === "arrange";
@@ -903,6 +932,41 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     } finally {
       setCheckingTag(false);
     }
+  }
+
+  async function verifyTag(value?: string | FormEvent) {
+    const event = typeof value === "object" ? value : undefined;
+    event?.preventDefault();
+    const scannedValue = typeof value === "string" ? value.trim() : verifyRaw.trim();
+    if (!scannedValue || verifyLoading) return;
+    setVerifyLoading(true);
+    setVerifyResult(null);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/due", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ rawPayload: scannedValue, mode: "verify" }),
+      });
+      const result = await response.json() as VerifyResult & { error?: string };
+      if (!response.ok) throw new Error(result.error || "ตรวจสอบชิ้นงานไม่สำเร็จ");
+      setVerifyResult(result);
+      window.setTimeout(() => {
+        if (window.matchMedia("(max-width: 720px)").matches) verifyResultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        else verifyInput.current?.focus();
+      }, 120);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบชิ้นงานไม่สำเร็จ" });
+    } finally {
+      setVerifyLoading(false);
+    }
+  }
+
+  function goDispatchFromVerify() {
+    if (!verifyResult?.tag) return;
+    setRawTag(verifyResult.tag.rawPayload);
+    setTagPreview(null);
+    go("dispatch");
   }
 
   async function stageStockTag(value?: string | FormEvent) {
@@ -1979,6 +2043,65 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     </>;
   }
 
+  function renderVerify() {
+    const r = verifyResult;
+    const TONE: Record<VerifyVerdict, { tone: "pass" | "warn" | "fail"; icon: string; title: string }> = {
+      ready: { tone: "pass", icon: "✓", title: "ตรงกับงานที่ต้องส่งออก" },
+      ready_noimg: { tone: "pass", icon: "✓", title: "ตรงกับงาน (ยังไม่มีรูป master)" },
+      short: { tone: "warn", icon: "!", title: "งานที่จัดรอไว้ไม่พอ" },
+      over: { tone: "warn", icon: "!", title: "จำนวนเกิน Due" },
+      no_due: { tone: "fail", icon: "✕", title: "ไม่พบงานที่ตรงกับ Tag นี้" },
+      ambiguous: { tone: "fail", icon: "✕", title: "พบ Due ซ้ำมากกว่า 1 รายการ" },
+      already: { tone: "fail", icon: "✕", title: "Tag นี้ขายออกไปแล้ว" },
+      bad_tag: { tone: "fail", icon: "✕", title: "อ่าน Tag ไม่ได้" },
+    };
+    const PALETTE = {
+      pass: { bg: "#e0faeb", border: "#7bd6a5", fg: "#08863f" },
+      warn: { bg: "#fff3d4", border: "#f3b94f", fg: "#b9720a" },
+      fail: { bg: "#ffe7eb", border: "#f28a9c", fg: "#d61f38" },
+    };
+    const meta = r ? TONE[r.verdict] : null;
+    const palette = meta ? PALETTE[meta.tone] : null;
+    const canDispatch = allowedPages.has("dispatch");
+    const isReady = r?.verdict === "ready" || r?.verdict === "ready_noimg";
+    return <>
+      <div className="scan-layout">
+        <section className="scanner-card">
+          <div className="scanner-title"><div><h3>ตรวจชิ้นงานก่อนส่งออก</h3><p>สแกน Tag ที่กล่อง ระบบจะแสดงรูป master และงานที่ต้องส่ง เพื่อเทียบว่าตรงกันก่อนขายออก — ขั้นตอนนี้ยังไม่ตัด Stock และ Due</p></div><button className="camera-button" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>▣ เปิดกล้อง</button></div>
+          <div className="scanner-visual"><div className="scan-frame"><span className="qr-symbol">◉</span><b>{verifyLoading ? "กำลังตรวจ…" : "พร้อมสแกนเพื่อตรวจ"}</b><small>วาง QR ให้อยู่ในกรอบ หรือยิง Tag ได้ทันที</small><i /></div></div>
+          <form className="manual-scan" onSubmit={verifyTag}><label><span>Tag ลูกค้า / ข้อมูลจาก QR</span><input ref={verifyInput} value={verifyRaw} onChange={(e) => { setVerifyRaw(e.target.value); setVerifyResult(null); }} placeholder="ยิง Tag ที่กล่อง แล้วเครื่องส่ง Enter" autoComplete="off" /></label><button className="button primary" disabled={!verifyRaw.trim() || verifyLoading}>{verifyLoading ? "กำลังตรวจ…" : "◉ ตรวจสอบชิ้นงาน"}</button></form>
+          <div className="arrange-help">ⓘ ใช้เทียบด้วยสายตา: ดูรูป master คู่กับของจริงในกล่องว่าเป็นงานเดียวกันก่อนกดขายออก</div>
+        </section>
+        <section className="tag-result" ref={verifyResultRef}>
+          <header><div><p>ผลการตรวจ</p><h3>{r?.tag?.materialCode || r?.master?.materialCode || "รอการสแกน"}</h3></div>{meta && palette ? <span className="status" style={{ background: palette.bg, color: palette.fg, borderColor: palette.border }}>{meta.icon} {meta.tone === "pass" ? "พร้อมส่งออก" : meta.tone === "warn" ? "ตรวจซ้ำ" : "หยุด"}</span> : <span className="status pending">ยังไม่มี Tag</span>}</header>
+          {r && meta && palette ? <>
+            <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "14px 16px", borderRadius: 12, background: palette.bg, border: `1px solid ${palette.border}`, marginBottom: 14 }}>
+              <span style={{ width: 40, height: 40, borderRadius: 10, background: palette.fg, color: "#fff", display: "grid", placeItems: "center", fontSize: 20, flex: "0 0 auto" }}>{meta.icon}</span>
+              <div><b style={{ color: palette.fg, fontSize: 16, display: "block" }}>{meta.title}</b><small style={{ color: "#4a5568" }}>{r.message}</small></div>
+            </div>
+            {(r.tag || r.master) ? <div className="tag-main"><PartImage materialCode={(r.tag?.materialCode || r.master?.materialCode)!} /><div><small>PART / MATERIAL</small><b>{r.tag?.materialCode || r.master?.materialCode}</b><p>{r.master?.partName || r.due?.materialDescription || "ไม่ระบุชื่อชิ้นงาน"}</p></div></div> : null}
+            {r.due ? <>
+              <div className="detail-grid">
+                <div><small>ต้องส่งไปที่ (FAC / Line)</small><b>{r.due.fact} / {r.due.line || "—"}</b></div>
+                <div><small>DO / Seq</small><b>{r.due.doNo} / {r.due.seq}</b></div>
+                <div><small>แผนส่งวัน / เวลา</small><b>{formatDate(r.due.deliveryDate)} {r.due.deliveryTime}</b></div>
+                <div><small>Tag ID</small><b>{r.tag?.tagId || "—"}</b></div>
+                <div><small>จำนวนใน Tag</small><b>{fmt(r.tag?.qty || 0)} {r.tag?.unit || "PC"}</b></div>
+                <div><small>งานที่จัดรอขาย</small><b>{fmt(r.stagedAvail || 0)} ชิ้น</b></div>
+                <div><small>Due ทั้งหมด</small><b>{fmt(r.due.reqQty)} ชิ้น</b></div>
+                <div><small>ขายออกแล้ว</small><b>{fmt(r.due.alreadyQty)} ชิ้น</b></div>
+                <div><small>Due คงเหลือ</small><b>{fmt(r.due.remainingDue)} ชิ้น</b></div>
+              </div>
+            </> : null}
+            {isReady && canDispatch ? <div className="save-row" style={{ marginTop: 16 }}><button className="button primary" onClick={goDispatchFromVerify}>ตรงแล้ว → ไปหน้าขายออก</button></div>
+              : isReady ? <div className="scan-saved">✓ ตรงกับงานที่ต้องส่งออก — ให้ผู้ตรวจ (inspector) ดำเนินการขายออกในหน้า “ตรวจและขายออก”</div>
+              : null}
+          </> : <Empty title="รอสแกนชิ้นงาน" text="สแกน Tag ที่กล่อง ระบบจะแสดงรูป master, Item No. และงานที่ต้องส่งออกให้เทียบก่อนขายออก" />}
+        </section>
+      </div>
+    </>;
+  }
+
   function renderExports() {
     const exported = payload.dues.filter((due) => Number(due.scannedQty) > 0);
     const full = exported.filter((due) => stateOf(due) === "completed").length;
@@ -2054,7 +2177,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     </>;
   }
 
-  const pageContent: Record<PageKey, () => ReactNode> = { dashboard: renderDashboard, stock: renderStock, parts: renderParts, tags: renderTags, plan: renderPlan, arrange: () => renderScan("arrange"), dispatch: () => renderScan("dispatch"), exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
+  const pageContent: Record<PageKey, () => ReactNode> = { dashboard: renderDashboard, stock: renderStock, parts: renderParts, tags: renderTags, plan: renderPlan, arrange: () => renderScan("arrange"), verify: renderVerify, dispatch: () => renderScan("dispatch"), exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
   const activeNav = NAV.find((item) => item.key === page)!;
 
   return <div className="control-shell">
@@ -2089,7 +2212,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         <label className="wide"><span>อีเมล (ไม่บังคับ)</span><input type="email" value={userForm.email} onChange={(e) => setUserForm((current) => ({ ...current, email: e.target.value }))} /></label>
       </div>
       <section className="individual-permissions"><div className="permission-title"><div><b>สิทธิ์เข้าใช้งานรายบุคคล</b><p>เลือกหน้าได้อิสระ หน้าหลักจะเปิดไว้เสมอ</p></div><button type="button" className="tiny-button" onClick={() => setUserForm((current) => ({ ...current, permissions: [...ROLE_PERMISSIONS[current.role]] }))}>คืนค่าตามบทบาท</button></div>
-        <div className="permission-grid">{NAV.map((item) => {
+        <div className="permission-grid">{NAV.filter((item) => item.key !== "verify").map((item) => {
           const checked = userForm.permissions.includes(item.key);
           return <label key={item.key} className={`permission-option ${checked ? "checked" : ""}`}>
             <input type="checkbox" checked={checked} disabled={item.key === "dashboard"} onChange={(event) => setUserForm((current) => ({
