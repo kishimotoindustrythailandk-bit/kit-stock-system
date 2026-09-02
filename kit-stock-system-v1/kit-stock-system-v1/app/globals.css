@@ -1136,3 +1136,14 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
   .login-visual-copy li>i{width:40px;height:40px;border-width:5px}
   .login-benefits{padding:10px 12px}
 }
+
+
+/* v2.17.3 — temporary action notices */
+.toast.auto-dismiss{animation:toast-auto-dismiss 4s ease forwards}
+@keyframes toast-auto-dismiss{
+  0%,82%{opacity:1;transform:translateY(0)}
+  100%{opacity:0;transform:translateY(-8px);visibility:hidden}
+}
+@media(prefers-reduced-motion:reduce){
+  .toast.auto-dismiss{animation:none}
+}
