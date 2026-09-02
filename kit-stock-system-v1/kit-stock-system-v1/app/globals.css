@@ -1207,3 +1207,10 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 /* v2.18.1 — hide arrange summary strip */
 .arrange-summary-grid{display:none!important}
 .arrange-workspace{margin-top:0}
+
+
+/* v2.18.2 — mobile Stock starts at scanner */
+@media(max-width:720px){
+  .stock-home .stock-stat-row{display:none!important}
+  .stock-home .stock-workspace{margin-top:0!important}
+}
