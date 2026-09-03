@@ -774,3 +774,20 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
   .donut-wrap, .donut-svg { width: 168px; }
   .donut-svg { height: 168px; }
 }
+
+
+/* v2.19.0 — dual Part image comparison */
+.part-image-pair{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px!important;width:100%}
+.part-image-pair figure{min-width:0!important;padding:9px;margin:0!important;border:1px solid #d8e4f3;border-radius:14px;background:#f8fbff}
+.part-image-pair figcaption{display:flex;align-items:center;justify-content:center;min-height:28px;margin:0 0 7px!important;padding:5px 8px;border-radius:8px;color:#174b91!important;background:#e7f1ff;font-size:12px!important;font-weight:800!important}
+.part-image-pair figure:nth-child(2) figcaption{color:#087944!important;background:#e4f8ed}
+.part-image-pair .part-photo,.part-image-pair .part-photo-fallback{width:100%;height:190px;border-radius:10px;background:#fff}
+.part-image-pair .part-photo img{width:100%;height:100%;object-fit:contain}
+.tag-main:has(.part-image-pair){display:grid;grid-template-columns:minmax(300px,1.35fr) minmax(170px,.65fr);align-items:center}
+@media(max-width:720px){
+ .part-image-pair{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px!important}
+ .part-image-pair figure{padding:5px;border-radius:10px}
+ .part-image-pair figcaption{min-height:34px;padding:4px;font-size:10px!important;line-height:1.25}
+ .part-image-pair .part-photo,.part-image-pair .part-photo-fallback{height:128px}
+ .tag-main:has(.part-image-pair){grid-template-columns:1fr}
+}
