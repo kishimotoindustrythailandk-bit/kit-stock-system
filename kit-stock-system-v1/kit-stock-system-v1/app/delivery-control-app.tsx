@@ -96,9 +96,14 @@ type StockDispatchLink = {
   stockTagCode: string; materialCode: string; jobNo: string; productionDate: string;
   receivedAt?: string; doNo: string; fact: string; line: string;
 };
+type StockJobClosure = {
+  id: number; jobNo: string; materialCode: string; totalQty: number; receivedQty: number;
+  ngQty: number; ngTagCount: number; reason: string; closedByName: string;
+  closedByCode: string; closedAt: string;
+};
 type StockPayload = {
   parts: StockPart[]; tags: StockTag[]; allocations: StockAllocation[];
-  picks: StockPick[]; dispatchLinks: StockDispatchLink[];
+  picks: StockPick[]; dispatchLinks: StockDispatchLink[]; jobClosures: StockJobClosure[];
 };
 type ArrangementPreview = {
   action: "staged";
@@ -394,7 +399,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [bulkImageFailed, setBulkImageFailed] = useState<Array<{ name: string; reason: string }>>([]);
   const [partImageNeedle, setPartImageNeedle] = useState("");
   const [deletingImportId, setDeletingImportId] = useState<number | null>(null);
-  const [stock, setStock] = useState<StockPayload>({ parts: [], tags: [], allocations: [], picks: [], dispatchLinks: [] });
+  const [stock, setStock] = useState<StockPayload>({ parts: [], tags: [], allocations: [], picks: [], dispatchLinks: [], jobClosures: [] });
+  const [jobClosingKey, setJobClosingKey] = useState("");
   const [stockLoading, setStockLoading] = useState(false);
   const [clearingTestStock, setClearingTestStock] = useState(false);
   const [stockPartForm, setStockPartForm] = useState({ materialCode: "", partName: "", customer: "", standardQty: "" });
@@ -455,7 +461,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       if (!response.ok) throw new Error(data.error || "โหลด Stock ไม่สำเร็จ");
       setStock({
         parts: data.parts || [], tags: data.tags || [], allocations: data.allocations || [],
-        picks: data.picks || [], dispatchLinks: data.dispatchLinks || [],
+        picks: data.picks || [], dispatchLinks: data.dispatchLinks || [], jobClosures: data.jobClosures || [],
       });
     } catch (caught) {
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "โหลด Stock ไม่สำเร็จ" });
@@ -1240,6 +1246,50 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     }
   }
 
+  async function closeStockJob(jobNo: string, materialCode: string, totalQty: number, receivedQty: number, ngQty: number) {
+    const reason = window.prompt("ระบุสาเหตุที่ปิดรับเข้าและตีงานคงเหลือเป็น NG", "รับเข้าไม่ครบตามจำนวน Tag");
+    if (reason === null) return;
+    if (!reason.trim()) return setNotice({ type: "error", text: "กรุณาระบุสาเหตุที่ปิดรับเข้า Job" });
+    const confirmed = window.confirm(`ยืนยันปิดรับเข้า Job ${jobNo}\nPart ${materialCode}\n\nTag ทั้งหมด ${fmt(totalQty)} ชิ้น\nรับเข้าแล้ว ${fmt(receivedQty)} ชิ้น\nตีเป็น NG ${fmt(ngQty)} ชิ้น\n\nTag NG จะไม่สามารถรับเข้า Stock หรือจัดงานได้`);
+    if (!confirmed) return;
+    const key = jobNo + "|" + materialCode;
+    setJobClosingKey(key);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "close_job", jobNo, materialCode, reason: reason.trim() }),
+      });
+      const data = await response.json() as { ngQty?: number; error?: string };
+      if (!response.ok) throw new Error(data.error || "ปิดรับเข้า Job ไม่สำเร็จ");
+      setNotice({ type: "success", text: `ปิด Job ${jobNo} แล้ว · ตีเป็น NG ${fmt(Number(data.ngQty || ngQty))} ชิ้น` });
+      await loadStock();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ปิดรับเข้า Job ไม่สำเร็จ" });
+    } finally {
+      setJobClosingKey("");
+    }
+  }
+
+  async function reopenNgStockJob(jobNo: string, materialCode: string, ngQty: number) {
+    if (!window.confirm(`เปิดรับเข้า Job ${jobNo} คืนหรือไม่?\nTag NG ${fmt(ngQty)} ชิ้นจะกลับเป็นสถานะรอรับเข้า`)) return;
+    const key = jobNo + "|" + materialCode;
+    setJobClosingKey(key);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "reopen_ng_job", jobNo, materialCode }),
+      });
+      const data = await response.json() as { reopenedTags?: number; error?: string };
+      if (!response.ok) throw new Error(data.error || "เปิด Job คืนไม่สำเร็จ");
+      setNotice({ type: "success", text: `เปิด Job ${jobNo} คืนแล้ว ${fmt(Number(data.reopenedTags || 0))} Tag` });
+      await loadStock();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "เปิด Job คืนไม่สำเร็จ" });
+    } finally {
+      setJobClosingKey("");
+    }
+  }
+
   async function deleteStockTag(tag: StockTag) {
     if (!window.confirm(`ยืนยันลบ Tag ${tag.tagId}\nPart ${tag.materialCode} · Job ${tag.jobNo} หรือไม่?\n\nลบได้เฉพาะ Tag ที่ยังไม่เคยรับเข้า Stock เท่านั้น`)) return;
     setDeletingStockTagId(tag.tagId);
@@ -1746,7 +1796,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
 
   function renderTags() {
     const awaitingReceipt = stock.tags.filter((item) => item.status === "printed").length;
-    const receivedTags = stock.tags.filter((item) => item.status !== "printed").length;
+    const receivedTags = stock.tags.filter((item) => item.status === "in_stock" || item.status === "depleted").length;
     const tagNeedle = tagSearch.trim().toLowerCase();
     const visibleTags = stock.tags.filter((item) => !tagNeedle || [
       item.tagId, item.materialCode, item.partName, item.customer,
@@ -1802,8 +1852,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <div className="tag-modern-body">{paginatedTags.map((item) => {
             const image = partImages.find((entry) => entry.materialCode === item.materialCode);
             const boxMatch = item.tagId.match(/-B(\d+)OF(\d+)$/);
-            const statusText = item.status === "depleted" ? "ขายออกหมด" : item.status === "printed" ? "รอรับเข้า" : item.reservedQty ? "รอขายออก" : "รับเข้าแล้ว";
-            const statusClass = item.status === "depleted" ? "over" : item.status === "printed" || item.reservedQty ? "partial" : "completed";
+            const statusText = item.status === "ng" ? "NG / ปิดรับเข้า" : item.status === "depleted" ? "ขายออกหมด" : item.status === "printed" ? "รอรับเข้า" : item.reservedQty ? "รอขายออก" : "รับเข้าแล้ว";
+            const statusClass = item.status === "ng" || item.status === "depleted" ? "over" : item.status === "printed" || item.reservedQty ? "partial" : "completed";
             return <div className="tag-modern-row" key={item.id}>
               <span className="tag-id-cell"><b>{item.tagId}</b><small>{boxMatch ? `กล่อง ${Number(boxMatch[1])} / ${Number(boxMatch[2])}` : "Tag งาน"}</small></span>
               <span className="tag-product-cell"><PartImage materialCode={item.materialCode} compact version={image?.updatedAt} /><span><b>{item.materialCode}</b><small>{item.partName}</small><small>{item.customer || "ไม่ระบุลูกค้า"}</small></span></span>
@@ -1825,7 +1875,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }
 
   function renderStock() {
-    const receivedStockTags = stock.tags.filter((item) => item.status !== "printed");
+    const receivedStockTags = stock.tags.filter((item) => item.status === "in_stock" || item.status === "depleted");
     const onHand = receivedStockTags.reduce((sum, item) => sum + Number(item.remainingQty), 0);
     const reserved = receivedStockTags.reduce((sum, item) => sum + Number(item.reservedQty), 0);
     const available = Math.max(onHand - reserved, 0);
@@ -1845,6 +1895,18 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       return { key, label: String(date.getDate()) + "/" + String(date.getMonth() + 1), qty: receivedStockTags.filter((item) => (item.receivedAt || "").slice(0, 10) === key).reduce((sum, item) => sum + Number(item.qty), 0) };
     });
     const trendMax = Math.max(...trendDays.map((item) => item.qty), 1);
+    const jobGroupMap = new Map<string, { jobNo: string; materialCode: string; partName: string; totalQty: number; receivedQty: number; pendingQty: number; ngQty: number; tagCount: number }>();
+    stock.tags.forEach((tag) => {
+      const key = tag.jobNo + "|" + tag.materialCode;
+      const current = jobGroupMap.get(key) || { jobNo: tag.jobNo, materialCode: tag.materialCode, partName: tag.partName, totalQty: 0, receivedQty: 0, pendingQty: 0, ngQty: 0, tagCount: 0 };
+      current.totalQty += Number(tag.qty);
+      current.tagCount += 1;
+      if (tag.status === "printed") current.pendingQty += Number(tag.qty);
+      else if (tag.status === "ng") current.ngQty += Number(tag.qty);
+      else if (tag.status === "in_stock" || tag.status === "depleted") current.receivedQty += Number(tag.qty);
+      jobGroupMap.set(key, current);
+    });
+    const stockJobGroups = [...jobGroupMap.values()].filter((group) => group.pendingQty > 0 || group.ngQty > 0).sort((a, b) => b.pendingQty - a.pendingQty || a.jobNo.localeCompare(b.jobNo));
     return <div className="stock-home">
       <div className="stock-stat-row">
         <article className="stock-stat blue"><span>◇</span><div><small>Tag รอรับเข้า</small><b>{fmt(awaitingReceipt)}</b><em>ใบ</em></div><button onClick={() => go("tags")}>ดูรายละเอียด →</button></article>
@@ -1868,6 +1930,22 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           })}</div><button className="stock-view-all" onClick={() => setTagSearch("")}>ดูรายการทั้งหมด →</button></> : <Empty title="ยังไม่มี Stock" text={stockNeedle ? "ไม่พบรายการที่ค้นหา" : "ยิง Tag รับงานเข้า Stock แล้วรายการจะแสดงที่นี่"} />}
         </Card>
       </div>
+      <Card className="stock-job-close-card" title="ปิดรับเข้า Job / จัดการงาน NG">
+        <p className="stock-job-close-help">เมื่อรับงานเข้าไม่ครบตาม Tag ให้ตรวจยอดแล้วกดปิดรับเข้า ระบบจะเปลี่ยนเฉพาะ Tag ที่ยังไม่ถูกยิงเป็น NG และไม่นับรวมใน Stock</p>
+        {stockJobGroups.length ? <div className="stock-job-close-summary">{stockJobGroups.map((group) => {
+          const key = group.jobNo + "|" + group.materialCode;
+          return <div className="stock-job-close-row" key={key}>
+            <span><b>{group.jobNo}</b><small>{fmt(group.tagCount)} Tag</small></span>
+            <span><b>{group.materialCode}</b><small>{group.partName}</small></span>
+            <span className="job-metric"><small>ทั้งหมด</small><b>{fmt(group.totalQty)}</b></span>
+            <span className="job-metric received"><small>รับเข้าแล้ว</small><b>{fmt(group.receivedQty)}</b></span>
+            <span className="job-metric waiting"><small>รอรับเข้า</small><b>{fmt(group.pendingQty)}</b></span>
+            <span className="job-metric ng"><small>NG</small><b>{fmt(group.ngQty)}</b></span>
+            <span className="job-actions">{group.pendingQty > 0 && <button className="button danger" disabled={Boolean(jobClosingKey)} onClick={() => void closeStockJob(group.jobNo, group.materialCode, group.totalQty, group.receivedQty, group.pendingQty)}>{jobClosingKey === key ? "กำลังปิด…" : "ปิดรับเข้า Job"}</button>}{group.ngQty > 0 && user.role === "admin" && <button className="button secondary" disabled={Boolean(jobClosingKey)} onClick={() => void reopenNgStockJob(group.jobNo, group.materialCode, group.ngQty)}>เปิด Job คืน</button>}</span>
+          </div>;
+        })}</div> : <Empty title="ไม่มี Job ที่รอปิดรับเข้า" text="Job ที่รับเข้าครบแล้วหรือยังไม่ได้สร้าง Tag จะไม่แสดงในส่วนนี้" />}
+        {stock.jobClosures.length > 0 && <div className="stock-job-close-history"><b>ประวัติปิดรับเข้าล่าสุด</b><ul>{stock.jobClosures.slice(0, 5).map((item) => <li key={item.id}><b>{item.jobNo}</b><span>{item.materialCode}</span><em>NG {fmt(item.ngQty)} ชิ้น</em><span>{item.reason}</span><span>{item.closedByName} · {formatDateTime(item.closedAt)}</span></li>)}</ul></div>}
+      </Card>
       <div className="stock-analytics-grid">
         <Card className="stock-status-card" title="3. สรุปสถานะ Stock"><div className="stock-donut-wrap"><div className="stock-donut" style={{ "--ready-stock": String(readyPercent * 3.6) + "deg" } as React.CSSProperties}><span><b>{fmt(onHand)}</b><small>ชิ้น</small></span></div><ul><li><i className="ready" /><span>พร้อมจัดงาน</span><b>{fmt(available)} ชิ้น</b><em>{readyPercent}%</em></li><li><i className="reserved" /><span>รอขายออก</span><b>{fmt(reserved)} ชิ้น</b><em>{reservedPercent}%</em></li></ul></div></Card>
         <Card className="stock-trend-card" title="แนวโน้ม 7 วันที่ผ่านมา"><div className="stock-trend-chart">{trendDays.map((item) => <div key={item.key} className="trend-column"><b>{item.qty ? fmt(item.qty) : ""}</b><i style={{ height: String(Math.max((item.qty / trendMax) * 100, 4)) + "%" }} /><span>{item.label}</span></div>)}</div></Card>
@@ -2176,7 +2254,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     // แบบมีเงื่อนไข ไม่ใช่คอมโพเนนต์ การเรียก hook ในนี้จะผิดกฎ Hooks
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <>
-      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.19.1</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
+      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.20.0</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
       <div className="settings-grid"><Card title="ตั้งค่าการตัดยอด"><Toggle keyName="partial" title="อนุญาตให้ตัดยอดบางส่วน" text="Tag หนึ่งใบสามารถตัดยอดไม่ครบ Due ได้" /><Toggle keyName="confirm" title="ยืนยันก่อนตัดยอดทุกครั้ง" text="แสดงยอดก่อนและหลังให้ตรวจสอบก่อนบันทึก" /></Card><Card title="ตั้งค่าการสแกน"><Toggle keyName="autoFocus" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" title="เสียงแจ้งเตือนเมื่อสำเร็จ" text="เปิดเสียงยืนยันหลังตัดยอดเรียบร้อย" /></Card></div>
       <Card title="รูปแบบการแสดงผล"><div className="form-grid"><label><span>ภาษา</span><select><option>ภาษาไทย</option></select></label><label><span>เขตเวลา</span><select><option>(GMT+07:00) Bangkok, Thailand</option></select></label><label><span>รูปแบบวันที่</span><select><option>DD/MM/YYYY</option></select></label><label><span>หน่วยเริ่มต้น</span><select><option>ชิ้น (PC)</option></select></label></div><div className="save-row"><button className="button primary" onClick={saveSettings}>▣ บันทึกการตั้งค่า</button></div></Card>
       {user.role === "admin" && <Card title="ล้างข้อมูลทดลอง"><div className="permission-note"><span>!</span><div><b>ล้างเฉพาะรายการ Stock</b><p>ลบ Tag Stock และประวัติการจัด/ขายออกทั้งหมด โดยเก็บทะเบียน Part รูปชิ้นงาน แผน Due และผู้ใช้งานไว้</p></div></div><div className="save-row"><button className="button danger" disabled={clearingTestStock || stock.tags.length === 0} onClick={() => void clearTestStock()}>{clearingTestStock ? "กำลังล้างข้อมูล…" : `ล้าง Stock ทดลอง ${fmt(stock.tags.length)} Tag`}</button></div></Card>}
@@ -2225,7 +2303,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
       <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.19.1</span></div></div>
+      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.20.0</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
