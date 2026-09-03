@@ -1407,7 +1407,6 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     return { date, items: rows.length, completed: rows.filter((row) => stateOf(row) === "completed").length, partial: rows.filter((row) => stateOf(row) === "partial").length, pending: rows.filter((row) => stateOf(row) === "pending").length, over: rows.filter((row) => stateOf(row) === "over").length, qty: rows.reduce((sum, row) => sum + Number(row.scannedQty), 0) };
   }), [dates, payload.dues]);
 
-  const selectedDue = selectedScan ? payload.dues.find((due) => due.id === selectedScan.dueLineId) : null;
   const arrangeableDues = useMemo(() => payload.dues.filter((due) =>
     Number(due.reqQty) > Number(due.scannedQty) + Number(due.arrangedQty || 0)
   ), [payload.dues]);
