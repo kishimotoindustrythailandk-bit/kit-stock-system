@@ -368,6 +368,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [arrangeQty, setArrangeQty] = useState("");
   const [arrangeDueSearch, setArrangeDueSearch] = useState("");
   const [arrangeListPage, setArrangeListPage] = useState(1);
+  const [arrangedSearch, setArrangedSearch] = useState("");
+  const [arrangedPage, setArrangedPage] = useState(1);
   const [arrangementPreview, setArrangementPreview] = useState<ArrangementPreview | null>(null);
   const [filterDate, setFilterDate] = useState("");
   const [planPage, setPlanPage] = useState(1);
@@ -2096,6 +2098,15 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       const safeArrangePage = Math.min(arrangeListPage, arrangePages);
       const pageRows = arrangeRows.slice((safeArrangePage - 1) * arrangePageSize, safeArrangePage * arrangePageSize);
       const pickedTotal = stock.picks.reduce((sum, item) => sum + Number(item.pickedQty || 0), 0);
+      const arrangedNeedle = arrangedSearch.trim().toLowerCase();
+      const arrangedRows = stock.picks.filter((item) => !arrangedNeedle || [
+        item.materialCode, item.jobNo, item.stockTagCode, item.doNo, item.fact,
+        item.line, item.shop, item.deliveryDate, item.deliveryTime, item.pickedByName,
+      ].join(" ").toLowerCase().includes(arrangedNeedle));
+      const arrangedPageSize = 10;
+      const arrangedPages = Math.max(1, Math.ceil(arrangedRows.length / arrangedPageSize));
+      const safeArrangedPage = Math.min(arrangedPage, arrangedPages);
+      const arrangedPageRows = arrangedRows.slice((safeArrangedPage - 1) * arrangedPageSize, safeArrangedPage * arrangedPageSize);
       return <>
         <div className="arrange-summary-grid">
           <article className="arrange-color-card blue" style={{ background: "linear-gradient(135deg,#e4f1ff 0%,#b9d8ff 100%)", borderColor: "#8fbdff" }}><span style={{ background: "linear-gradient(145deg,#48aaff,#075fe0)" }}>▦</span><div><small>งานทั้งหมด</small><b>{fmt(payload.dues.length)}</b><em>รายการ</em></div></article>
@@ -2167,6 +2178,28 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
             })}
           </tbody></table></div> : <Empty title="ไม่มีรายการที่ต้องจัด" text="ทุกรายการจัดครบแล้ว หรือไม่พบข้อมูลตามคำค้นหา" />}
           <div className="arrange-pagination"><span>แสดง {pageRows.length ? (safeArrangePage - 1) * arrangePageSize + 1 : 0} - {Math.min(safeArrangePage * arrangePageSize, arrangeRows.length)} จาก {fmt(arrangeRows.length)} รายการ</span><div><button disabled={safeArrangePage <= 1} onClick={() => setArrangeListPage((page) => Math.max(1, page - 1))}>«</button>{Array.from({ length: Math.min(arrangePages, 5) }, (_, index) => index + 1).map((page) => <button key={page} className={safeArrangePage === page ? "active" : ""} onClick={() => setArrangeListPage(page)}>{page}</button>)}{arrangePages > 5 && <em>… {arrangePages}</em>}<button disabled={safeArrangePage >= arrangePages} onClick={() => setArrangeListPage((page) => Math.min(arrangePages, page + 1))}>»</button></div><strong>จัดสะสม {fmt(pickedTotal)} ชิ้น</strong></div>
+        </Card>
+
+        <Card className="arrange-list-panel arranged-history-panel" title={<><span className="arranged-list-icon">✓</span> รายการที่จัดงานแล้ว <em>{fmt(arrangedRows.length)} รายการ</em></>} action={<div className="arranged-search"><span>⌕</span><input type="search" value={arrangedSearch} onChange={(event) => { setArrangedSearch(event.target.value); setArrangedPage(1); }} placeholder="ค้นหา Due, Part, Job, KIT Tag หรือผู้จัด" /></div>}>
+          {arrangedPageRows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table arranged-table"><thead><tr><th>วันที่จัด</th><th>รูปภาพ</th><th>Due</th><th>Part No.</th><th>Job / KIT Tag</th><th className="num">จำนวนจัด</th><th className="num">ขายแล้ว</th><th className="num">รอขาย</th><th>ผู้จัด</th><th>สถานะ</th></tr></thead><tbody>
+            {arrangedPageRows.map((item) => {
+              const waitingQty = Math.max(Number(item.pickedQty || 0) - Number(item.dispatchedQty || 0), 0);
+              const dispatchState = waitingQty <= 0 ? "completed" : Number(item.dispatchedQty || 0) > 0 ? "partial" : "pending";
+              return <tr key={item.id}>
+                <td data-label="วันที่จัด"><b>{formatDateTime(item.pickedAt)}</b></td>
+                <td data-label="รูปภาพ"><PartImage materialCode={item.materialCode} compact /></td>
+                <td data-label="Due"><b>{formatDate(item.deliveryDate)} · {item.deliveryTime}</b><small>{item.fact} / {item.line || "—"} · {item.doNo} / Seq {item.seq}</small></td>
+                <td data-label="Part No."><b>{item.materialCode}</b></td>
+                <td data-label="Job / KIT Tag"><b>{item.jobNo || "—"}</b><small>{item.stockTagCode}</small></td>
+                <td data-label="จำนวนจัด" className="num"><b>{fmt(item.pickedQty)}</b></td>
+                <td data-label="ขายแล้ว" className="num"><b className="sent">{fmt(item.dispatchedQty || 0)}</b></td>
+                <td data-label="รอขาย" className="num"><b className={waitingQty > 0 ? "warning" : ""}>{fmt(waitingQty)}</b></td>
+                <td data-label="ผู้จัด"><b>{item.pickedByName || "—"}</b><small>{item.pickedByCode || ""}</small></td>
+                <td data-label="สถานะ"><span className={`status ${dispatchState}`}>{waitingQty <= 0 ? "ขายออกแล้ว" : Number(item.dispatchedQty || 0) > 0 ? "ขายออกบางส่วน" : "รอขายออก"}</span></td>
+              </tr>;
+            })}
+          </tbody></table></div> : <Empty title="ยังไม่มีรายการที่จัดงานแล้ว" text={arrangedSearch ? "ไม่พบรายการตามคำค้นหา" : "เมื่อยิง KIT Tag จัดงาน รายการจะแสดงที่นี่"} />}
+          <div className="arrange-pagination"><span>แสดง {arrangedPageRows.length ? (safeArrangedPage - 1) * arrangedPageSize + 1 : 0} - {Math.min(safeArrangedPage * arrangedPageSize, arrangedRows.length)} จาก {fmt(arrangedRows.length)} รายการ</span><div><button disabled={safeArrangedPage <= 1} onClick={() => setArrangedPage((page) => Math.max(1, page - 1))}>«</button>{Array.from({ length: Math.min(arrangedPages, 5) }, (_, index) => index + 1).map((page) => <button key={page} className={safeArrangedPage === page ? "active" : ""} onClick={() => setArrangedPage(page)}>{page}</button>)}{arrangedPages > 5 && <em>… {arrangedPages}</em>}<button disabled={safeArrangedPage >= arrangedPages} onClick={() => setArrangedPage((page) => Math.min(arrangedPages, page + 1))}>»</button></div><strong>รอขายรวม {fmt(arrangedRows.reduce((sum, item) => sum + Math.max(Number(item.pickedQty || 0) - Number(item.dispatchedQty || 0), 0), 0))} ชิ้น</strong></div>
         </Card>
       </>;
     }
