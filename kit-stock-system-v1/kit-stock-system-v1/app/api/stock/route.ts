@@ -335,10 +335,11 @@ export async function POST(request: Request) {
       if (!hasPermission(user, "tags")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์สร้างและพิมพ์ Tag" }, { status: 403 });
       const materialCode = clean(body.materialCode, 100).toUpperCase();
       const jobNo = clean(body.jobNo, 120).toUpperCase();
-      const productionDate = clean(body.productionDate, 10);
+      const issueDate = new Date(Date.now() + (7 * 60 * 60 * 1000)).toISOString().slice(0, 10);
+      const productionDate = issueDate;
       const totalQty = Number(body.qty);
-      if (!materialCode || !jobNo || !/^\d{4}-\d{2}-\d{2}$/.test(productionDate) || !Number.isInteger(totalQty) || totalQty <= 0) {
-        return Response.json({ error: "กรุณาระบุ Part, จำนวนงานรวม, Job และวันที่ผลิตให้ครบ" }, { status: 400 });
+      if (!materialCode || !jobNo || !Number.isInteger(totalQty) || totalQty <= 0) {
+        return Response.json({ error: "กรุณาระบุ Part, จำนวนงานรวม และ Job ให้ครบ" }, { status: 400 });
       }
       const [part] = await db.select().from(stockParts).where(and(eq(stockParts.materialCode, materialCode), eq(stockParts.active, true))).limit(1);
       if (!part) return Response.json({ error: "ยังไม่มี Part นี้ในทะเบียน Stock กรุณาให้ Admin เพิ่ม Part ก่อน" }, { status: 404 });
@@ -454,6 +455,7 @@ export async function POST(request: Request) {
       if (tag.status !== "printed") return Response.json({ error: tag.status === "ng" ? "Tag นี้ถูกปิดรับเข้าและตีเป็น NG แล้ว กรุณาให้ Admin เปิด Job คืนก่อน" : tag.status === "depleted" ? "Tag นี้ถูกขายออกหมดแล้ว" : "Tag นี้รับเข้า Stock แล้ว" }, { status: 409 });
       const [updated] = await db.update(stockTags).set({
         status: "in_stock", receivedByName: user.displayName, receivedByCode: user.employeeCode,
+        productionDate: sql`date('now', '+7 hours')`,
         receivedAt: sql`CURRENT_TIMESTAMP`,
       }).where(and(eq(stockTags.id, tag.id), eq(stockTags.status, "printed"))).returning();
       // ถ้ามีคนสแกน Tag ใบเดียวกันแซงไปเสี้ยววินาที เงื่อนไข status = 'printed'
