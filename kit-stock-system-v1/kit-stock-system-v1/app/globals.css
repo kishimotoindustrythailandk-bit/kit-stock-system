@@ -1351,3 +1351,32 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
   .part-modern-row > span:nth-child(6)::before { content: "สถานะ"; }
   .part-modern-row > span:nth-child(7)::before { content: "จัดการ"; }
 }
+
+
+/* v2.21.1 — grouped and searchable operator history */
+.audit-history-controls { display: grid; gap: 12px; margin-bottom: 16px; }
+.audit-history-tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 3px; scrollbar-width: thin; }
+.audit-history-tabs button {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 42px; padding: 8px 13px;
+  border: 1px solid #d9e5f5; border-radius: 12px; background: #f8faff; color: #536681;
+  font: inherit; font-weight: 700; white-space: nowrap; cursor: pointer;
+}
+.audit-history-tabs button b { min-width: 25px; padding: 3px 7px; border-radius: 999px; background: #e8eef9; color: #31527f; font-size: 10px; text-align: center; }
+.audit-history-tabs button.active { border-color: #2f68e8; color: #fff; background: linear-gradient(135deg,#168af3,#7041e8); box-shadow: 0 8px 20px rgba(44,91,214,.2); }
+.audit-history-tabs button.active b { background: rgba(255,255,255,.22); color: #fff; }
+.audit-history-search { position: relative; display: flex; align-items: center; }
+.audit-history-search > span { position: absolute; left: 15px; color: #4770b8; pointer-events: none; }
+.audit-history-search input { width: 100%; min-height: 46px; padding: 10px 44px 10px 40px; border: 1px solid #cfddf0; border-radius: 12px; background: #fff; }
+.audit-history-search button { position: absolute; right: 10px; width: 28px; height: 28px; border: 0; border-radius: 8px; background: #edf2fa; color: #536681; cursor: pointer; }
+.audit-history-controls > p { margin: -4px 0 0; color: #7a899f; font-size: 11px; }
+.audit-purple { color: #7445df !important; background: #f0eaff !important; }
+.audit-blue { color: #1766dc !important; background: #e8f1ff !important; }
+.audit-green { color: #13854b !important; background: #e5f8ed !important; }
+.audit-orange { color: #c77800 !important; background: #fff1d8 !important; }
+.audit-red { color: #d63a4d !important; background: #ffe9ed !important; }
+@media (max-width: 760px) {
+  .audit-history-card .panel-head { align-items: stretch; flex-direction: column; }
+  .audit-history-card .panel-head .button { width: 100%; }
+  .audit-history-tabs { margin-right: -12px; }
+  .audit-history-tabs button { min-height: 40px; padding: 7px 11px; }
+}
