@@ -135,6 +135,30 @@ const NAV: Array<{ key: PageKey; label: string; icon: string }> = [
   { key: "users", label: "ผู้ใช้งาน", icon: "♙" },
 ];
 
+const PAGE_KEYS = new Set<PageKey>([...NAV.map((item) => item.key), "verify"]);
+
+function pageFromUrl(): PageKey | null {
+  if (typeof window === "undefined") return null;
+  const candidate = new URLSearchParams(window.location.search).get("page");
+  return candidate && PAGE_KEYS.has(candidate as PageKey) ? candidate as PageKey : null;
+}
+
+function pageFromLocation(): PageKey | null {
+  if (typeof window === "undefined") return null;
+  const candidate = pageFromUrl() || window.localStorage.getItem("kit-current-page");
+  return candidate && PAGE_KEYS.has(candidate as PageKey) ? candidate as PageKey : null;
+}
+
+function updatePageLocation(next: PageKey, mode: "push" | "replace" = "push") {
+  const url = new URL(window.location.href);
+  if (next === "dashboard") url.searchParams.delete("page");
+  else url.searchParams.set("page", next);
+  window.localStorage.setItem("kit-current-page", next);
+  const target = `${url.pathname}${url.search}${url.hash}`;
+  if (mode === "replace") window.history.replaceState({ kitPage: next }, "", target);
+  else window.history.pushState({ kitPage: next }, "", target);
+}
+
 const PERMISSION_HELP: Record<PageKey, string> = {
   dashboard: "ภาพรวม Due และสถานะงาน",
   stock: "รับ Tag เข้า Stock และดูยอดคงเหลือ",
@@ -456,6 +480,31 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     // จึงเปิดให้อัตโนมัติกับทุกคนที่มีสิทธิ์ขายออก (dispatch) โดยไม่ต้องตั้งสิทธิ์แยก
     return set;
   }, [user.permissions, user.role]);
+
+  const restoredPageRef = useRef(false);
+  useEffect(() => {
+    if (restoredPageRef.current) return;
+    restoredPageRef.current = true;
+    const savedPage = pageFromLocation();
+    const nextPage = savedPage && allowedPages.has(savedPage) ? savedPage : "dashboard";
+    setPage(nextPage);
+    updatePageLocation(nextPage, "replace");
+  }, [allowedPages]);
+
+  useEffect(() => {
+    const onHistoryChange = () => {
+      const requestedPage = pageFromUrl();
+      const nextPage = requestedPage && allowedPages.has(requestedPage) ? requestedPage : "dashboard";
+      window.localStorage.setItem("kit-current-page", nextPage);
+      setPage(nextPage);
+      if (nextPage === "users") void loadUsers();
+      if (nextPage === "parts" || nextPage === "settings") void loadPartImages();
+      setMenuOpen(false);
+      window.scrollTo({ top: 0 });
+    };
+    window.addEventListener("popstate", onHistoryChange);
+    return () => window.removeEventListener("popstate", onHistoryChange);
+  }, [allowedPages]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadDue() {
     setLoading(true);
@@ -1592,6 +1641,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       return;
     }
     setPage(next);
+    updatePageLocation(next);
     if (next === "users") void loadUsers();
     if (next === "parts" || next === "settings") void loadPartImages();
     setMenuOpen(false);
