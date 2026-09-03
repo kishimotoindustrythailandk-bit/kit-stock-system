@@ -40,6 +40,20 @@ export async function GET() {
     }
     const { DB } = getRuntimeEnv();
     if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
+    await DB.prepare(`
+      CREATE TABLE IF NOT EXISTS stock_receipt_adjustments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        stock_tag_id INTEGER NOT NULL,
+        tag_id TEXT NOT NULL,
+        original_qty INTEGER NOT NULL,
+        received_qty INTEGER NOT NULL,
+        ng_qty INTEGER NOT NULL,
+        received_by_name TEXT NOT NULL,
+        received_by_code TEXT NOT NULL,
+        received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `).run();
+    await DB.prepare("CREATE INDEX IF NOT EXISTS idx_stock_receipt_adjustments_tag ON stock_receipt_adjustments(stock_tag_id, id)").run();
     const partColumns = await DB.prepare("PRAGMA table_info(stock_parts)").all<{ name: string }>();
     if (!(partColumns.results || []).some((column) => column.name === "location")) {
       try {
@@ -73,6 +87,8 @@ export async function GET() {
       printedByName: stockTags.printedByName,
       receivedByName: stockTags.receivedByName,
       receivedAt: stockTags.receivedAt,
+      receivedQty: sql<number>`coalesce((select r.received_qty from stock_receipt_adjustments r where r.stock_tag_id = ${stockTags.id} order by r.id desc limit 1), case when ${stockTags.status} in ('in_stock', 'depleted') then ${stockTags.qty} else 0 end)`,
+      ngQty: sql<number>`coalesce((select r.ng_qty from stock_receipt_adjustments r where r.stock_tag_id = ${stockTags.id} order by r.id desc limit 1), case when ${stockTags.status} = 'ng' then ${stockTags.qty} else 0 end)`,
       createdAt: stockTags.createdAt,
     }).from(stockTags)
       .innerJoin(stockParts, eq(stockParts.materialCode, stockTags.materialCode))
@@ -158,6 +174,20 @@ export async function POST(request: Request) {
     const db = getDb();
     const { DB: runtimeDb } = getRuntimeEnv();
     if (!runtimeDb) throw new Error("ไม่พบการเชื่อมต่อ D1");
+    await runtimeDb.prepare(`
+      CREATE TABLE IF NOT EXISTS stock_receipt_adjustments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        stock_tag_id INTEGER NOT NULL,
+        tag_id TEXT NOT NULL,
+        original_qty INTEGER NOT NULL,
+        received_qty INTEGER NOT NULL,
+        ng_qty INTEGER NOT NULL,
+        received_by_name TEXT NOT NULL,
+        received_by_code TEXT NOT NULL,
+        received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `).run();
+    await runtimeDb.prepare("CREATE INDEX IF NOT EXISTS idx_stock_receipt_adjustments_tag ON stock_receipt_adjustments(stock_tag_id, id)").run();
     const partColumns = await runtimeDb.prepare("PRAGMA table_info(stock_parts)").all<{ name: string }>();
     if (!(partColumns.results || []).some((column) => column.name === "location")) {
       try {
@@ -410,11 +440,16 @@ export async function POST(request: Request) {
         )
       `).run();
       const summary = await DB.prepare(`
-        SELECT coalesce(sum(qty), 0) AS totalQty,
-          coalesce(sum(CASE WHEN status IN ('in_stock', 'depleted') THEN qty ELSE 0 END), 0) AS receivedQty,
-          coalesce(sum(CASE WHEN status = 'printed' THEN qty ELSE 0 END), 0) AS ngQty,
-          coalesce(sum(CASE WHEN status = 'printed' THEN 1 ELSE 0 END), 0) AS ngTagCount
-        FROM stock_tags WHERE job_no = ?1 AND material_code = ?2
+        SELECT coalesce(sum(st.qty), 0) AS totalQty,
+          coalesce(sum(CASE WHEN st.status IN ('in_stock', 'depleted') THEN
+            coalesce((
+              SELECT r.received_qty FROM stock_receipt_adjustments r
+              WHERE r.stock_tag_id = st.id ORDER BY r.id DESC LIMIT 1
+            ), st.qty)
+          ELSE 0 END), 0) AS receivedQty,
+          coalesce(sum(CASE WHEN st.status = 'printed' THEN st.qty ELSE 0 END), 0) AS ngQty,
+          coalesce(sum(CASE WHEN st.status = 'printed' THEN 1 ELSE 0 END), 0) AS ngTagCount
+        FROM stock_tags st WHERE st.job_no = ?1 AND st.material_code = ?2
       `).bind(jobNo, materialCode).first<{ totalQty: number; receivedQty: number; ngQty: number; ngTagCount: number }>();
       if (!summary || Number(summary.ngQty) <= 0) {
         return Response.json({ error: "Job นี้ไม่มี Tag ที่รอรับเข้าให้ปิดเป็น NG" }, { status: 409 });
@@ -452,19 +487,46 @@ export async function POST(request: Request) {
       const tagId = parseInternalTag(clean(body.rawPayload, 1000));
       const [tag] = await db.select().from(stockTags).where(eq(stockTags.tagId, tagId)).limit(1);
       if (!tag) return Response.json({ error: "ไม่พบ Tag Stock นี้ในระบบ" }, { status: 404 });
-      if (tag.status !== "printed") return Response.json({ error: tag.status === "ng" ? "Tag นี้ถูกปิดรับเข้าและตีเป็น NG แล้ว กรุณาให้ Admin เปิด Job คืนก่อน" : tag.status === "depleted" ? "Tag นี้ถูกขายออกหมดแล้ว" : "Tag นี้รับเข้า Stock แล้ว" }, { status: 409 });
+      if (tag.status !== "printed") return Response.json({ error: tag.status === "ng" ? "Tag นี้ถูกบันทึกเป็น NG แล้ว กรุณาให้ Admin ตรวจสอบ" : tag.status === "depleted" ? "Tag นี้ถูกขายออกหมดแล้ว" : "Tag นี้รับเข้า Stock แล้ว" }, { status: 409 });
+
+      const part = await runtimeDb.prepare(`
+        SELECT part_name AS partName, customer, location
+        FROM stock_parts WHERE material_code = ?1 LIMIT 1
+      `).bind(tag.materialCode).first<{ partName: string; customer: string; location: string }>();
+      const image = await runtimeDb.prepare("SELECT 1 AS ok FROM part_images WHERE material_code = ?1 LIMIT 1")
+        .bind(tag.materialCode).first<{ ok: number }>();
+
+      if (clean(body.mode, 20) === "preview") {
+        return Response.json({
+          action: "receive_preview",
+          rawPayload: clean(body.rawPayload, 1000),
+          tag: { ...tag, partName: part?.partName || "", customer: part?.customer || "", location: part?.location || "" },
+          master: { materialCode: tag.materialCode, partName: part?.partName || "", customer: part?.customer || "", hasImage: !!image },
+        });
+      }
+
+      const receivedQty = body.receivedQty === undefined ? Number(tag.qty) : Number(body.receivedQty);
+      if (!Number.isInteger(receivedQty) || receivedQty < 0 || receivedQty > Number(tag.qty)) {
+        return Response.json({ error: `จำนวนรับเข้าต้องอยู่ระหว่าง 0 ถึง ${tag.qty} ชิ้น` }, { status: 400 });
+      }
+      const ngQty = Number(tag.qty) - receivedQty;
+      const nextStatus = receivedQty > 0 ? "in_stock" : "ng";
       const [updated] = await db.update(stockTags).set({
-        status: "in_stock", receivedByName: user.displayName, receivedByCode: user.employeeCode,
+        status: nextStatus, remainingQty: receivedQty,
+        receivedByName: user.displayName, receivedByCode: user.employeeCode,
         productionDate: sql`date('now', '+7 hours')`,
         receivedAt: sql`CURRENT_TIMESTAMP`,
       }).where(and(eq(stockTags.id, tag.id), eq(stockTags.status, "printed"))).returning();
-      // ถ้ามีคนสแกน Tag ใบเดียวกันแซงไปเสี้ยววินาที เงื่อนไข status = 'printed'
-      // จะไม่ตรงแล้ว returning() คืนอาเรย์ว่าง เดิมโค้ดยังตอบ 201 พร้อม tag: undefined
-      // ทำให้หน้างานเห็นว่าสแกนสำเร็จ ทั้งที่ระบบไม่ได้บันทึกอะไรเลย
       if (!updated) {
         return Response.json({ error: "Tag นี้เพิ่งถูกสแกนรับเข้า Stock ไปแล้ว กรุณารีเฟรชหน้าจอ" }, { status: 409 });
       }
-      return Response.json({ action: "received", tag: updated }, { status: 201 });
+      await runtimeDb.prepare(`
+        INSERT INTO stock_receipt_adjustments
+          (stock_tag_id, tag_id, original_qty, received_qty, ng_qty,
+           received_by_name, received_by_code, received_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)
+      `).bind(tag.id, tag.tagId, tag.qty, receivedQty, ngQty, user.displayName, user.employeeCode).run();
+      return Response.json({ action: "received", tag: { ...updated, partName: part?.partName || "", customer: part?.customer || "", receivedQty, ngQty }, receivedQty, ngQty }, { status: 201 });
     }
 
     if (action === "stage") {
