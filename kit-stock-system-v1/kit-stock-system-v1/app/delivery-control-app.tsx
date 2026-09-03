@@ -430,6 +430,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [deletingStockTagId, setDeletingStockTagId] = useState("");
   const [stockTagForm, setStockTagForm] = useState({ materialCode: "", qty: "", jobNo: "", productionDate: new Date().toISOString().slice(0, 10) });
   const [stockScan, setStockScan] = useState("");
+  const stockScanInputRef = useRef<HTMLInputElement>(null);
   const [stockReceivePreview, setStockReceivePreview] = useState<StockReceivePreview | null>(null);
   const [stockReceiveQty, setStockReceiveQty] = useState("");
   const [stockSaving, setStockSaving] = useState(false);
@@ -733,6 +734,12 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       stream?.getTracks().forEach((track) => track.stop());
     };
   }, [cameraOpen, cameraPurpose, page]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (page !== "stock" || stockReceivePreview || cameraOpen) return;
+    const timer = window.setTimeout(() => stockScanInputRef.current?.focus(), 80);
+    return () => window.clearTimeout(timer);
+  }, [page, stockReceivePreview, cameraOpen]);
 
   async function parseExcel(event: ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0] ?? null;
@@ -2020,7 +2027,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         <Card className="stock-receive-card" title="1. สแกน Tag เพื่อรับเข้า Stock">
           <button type="button" className="stock-camera-zone" onClick={() => { setCameraPurpose("stock"); setCameraOpen(true); }}><span>⌗</span><b>พร้อมสแกน Tag</b><small>นำ Tag มาแตะที่เครื่องสแกน</small></button>
           <div className="stock-scan-count"><i /> สแกนแล้ว {fmt(receivedStockTags.length)} ใบ</div>
-          <form className="stock-receive-form" onSubmit={receiveStockTag}><input value={stockScan} onChange={(e) => setStockScan(e.target.value)} placeholder="เช่น TG-20250901-0001" autoComplete="off" autoFocus /><button className="button primary" disabled={!stockScan.trim() || stockSaving}>{stockSaving ? "กำลังบันทึก…" : "บันทึกรับเข้า Stock"}</button></form>
+          <form className="stock-receive-form" onSubmit={receiveStockTag}><input ref={stockScanInputRef} value={stockScan} onChange={(e) => setStockScan(e.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void receiveStockTag(value); } }} placeholder="เช่น TG-20250901-0001" autoComplete="off" autoFocus /><button className="button primary" disabled={!stockScan.trim() || stockSaving}>{stockSaving ? "กำลังตรวจสอบ…" : "ตรวจสอบก่อนรับเข้า"}</button></form>
           <div className="stock-guide"><b>↕ ขั้นตอนการทำงาน</b><p>สแกน Tag ทีละใบ เพื่อบันทึกรับเข้า Stock เข้าระบบอัตโนมัติ</p></div>
         </Card>
         <Card className="stock-latest-card" title="2. รายการ Stock ล่าสุด" action={<div className="stock-list-tools"><input value={tagSearch} onChange={(e) => setTagSearch(e.target.value)} placeholder="ค้นหา Tag / รายการสินค้า / Job..." /><button onClick={() => void loadStock()}>↻</button></div>}>
