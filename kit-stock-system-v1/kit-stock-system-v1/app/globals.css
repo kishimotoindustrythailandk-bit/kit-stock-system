@@ -1368,6 +1368,12 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .audit-history-search > span { position: absolute; left: 15px; color: #4770b8; pointer-events: none; }
 .audit-history-search input { width: 100%; min-height: 46px; padding: 10px 44px 10px 40px; border: 1px solid #cfddf0; border-radius: 12px; background: #fff; }
 .audit-history-search button { position: absolute; right: 10px; width: 28px; height: 28px; border: 0; border-radius: 8px; background: #edf2fa; color: #536681; cursor: pointer; }
+.audit-history-filter-row { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 12px; align-items: end; }
+.audit-history-date { position: relative; display: grid; gap: 5px; }
+.audit-history-date > span { color: #536681; font-size: 12px; font-weight: 700; }
+.audit-history-date input { width: 100%; min-height: 46px; padding: 10px 42px 10px 14px; border: 1px solid #cfddf0; border-radius: 12px; background: #fff; color: #142b54; font: inherit; }
+.audit-history-date input:focus { outline: 2px solid rgba(45,105,235,.18); border-color: #4d82ed; }
+.audit-history-date button { position: absolute; right: 10px; bottom: 9px; width: 28px; height: 28px; border: 0; border-radius: 8px; background: #edf2fa; color: #536681; cursor: pointer; }
 .audit-history-controls > p { margin: -4px 0 0; color: #7a899f; font-size: 11px; }
 .audit-purple { color: #7445df !important; background: #f0eaff !important; }
 .audit-blue { color: #1766dc !important; background: #e8f1ff !important; }
@@ -1379,4 +1385,6 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
   .audit-history-card .panel-head .button { width: 100%; }
   .audit-history-tabs { margin-right: -12px; }
   .audit-history-tabs button { min-height: 40px; padding: 7px 11px; }
+  .audit-history-filter-row { grid-template-columns: 1fr; }
+  .audit-history-date { width: 100%; }
 }
