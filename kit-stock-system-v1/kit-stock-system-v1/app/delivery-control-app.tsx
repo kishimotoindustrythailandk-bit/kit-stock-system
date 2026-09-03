@@ -405,6 +405,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [stockPartForm, setStockPartForm] = useState({ materialCode: "", partName: "", customer: "", location: "", standardQty: "" });
   const [partSearch, setPartSearch] = useState("");
   const [historyQuery, setHistoryQuery] = useState("");
+  const [historyDate, setHistoryDate] = useState("");
   const [historyType, setHistoryType] = useState("all");
   const [partPage, setPartPage] = useState(1);
   const [partPageSize, setPartPageSize] = useState(10);
@@ -2280,8 +2281,17 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     }));
     activities.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     const historyNeedle = historyQuery.trim().toLowerCase();
+    const activityLocalDate = (value: string) => {
+      const date = toLocalDate(value);
+      if (!date) return "";
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
     const filteredActivities = activities.filter((item) =>
       (historyType === "all" || item.kind === historyType)
+      && (!historyDate || activityLocalDate(item.createdAt) === historyDate)
       && (!historyNeedle || [item.action, item.detail, item.actor, item.createdAt].some((value) => String(value || "").toLowerCase().includes(historyNeedle)))
     );
     const historyTabs = [
@@ -2304,10 +2314,13 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <Card className="audit-history-card" title="ประวัติผู้ดำเนินการ" action={<button className="button secondary" onClick={() => void Promise.all([loadDue(), loadStock()])}>↻ รีเฟรช</button>}>
         <div className="audit-history-controls">
           <div className="audit-history-tabs">{historyTabs.map((tab) => <button type="button" key={tab.key} className={historyType === tab.key ? "active" : ""} onClick={() => setHistoryType(tab.key)}><span>{tab.label}</span><b>{fmt(tab.count)}</b></button>)}</div>
-          <div className="audit-history-search"><span>⌕</span><input value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder="ค้นหาชื่อผู้ทำรายการ, Tag ID, Part No., Job หรือชื่อไฟล์..." />{historyQuery && <button type="button" onClick={() => setHistoryQuery("")}>×</button>}</div>
+          <div className="audit-history-filter-row">
+            <div className="audit-history-search"><span>⌕</span><input value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder="ค้นหาชื่อผู้ทำรายการ, Tag ID, Part No., Job หรือชื่อไฟล์..." />{historyQuery && <button type="button" onClick={() => setHistoryQuery("")}>×</button>}</div>
+            <label className="audit-history-date"><span>วันที่ทำรายการ</span><input type="date" value={historyDate} onChange={(event) => setHistoryDate(event.target.value)} />{historyDate && <button type="button" onClick={() => setHistoryDate("")} aria-label="ล้างวันที่">×</button>}</label>
+          </div>
           <p>พบ {fmt(filteredActivities.length)} รายการ{filteredActivities.length > 250 ? " · แสดง 250 รายการล่าสุด" : ""}</p>
         </div>
-        {shownActivities.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>วันและเวลา</th><th>รายการที่ทำ</th><th>รายละเอียด</th><th>ผู้ดำเนินการ</th><th>ผลลัพธ์</th></tr></thead><tbody>{shownActivities.map((item) => <tr key={item.id}><td data-label="วันและเวลา"><b>{formatDateTime(item.createdAt)}</b></td><td data-label="รายการที่ทำ"><b>{item.action}</b></td><td data-label="รายละเอียด">{item.detail}</td><td data-label="ผู้ดำเนินการ"><b>{item.actor}</b></td><td data-label="ผลลัพธ์"><em className={"status completed audit-" + item.tone}>บันทึกแล้ว</em></td></tr>)}</tbody></table></div> : <Empty title={historyQuery ? "ไม่พบรายการที่ค้นหา" : "ยังไม่มีประวัติในหมวดนี้"} text={historyQuery ? "ลองค้นหาด้วยชื่อผู้ดำเนินการ, Tag ID, Part No. หรือ Job" : "เลือกหมวดอื่นเพื่อดูประวัติรายการ"} />}
+        {shownActivities.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>วันและเวลา</th><th>รายการที่ทำ</th><th>รายละเอียด</th><th>ผู้ดำเนินการ</th><th>ผลลัพธ์</th></tr></thead><tbody>{shownActivities.map((item) => <tr key={item.id}><td data-label="วันและเวลา"><b>{formatDateTime(item.createdAt)}</b></td><td data-label="รายการที่ทำ"><b>{item.action}</b></td><td data-label="รายละเอียด">{item.detail}</td><td data-label="ผู้ดำเนินการ"><b>{item.actor}</b></td><td data-label="ผลลัพธ์"><em className={"status completed audit-" + item.tone}>บันทึกแล้ว</em></td></tr>)}</tbody></table></div> : <Empty title={(historyQuery || historyDate) ? "ไม่พบรายการที่ค้นหา" : "ยังไม่มีประวัติในหมวดนี้"} text={(historyQuery || historyDate) ? "ลองเปลี่ยนคำค้นหาหรือวันที่ทำรายการ" : "เลือกหมวดอื่นเพื่อดูประวัติรายการ"} />}
       </Card>
     </>;
   }
@@ -2317,7 +2330,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     // แบบมีเงื่อนไข ไม่ใช่คอมโพเนนต์ การเรียก hook ในนี้จะผิดกฎ Hooks
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <>
-      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.21.1</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
+      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.21.2</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
       <div className="settings-grid"><Card title="ตั้งค่าการตัดยอด"><Toggle keyName="partial" title="อนุญาตให้ตัดยอดบางส่วน" text="Tag หนึ่งใบสามารถตัดยอดไม่ครบ Due ได้" /><Toggle keyName="confirm" title="ยืนยันก่อนตัดยอดทุกครั้ง" text="แสดงยอดก่อนและหลังให้ตรวจสอบก่อนบันทึก" /></Card><Card title="ตั้งค่าการสแกน"><Toggle keyName="autoFocus" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" title="เสียงแจ้งเตือนเมื่อสำเร็จ" text="เปิดเสียงยืนยันหลังตัดยอดเรียบร้อย" /></Card></div>
       <Card title="รูปแบบการแสดงผล"><div className="form-grid"><label><span>ภาษา</span><select><option>ภาษาไทย</option></select></label><label><span>เขตเวลา</span><select><option>(GMT+07:00) Bangkok, Thailand</option></select></label><label><span>รูปแบบวันที่</span><select><option>DD/MM/YYYY</option></select></label><label><span>หน่วยเริ่มต้น</span><select><option>ชิ้น (PC)</option></select></label></div><div className="save-row"><button className="button primary" onClick={saveSettings}>▣ บันทึกการตั้งค่า</button></div></Card>
       {user.role === "admin" && <Card title="ล้างข้อมูลทดลอง"><div className="permission-note"><span>!</span><div><b>ล้างเฉพาะรายการ Stock</b><p>ลบ Tag Stock และประวัติการจัด/ขายออกทั้งหมด โดยเก็บทะเบียน Part รูปชิ้นงาน แผน Due และผู้ใช้งานไว้</p></div></div><div className="save-row"><button className="button danger" disabled={clearingTestStock || stock.tags.length === 0} onClick={() => void clearTestStock()}>{clearingTestStock ? "กำลังล้างข้อมูล…" : `ล้าง Stock ทดลอง ${fmt(stock.tags.length)} Tag`}</button></div></Card>}
