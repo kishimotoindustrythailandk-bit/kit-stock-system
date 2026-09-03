@@ -81,7 +81,8 @@ type DuePayload = { dues: DueLine[]; imports: DueImport[]; scans: DueScan[]; rec
 type SystemUser = { id: number; employeeCode: string; displayName: string; email: string; role: string; active: boolean; permissions: PageKey[]; createdAt?: string };
 type PartImageMapping = { materialCode: string; originalName: string; contentType: string; updatedByName: string; updatedAt: string; materialDescription?: string };
 type StockPart = { materialCode: string; partName: string; customer: string; location: string; standardQty: number; active: boolean };
-type StockTag = { id: number; tagId: string; materialCode: string; partName: string; customer: string; qty: number; remainingQty: number; reservedQty: number; jobNo: string; productionDate: string; status: string; printedByName: string; receivedByName: string; receivedAt?: string; createdAt: string; payload?: string; boxNo?: number; boxCount?: number; deliveryQty?: number };
+type StockTag = { id: number; tagId: string; materialCode: string; partName: string; customer: string; qty: number; remainingQty: number; reservedQty: number; receivedQty?: number; ngQty?: number; jobNo: string; productionDate: string; status: string; printedByName: string; receivedByName: string; receivedAt?: string; createdAt: string; payload?: string; boxNo?: number; boxCount?: number; deliveryQty?: number; location?: string };
+type StockReceivePreview = { action: "receive_preview"; rawPayload: string; tag: StockTag; master: { materialCode: string; partName: string; customer: string; hasImage: boolean } };
 type StockAllocation = { id: number; customerTagId: string; stockTagCode: string; materialCode: string; qty: number; status: string; reservedByName: string; reservedAt: string; dispatchedByName: string; dispatchedAt?: string };
 type StockPick = {
   id: number; dueLineId: number; pickedQty: number; dispatchedQty: number; status: string;
@@ -429,6 +430,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [deletingStockTagId, setDeletingStockTagId] = useState("");
   const [stockTagForm, setStockTagForm] = useState({ materialCode: "", qty: "", jobNo: "", productionDate: new Date().toISOString().slice(0, 10) });
   const [stockScan, setStockScan] = useState("");
+  const [stockReceivePreview, setStockReceivePreview] = useState<StockReceivePreview | null>(null);
+  const [stockReceiveQty, setStockReceiveQty] = useState("");
   const [stockSaving, setStockSaving] = useState(false);
   const [createdStockTags, setCreatedStockTags] = useState<StockTag[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -1282,12 +1285,41 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     try {
       const response = await fetch("/api/stock", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "receive", rawPayload }),
+        body: JSON.stringify({ action: "receive", mode: "preview", rawPayload }),
       });
-      const data = await response.json() as { tag?: StockTag; error?: string };
+      const data = await response.json() as StockReceivePreview & { error?: string };
+      if (!response.ok || !data.tag) throw new Error(data.error || "ตรวจสอบ Tag ไม่สำเร็จ");
+      setStockScan(rawPayload);
+      setStockReceiveQty(String(data.tag.qty));
+      setStockReceivePreview(data);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบ Tag ไม่สำเร็จ" });
+    } finally {
+      setStockSaving(false);
+    }
+  }
+
+  async function confirmReceiveStockTag() {
+    if (!stockReceivePreview || stockSaving) return;
+    const receivedQty = Number(stockReceiveQty);
+    const totalQty = Number(stockReceivePreview.tag.qty);
+    if (!Number.isInteger(receivedQty) || receivedQty < 0 || receivedQty > totalQty) {
+      setNotice({ type: "error", text: `จำนวนรับเข้าต้องอยู่ระหว่าง 0 ถึง ${fmt(totalQty)} ชิ้น` });
+      return;
+    }
+    setStockSaving(true);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "receive", rawPayload: stockReceivePreview.rawPayload, receivedQty }),
+      });
+      const data = await response.json() as { tag?: StockTag; receivedQty?: number; ngQty?: number; error?: string };
       if (!response.ok) throw new Error(data.error || "รับเข้า Stock ไม่สำเร็จ");
       setStockScan("");
-      setNotice({ type: "success", text: `รับ Tag ${data.tag?.tagId || ""} เข้า Stock แล้ว` });
+      setStockReceivePreview(null);
+      setStockReceiveQty("");
+      const ngQty = Number(data.ngQty || 0);
+      setNotice({ type: "success", text: `รับ Tag ${data.tag?.tagId || ""} เข้า Stock ${fmt(Number(data.receivedQty || receivedQty))} ชิ้น${ngQty ? ` · NG ${fmt(ngQty)} ชิ้น` : ""}` });
       await loadStock();
     } catch (caught) {
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "รับเข้า Stock ไม่สำเร็จ" });
@@ -1933,7 +1965,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const available = Math.max(onHand - reserved, 0);
     const awaitingReceipt = stock.tags.filter((item) => item.status === "printed").length;
     const todayKey = new Date().toISOString().slice(0, 10);
-    const receivedToday = receivedStockTags.filter((item) => (item.receivedAt || "").slice(0, 10) === todayKey).reduce((sum, item) => sum + Number(item.qty), 0);
+    const receivedToday = receivedStockTags.filter((item) => (item.receivedAt || "").slice(0, 10) === todayKey).reduce((sum, item) => sum + Number(item.receivedQty ?? item.qty), 0);
     const dispatchedToday = stock.dispatchLinks.filter((item) => (item.dispatchedAt || "").slice(0, 10) === todayKey).reduce((sum, item) => sum + Number(item.qty), 0);
     const stockNeedle = tagSearch.trim().toLowerCase();
     const recentStock = receivedStockTags.filter((item) => !stockNeedle || [item.tagId, item.materialCode, item.partName, item.jobNo].some((value) => String(value || "").toLowerCase().includes(stockNeedle))).slice(0, 6);
@@ -1944,7 +1976,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       const date = new Date();
       date.setDate(date.getDate() - (6 - offset));
       const key = date.toISOString().slice(0, 10);
-      return { key, label: String(date.getDate()) + "/" + String(date.getMonth() + 1), qty: receivedStockTags.filter((item) => (item.receivedAt || "").slice(0, 10) === key).reduce((sum, item) => sum + Number(item.qty), 0) };
+      return { key, label: String(date.getDate()) + "/" + String(date.getMonth() + 1), qty: receivedStockTags.filter((item) => (item.receivedAt || "").slice(0, 10) === key).reduce((sum, item) => sum + Number(item.receivedQty ?? item.qty), 0) };
     });
     const trendMax = Math.max(...trendDays.map((item) => item.qty), 1);
     const jobGroupMap = new Map<string, { jobNo: string; materialCode: string; partName: string; totalQty: number; receivedQty: number; pendingQty: number; ngQty: number; tagCount: number }>();
@@ -1954,8 +1986,11 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       current.totalQty += Number(tag.qty);
       current.tagCount += 1;
       if (tag.status === "printed") current.pendingQty += Number(tag.qty);
-      else if (tag.status === "ng") current.ngQty += Number(tag.qty);
-      else if (tag.status === "in_stock" || tag.status === "depleted") current.receivedQty += Number(tag.qty);
+      else if (tag.status === "ng") current.ngQty += Number(tag.ngQty ?? tag.qty);
+      else if (tag.status === "in_stock" || tag.status === "depleted") {
+        current.receivedQty += Number(tag.receivedQty ?? tag.qty);
+        current.ngQty += Number(tag.ngQty || 0);
+      }
       jobGroupMap.set(key, current);
     });
     const stockJobGroups = [...jobGroupMap.values()].sort((a, b) => b.pendingQty - a.pendingQty || b.ngQty - a.ngQty || a.jobNo.localeCompare(b.jobNo));
@@ -2488,6 +2523,23 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button onClick={() => setMenuOpen(true)}><span>☰</span><small>เมนู</small></button>
       <a className="bottom-logout" href={signOutPath} onClick={signOut}><span>↪</span><small>ออกระบบ</small></a>
     </nav>
+    {stockReceivePreview && <div className="modal-backdrop dispatch-confirm-backdrop stock-receive-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="stock-receive-confirm-title"><div className="dispatch-confirm-modal stock-receive-confirm-modal">
+      <header><div><span>✓</span><div><small>ตรวจพบ KIT Stock Tag</small><h3 id="stock-receive-confirm-title">ตรวจสอบก่อนรับเข้า Stock</h3></div></div><button type="button" onClick={() => { setStockReceivePreview(null); setStockReceiveQty(""); setStockScan(""); }} aria-label="ปิด">×</button></header>
+      <div className="dispatch-confirm-content">
+        <section className="dispatch-confirm-images"><PartImagePair materialCode={stockReceivePreview.tag.materialCode} masterVersion={partImages.find((item) => item.materialCode === stockReceivePreview.tag.materialCode)?.updatedAt} actualVersion={partActualImages.find((item) => item.materialCode === stockReceivePreview.tag.materialCode)?.updatedAt} /></section>
+        <section className="dispatch-confirm-info">
+          <div className="dispatch-confirm-part"><small>PART / MATERIAL</small><b>{stockReceivePreview.tag.materialCode}</b><p>{stockReceivePreview.tag.partName || stockReceivePreview.master.partName || "ไม่ระบุชื่อชิ้นงาน"}</p></div>
+          <div className="dispatch-confirm-details"><div><small>KIT Stock Tag</small><b>{stockReceivePreview.tag.tagId}</b></div><div><small>Job</small><b>{stockReceivePreview.tag.jobNo || "—"}</b></div><div><small>ลูกค้า</small><b>{stockReceivePreview.tag.customer || "—"}</b></div><div><small>Location</small><b>{stockReceivePreview.tag.location || "—"}</b></div></div>
+          <div className="stock-receive-qty-box">
+            <div><small>จำนวนตาม Tag</small><b>{fmt(stockReceivePreview.tag.qty)}</b><em>ชิ้น</em></div>
+            <label><small>จำนวนรับเข้าจริง</small><input type="number" inputMode="numeric" min={0} max={stockReceivePreview.tag.qty} step={1} value={stockReceiveQty} onChange={(event) => setStockReceiveQty(event.target.value.replace(/[^0-9]/g, ""))} autoFocus /><em>แก้ไขได้เมื่อมีงานเสีย</em></label>
+            <div className={Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0) > 0 ? "has-ng" : ""}><small>จำนวน NG</small><b>{fmt(Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0))}</b><em>ชิ้น</em></div>
+          </div>
+          {Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0) > 0 && <p className="stock-receive-ng-note">! ระบบจะเพิ่มเข้า Stock เฉพาะ {fmt(Number(stockReceiveQty || 0))} ชิ้น และบันทึก NG {fmt(Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0))} ชิ้น</p>}
+        </section>
+      </div>
+      <footer><button type="button" className="button secondary" onClick={() => { setStockReceivePreview(null); setStockReceiveQty(""); setStockScan(""); }}>ยกเลิก / สแกนใหม่</button><button type="button" className="button confirm-dispatch-button stock-confirm-receive-button" disabled={stockSaving || stockReceiveQty === "" || Number(stockReceiveQty) < 0 || Number(stockReceiveQty) > Number(stockReceivePreview.tag.qty)} onClick={() => void confirmReceiveStockTag()}>{stockSaving ? "กำลังรับเข้า…" : "✓ ยืนยันรับเข้า Stock"}</button></footer>
+    </div></div>}
     {dispatchConfirmation && <div className="modal-backdrop dispatch-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="dispatch-confirm-title"><div className="dispatch-confirm-modal">
       <header><div><span>✓</span><div><small>ตรวจพบ Tag ลูกค้า</small><h3 id="dispatch-confirm-title">ตรวจสอบงานก่อนขายออก</h3></div></div><button type="button" onClick={() => setDispatchConfirmation(null)} aria-label="ปิด">×</button></header>
       <div className="dispatch-confirm-content">
