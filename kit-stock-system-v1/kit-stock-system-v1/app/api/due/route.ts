@@ -47,30 +47,73 @@ async function resolveCustomerDue(tag: ReturnType<typeof parseCustomerTag>) {
 
   // ไฟล์ Due และ QR ลูกค้าบางรุ่นเขียน DO / Line / Shop ต่างรูปแบบกัน
   // แต่ Part + Seq + Delivery Date เป็นกุญแจงานเดียวกัน จึงใช้เป็นตัวสำรอง
-  // และถ้าพบซ้ำจะให้สิทธิ์แถวที่มีงานจัดรอขายอยู่เพียงแถวเดียว
-  const candidates = exact.length ? exact : await db.select().from(deliveryDueLines).where(and(
+  let candidates = exact.length ? exact : await db.select().from(deliveryDueLines).where(and(
     eq(deliveryDueLines.materialCode, tag.materialCode),
     eq(deliveryDueLines.seq, tag.seq),
     eq(deliveryDueLines.deliveryDate, tag.deliveryDate),
   )).limit(20);
-  if (candidates.length <= 1) return { matches: candidates, matchMode: candidates.length ? "part_seq_date" : "none" };
+  if (candidates.length === 1) return { matches: candidates, matchMode: "part_seq_date" };
+
+  // รองรับข้อมูลเก่าที่ถูกนำเข้าวัน/เดือนสลับกัน เช่น QR = 2026-09-02
+  // แต่ Due เดิมถูกเก็บเป็น 2026-02-09
+  if (!candidates.length) {
+    const dateParts = tag.deliveryDate.split("-");
+    const swappedDate = dateParts.length === 3 && Number(dateParts[1]) <= 12 && Number(dateParts[2]) <= 12
+      ? `${dateParts[0]}-${dateParts[2]}-${dateParts[1]}`
+      : "";
+    if (swappedDate && swappedDate !== tag.deliveryDate) {
+      const swapped = await db.select().from(deliveryDueLines).where(and(
+        eq(deliveryDueLines.materialCode, tag.materialCode),
+        eq(deliveryDueLines.seq, tag.seq),
+        eq(deliveryDueLines.deliveryDate, swappedDate),
+      )).limit(20);
+      if (swapped.length === 1) return { matches: swapped, matchMode: "swapped_date" };
+      if (swapped.length) candidates = swapped;
+    }
+  }
 
   const { DB } = getRuntimeEnv();
-  if (DB) {
+  if (DB && candidates.length > 1) {
+    const candidateIds = new Set(candidates.map((row) => Number(row.id)));
     const stagedIds = await DB.prepare(`
       SELECT DISTINCT d.id
       FROM delivery_due_lines d
       INNER JOIN stock_picks p ON p.due_line_id = d.id
       INNER JOIN stock_tags t ON t.id = p.stock_tag_id
-      WHERE d.material_code = ?1 AND d.seq = ?2 AND d.delivery_date = ?3
+      WHERE d.material_code = ?1 AND d.seq = ?2
         AND t.material_code = ?1
         AND p.status IN ('staged', 'partial') AND p.picked_qty > p.dispatched_qty
-    `).bind(tag.materialCode, tag.seq, tag.deliveryDate).all<{ id: number }>();
-    const stagedSet = new Set((stagedIds.results || []).map((row) => Number(row.id)));
-    const stagedMatches = candidates.filter((row) => stagedSet.has(Number(row.id)));
-    if (stagedMatches.length === 1) return { matches: stagedMatches, matchMode: "staged_part_seq_date" };
+    `).bind(tag.materialCode, tag.seq).all<{ id: number }>();
+    const stagedMatches = (stagedIds.results || [])
+      .map((row) => Number(row.id))
+      .filter((id) => candidateIds.has(id));
+    if (stagedMatches.length === 1) {
+      const selected = candidates.filter((row) => Number(row.id) === stagedMatches[0]);
+      return { matches: selected, matchMode: "staged_candidate" };
+    }
   }
-  return { matches: candidates, matchMode: "ambiguous" };
+
+  // ทางเลือกสุดท้าย: ถ้า Part + Seq นี้มีงานจัดรอขายเพียง Due เดียว
+  // ให้ใช้ Due นั้น แม้วันที่ในข้อมูลเก่าจะสลับกัน
+  if (DB && !candidates.length) {
+    const staged = await DB.prepare(`
+      SELECT DISTINCT d.id
+      FROM delivery_due_lines d
+      INNER JOIN stock_picks p ON p.due_line_id = d.id
+      INNER JOIN stock_tags t ON t.id = p.stock_tag_id
+      WHERE d.material_code = ?1 AND d.seq = ?2 AND t.material_code = ?1
+        AND p.status IN ('staged', 'partial') AND p.picked_qty > p.dispatched_qty
+    `).bind(tag.materialCode, tag.seq).all<{ id: number }>();
+    const stagedRows = staged.results || [];
+    if (stagedRows.length === 1) {
+      const [stagedRow] = stagedRows;
+      const selectedId = Number(stagedRow?.id);
+      const selected = await db.select().from(deliveryDueLines).where(eq(deliveryDueLines.id, selectedId)).limit(1);
+      return { matches: selected, matchMode: "unique_staged_part_seq" };
+    }
+  }
+
+  return { matches: candidates, matchMode: candidates.length ? "ambiguous" : "none" };
 }
 
 // ตรวจชิ้นงานก่อนขายออก: จับคู่ Tag ลูกค้ากับ Due ด้วยตรรกะเดียวกับการขายออก
