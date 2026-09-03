@@ -38,8 +38,24 @@ export async function GET() {
     if (!["stock", "tags", "arrange", "dispatch", "reports", "history"].some((key) => hasPermission(user, key as "stock" | "tags" | "arrange" | "dispatch" | "reports" | "history"))) {
       return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ดูข้อมูล Stock" }, { status: 403 });
     }
+    const { DB } = getRuntimeEnv();
+    if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
+    const partColumns = await DB.prepare("PRAGMA table_info(stock_parts)").all<{ name: string }>();
+    if (!(partColumns.results || []).some((column) => column.name === "location")) {
+      try {
+        await DB.prepare("ALTER TABLE stock_parts ADD COLUMN location TEXT NOT NULL DEFAULT ''").run();
+      } catch {
+        const refreshedColumns = await DB.prepare("PRAGMA table_info(stock_parts)").all<{ name: string }>();
+        if (!(refreshedColumns.results || []).some((column) => column.name === "location")) throw new Error("เพิ่มช่อง Location ในทะเบียน Part ไม่สำเร็จ");
+      }
+    }
+    const partsResult = await DB.prepare(`
+      SELECT material_code AS materialCode, part_name AS partName, customer, location,
+        standard_qty AS standardQty, active, created_at AS createdAt, updated_at AS updatedAt
+      FROM stock_parts ORDER BY material_code ASC
+    `).all();
+    const parts = partsResult.results;
     const db = getDb();
-    const parts = await db.select().from(stockParts).orderBy(asc(stockParts.materialCode));
     const tags = await db.select({
       id: stockTags.id,
       tagId: stockTags.tagId,
@@ -77,7 +93,6 @@ export async function GET() {
     }).from(stockAllocations)
       .innerJoin(stockTags, eq(stockTags.id, stockAllocations.stockTagId))
       .orderBy(desc(stockAllocations.id)).limit(100);
-    const { DB } = getRuntimeEnv();
     const picks = DB ? await DB.prepare(`
       SELECT p.id, p.due_line_id AS dueLineId, p.picked_qty AS pickedQty,
         p.dispatched_qty AS dispatchedQty, p.status,
@@ -141,18 +156,35 @@ export async function POST(request: Request) {
     const body = await request.json() as Record<string, unknown>;
     const action = clean(body.action, 30);
     const db = getDb();
+    const { DB: runtimeDb } = getRuntimeEnv();
+    if (!runtimeDb) throw new Error("ไม่พบการเชื่อมต่อ D1");
+    const partColumns = await runtimeDb.prepare("PRAGMA table_info(stock_parts)").all<{ name: string }>();
+    if (!(partColumns.results || []).some((column) => column.name === "location")) {
+      try {
+        await runtimeDb.prepare("ALTER TABLE stock_parts ADD COLUMN location TEXT NOT NULL DEFAULT ''").run();
+      } catch {
+        const refreshedColumns = await runtimeDb.prepare("PRAGMA table_info(stock_parts)").all<{ name: string }>();
+        if (!(refreshedColumns.results || []).some((column) => column.name === "location")) throw new Error("เพิ่มช่อง Location ในทะเบียน Part ไม่สำเร็จ");
+      }
+    }
 
     if (action === "save_part") {
       if (user.role !== "admin" || !hasPermission(user, "tags")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์เพิ่มหรือแก้ไข Part" }, { status: 403 });
       const materialCode = clean(body.materialCode, 100).toUpperCase();
       const partName = clean(body.partName, 240);
       const customer = clean(body.customer, 160);
+      const location = clean(body.location, 160);
       const standardQty = Number(body.standardQty || 0);
       if (!materialCode || !partName || !Number.isInteger(standardQty) || standardQty <= 0) {
         return Response.json({ error: "กรุณาระบุ Part No., ชื่อชิ้นงาน และจำนวนสูงสุดต่อกล่องอย่างน้อย 1 ชิ้น" }, { status: 400 });
       }
-      await db.insert(stockParts).values({ materialCode, partName, customer, standardQty, active: true })
-        .onConflictDoUpdate({ target: stockParts.materialCode, set: { partName, customer, standardQty, active: true, updatedAt: sql`CURRENT_TIMESTAMP` } });
+      await runtimeDb.prepare(`
+        INSERT INTO stock_parts (material_code, part_name, customer, location, standard_qty, active, created_at, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(material_code) DO UPDATE SET
+          part_name = excluded.part_name, customer = excluded.customer, location = excluded.location,
+          standard_qty = excluded.standard_qty, active = 1, updated_at = CURRENT_TIMESTAMP
+      `).bind(materialCode, partName, customer, location, standardQty).run();
       return Response.json({ success: true, materialCode });
     }
 
@@ -161,15 +193,16 @@ export async function POST(request: Request) {
       if (!Array.isArray(body.parts) || !body.parts.length || body.parts.length > 2000) {
         return Response.json({ error: "ไฟล์ต้องมีข้อมูล Part 1–2,000 รายการ" }, { status: 400 });
       }
-      const unique = new Map<string, { materialCode: string; partName: string; customer: string; standardQty: number }>();
+      const unique = new Map<string, { materialCode: string; partName: string; customer: string; location: string; standardQty: number }>();
       for (const raw of body.parts) {
         const row = raw as Record<string, unknown>;
         const materialCode = clean(row.materialCode, 100).toUpperCase();
         const partName = clean(row.partName, 240);
         const customer = clean(row.customer, 160);
+        const location = clean(row.location, 160);
         const standardQty = Number(row.standardQty || 0);
         if (!materialCode || !partName || !Number.isInteger(standardQty) || standardQty <= 0) continue;
-        unique.set(materialCode, { materialCode, partName, customer, standardQty });
+        unique.set(materialCode, { materialCode, partName, customer, location, standardQty });
       }
       const parts = [...unique.values()];
       if (!parts.length) {
@@ -178,15 +211,16 @@ export async function POST(request: Request) {
       const { DB } = getRuntimeEnv();
       if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
       const statements = parts.map((part) => DB.prepare(`
-        INSERT INTO stock_parts (material_code, part_name, customer, standard_qty, active, created_at, updated_at)
-        VALUES (?1, ?2, ?3, ?4, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        INSERT INTO stock_parts (material_code, part_name, customer, location, standard_qty, active, created_at, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         ON CONFLICT(material_code) DO UPDATE SET
           part_name = excluded.part_name,
           customer = excluded.customer,
+          location = excluded.location,
           standard_qty = excluded.standard_qty,
           active = 1,
           updated_at = CURRENT_TIMESTAMP
-      `).bind(part.materialCode, part.partName, part.customer, part.standardQty));
+      `).bind(part.materialCode, part.partName, part.customer, part.location, part.standardQty));
       for (let index = 0; index < statements.length; index += 100) {
         await DB.batch(statements.slice(index, index + 100));
       }
