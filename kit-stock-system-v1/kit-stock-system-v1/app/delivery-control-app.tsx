@@ -228,6 +228,14 @@ function formatDateTime(value: string) {
   return new Intl.DateTimeFormat("th-TH", { dateStyle: "short", timeStyle: "short" }).format(date);
 }
 
+function formatDateOnly(value: string) {
+  if (!value) return "—";
+  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return formatDate(value.slice(0, 10));
+  return `${String(date.getDate()).padStart(2, "0")}/${String(date.getMonth() + 1).padStart(2, "0")}/${date.getFullYear()}`;
+}
+
 /** แปลงเวลาจากฐานข้อมูล (UTC ไม่มีโซนต่อท้าย) เป็น Date ตามเวลาเครื่องผู้ใช้ */
 function toLocalDate(value: string) {
   if (!value) return null;
@@ -1390,7 +1398,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         .reduce((sum, item) => sum + Number(item.qty), 0) || tag.qty;
       return `<section class="tag"><header><div class="brand">KiT<small>DELIVERY DUE CONTROL</small></div><div class="tag-title"><b>STOCK RECEIVING TAG</b><small>TAG รับงานเข้า STOCK</small></div></header>
         <div class="product"><div class="photo-wrap">${imageUrl ? `<img class="photo" src="${imageUrl}" alt="รูปชิ้นงาน ${html(tag.materialCode)}" />` : `<div class="photo-fallback"><strong>◇</strong>ยังไม่มีรูปชิ้นงาน</div>`}</div><div class="qr-wrap"><img class="qr" src="${qr}" alt="QR"><small>QR / BARCODE</small></div><div class="main"><small>CUSTOMER</small><p class="customer">${html(tag.customer || "—")}</p><small>PART NO. / MATERIAL</small><b>${html(tag.materialCode)}</b><small>PART NAME</small><p>${html(tag.partName)}</p></div></div>
-        <div class="grid"><div><small>DELIVERY QTY / จำนวนงานรวม</small><b class="qty">${fmt(deliveryQty)}</b> <span class="unit">PC</span></div><div><small>QTY IN BOX / จำนวนในกล่อง</small><b class="qty">${fmt(tag.qty)}</b> <span class="unit">PC</span></div><div class="box-cell"><small>BOX / กล่อง</small><b>${fmt(boxNo)} / ${fmt(boxCount)}</b><span class="box-type ${isFullBox ? "full" : "remainder"}">${boxType}</span></div><div><small>JOB NO.</small><b>${html(tag.jobNo)}</b></div><div><small>TAG ISSUE DATE / วันที่ออก TAG</small><b>${html(formatDate(tag.createdAt))}</b></div><div><small>LOCATION / ตำแหน่งจัดเก็บ</small><b>${html(location)}</b></div></div>
+        <div class="grid"><div><small>DELIVERY QTY / จำนวนงานรวม</small><b class="qty">${fmt(deliveryQty)}</b> <span class="unit">PC</span></div><div><small>QTY IN BOX / จำนวนในกล่อง</small><b class="qty">${fmt(tag.qty)}</b> <span class="unit">PC</span></div><div class="box-cell"><small>BOX / กล่อง</small><b>${fmt(boxNo)} / ${fmt(boxCount)}</b><span class="box-type ${isFullBox ? "full" : "remainder"}">${boxType}</span></div><div><small>JOB NO.</small><b>${html(tag.jobNo)}</b></div><div><small>TAG ISSUE DATE / วันที่ออก TAG</small><b>${html(formatDateOnly(tag.createdAt))}</b></div><div><small>LOCATION / ตำแหน่งจัดเก็บ</small><b>${html(location)}</b></div></div>
         <footer><b class="code">${html(tag.tagId)}</b><p class="payload">${html(payloadValue)}</p><div class="hint">ยิง QR เพื่อรับงานเข้า Stock</div></footer>
       </section>`;
     }));
@@ -1903,7 +1911,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
               <span className="tag-product-cell"><PartImage materialCode={item.materialCode} compact version={image?.updatedAt} /><span><b>{item.materialCode}</b><small>{item.partName}</small><small>{item.customer || "ไม่ระบุลูกค้า"}</small></span></span>
               <span><b>{fmt(item.qty)} ชิ้น</b></span>
               <span><b>{item.jobNo}</b></span>
-              <span><b>ออก Tag: {formatDate(item.createdAt)}</b><small>{item.receivedAt ? `รับเข้า Stock: ${formatDateTime(item.receivedAt)}` : "วันที่ผลิต: รอรับเข้า Stock"}</small></span>
+              <span><b>ออก Tag: {formatDateOnly(item.createdAt)}</b><small>{item.receivedAt ? `รับเข้า Stock: ${formatDateTime(item.receivedAt)}` : "วันที่ผลิต: รอรับเข้า Stock"}</small></span>
               <span><em className={`status ${statusClass}`}>{statusText}</em></span>
               <span className="tag-row-actions"><button className="tiny-button" onClick={() => void printStockTags(item)}>▤ พิมพ์</button>{user.role === "admin" && item.status === "printed" && <button type="button" className="tiny-button danger-outline" disabled={Boolean(deletingStockTagId)} onClick={() => void deleteStockTag(item)}>{deletingStockTagId === item.tagId ? "กำลังลบ…" : "♲ ลบ"}</button>}</span>
             </div>;
