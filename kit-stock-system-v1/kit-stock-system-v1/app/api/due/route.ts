@@ -33,6 +33,46 @@ function parseCustomerTag(raw: string) {
   return parsed;
 }
 
+async function resolveCustomerDue(tag: ReturnType<typeof parseCustomerTag>) {
+  const db = getDb();
+  const exact = await db.select().from(deliveryDueLines).where(and(
+    eq(deliveryDueLines.doNo, tag.doNo),
+    eq(deliveryDueLines.materialCode, tag.materialCode),
+    eq(deliveryDueLines.seq, tag.seq),
+    eq(deliveryDueLines.deliveryDate, tag.deliveryDate),
+    eq(deliveryDueLines.line, tag.line),
+    eq(deliveryDueLines.shop, tag.shop),
+  )).limit(20);
+  if (exact.length === 1) return { matches: exact, matchMode: "exact" };
+
+  // ไฟล์ Due และ QR ลูกค้าบางรุ่นเขียน DO / Line / Shop ต่างรูปแบบกัน
+  // แต่ Part + Seq + Delivery Date เป็นกุญแจงานเดียวกัน จึงใช้เป็นตัวสำรอง
+  // และถ้าพบซ้ำจะให้สิทธิ์แถวที่มีงานจัดรอขายอยู่เพียงแถวเดียว
+  const candidates = exact.length ? exact : await db.select().from(deliveryDueLines).where(and(
+    eq(deliveryDueLines.materialCode, tag.materialCode),
+    eq(deliveryDueLines.seq, tag.seq),
+    eq(deliveryDueLines.deliveryDate, tag.deliveryDate),
+  )).limit(20);
+  if (candidates.length <= 1) return { matches: candidates, matchMode: candidates.length ? "part_seq_date" : "none" };
+
+  const { DB } = getRuntimeEnv();
+  if (DB) {
+    const stagedIds = await DB.prepare(`
+      SELECT DISTINCT d.id
+      FROM delivery_due_lines d
+      INNER JOIN stock_picks p ON p.due_line_id = d.id
+      INNER JOIN stock_tags t ON t.id = p.stock_tag_id
+      WHERE d.material_code = ?1 AND d.seq = ?2 AND d.delivery_date = ?3
+        AND t.material_code = ?1
+        AND p.status IN ('staged', 'partial') AND p.picked_qty > p.dispatched_qty
+    `).bind(tag.materialCode, tag.seq, tag.deliveryDate).all<{ id: number }>();
+    const stagedSet = new Set((stagedIds.results || []).map((row) => Number(row.id)));
+    const stagedMatches = candidates.filter((row) => stagedSet.has(Number(row.id)));
+    if (stagedMatches.length === 1) return { matches: stagedMatches, matchMode: "staged_part_seq_date" };
+  }
+  return { matches: candidates, matchMode: "ambiguous" };
+}
+
 // ตรวจชิ้นงานก่อนขายออก: จับคู่ Tag ลูกค้ากับ Due ด้วยตรรกะเดียวกับการขายออก
 // แต่ "อ่านอย่างเดียว" ไม่แตะ Stock หรือ Due — ให้ผู้ตรวจเทียบรูป master กับของจริง
 // ในกล่องก่อน แล้วจึงไปกดขายออกจริง คืน verdict เสมอ (ไม่ throw) เพื่อบอกสาเหตุ
@@ -61,14 +101,8 @@ async function verifyCustomerTag(rawPayload: string) {
     return Response.json({ action: "verify", verdict: "already", tag, master, message: "Tag นี้ถูกสแกนส่งออกและตัดยอดไปแล้ว" });
   }
 
-  const matches = await db.select().from(deliveryDueLines).where(and(
-    eq(deliveryDueLines.doNo, tag.doNo),
-    eq(deliveryDueLines.materialCode, tag.materialCode),
-    eq(deliveryDueLines.seq, tag.seq),
-    eq(deliveryDueLines.deliveryDate, tag.deliveryDate),
-    eq(deliveryDueLines.line, tag.line),
-    eq(deliveryDueLines.shop, tag.shop),
-  )).limit(2);
+
+  const { matches, matchMode } = await resolveCustomerDue(tag);
   if (!matches.length) {
     return Response.json({ action: "verify", verdict: "no_due", tag, master, message: `ไม่พบ Due ที่ตรงกับ ${tag.materialCode} / Seq ${tag.seq} / ${tag.deliveryDate}` });
   }
@@ -125,7 +159,7 @@ async function verifyCustomerTag(rawPayload: string) {
     message = "ตรงกับงานที่ต้องส่งออก แต่ยังไม่มีรูป master ให้เทียบ — เพิ่มรูปได้ที่หน้าทะเบียน Part";
   }
 
-  return Response.json({ action: "verify", verdict, message, tag, master, due: dueInfo, stagedAvail });
+  return Response.json({ action: "verify", verdict, message, tag, master, due: dueInfo, stagedAvail, matchMode });
 }
 
 export async function GET() {
@@ -209,14 +243,8 @@ export async function POST(request: Request) {
       .where(eq(deliveryTagScans.tagId, tag.tagId)).limit(1);
     if (duplicate.length) return Response.json({ error: "Tag นี้ถูกผู้ตรวจสแกนส่งออกและตัดยอดแล้ว" }, { status: 409 });
 
-    const matches = await db.select().from(deliveryDueLines).where(and(
-      eq(deliveryDueLines.doNo, tag.doNo),
-      eq(deliveryDueLines.materialCode, tag.materialCode),
-      eq(deliveryDueLines.seq, tag.seq),
-      eq(deliveryDueLines.deliveryDate, tag.deliveryDate),
-      eq(deliveryDueLines.line, tag.line),
-      eq(deliveryDueLines.shop, tag.shop),
-    )).limit(2);
+
+    const { matches } = await resolveCustomerDue(tag);
     if (!matches.length) {
       return Response.json({ error: `ไม่พบ Due ที่ตรงกับ ${tag.materialCode} / Seq ${tag.seq} / ${tag.deliveryDate}` }, { status: 404 });
     }
