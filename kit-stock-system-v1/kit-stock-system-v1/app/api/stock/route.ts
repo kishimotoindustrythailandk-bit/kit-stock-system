@@ -105,7 +105,31 @@ export async function GET() {
       INNER JOIN delivery_due_lines d ON d.id = l.due_line_id
       ORDER BY l.id DESC LIMIT 150
     `).all() : { results: [] };
-    return Response.json({ parts, tags, allocations, picks: picks.results, dispatchLinks: dispatchLinks.results });
+    const { DB } = getRuntimeEnv();
+    if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
+    await DB.prepare(`
+      CREATE TABLE IF NOT EXISTS stock_job_closures (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_no TEXT NOT NULL,
+        material_code TEXT NOT NULL,
+        total_qty INTEGER NOT NULL,
+        received_qty INTEGER NOT NULL,
+        ng_qty INTEGER NOT NULL,
+        ng_tag_count INTEGER NOT NULL,
+        reason TEXT NOT NULL DEFAULT '',
+        closed_by_name TEXT NOT NULL,
+        closed_by_code TEXT NOT NULL,
+        closed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `).run();
+    const jobClosures = await DB.prepare(`
+      SELECT id, job_no AS jobNo, material_code AS materialCode, total_qty AS totalQty,
+        received_qty AS receivedQty, ng_qty AS ngQty, ng_tag_count AS ngTagCount,
+        reason, closed_by_name AS closedByName, closed_by_code AS closedByCode,
+        closed_at AS closedAt
+      FROM stock_job_closures ORDER BY id DESC LIMIT 50
+    `).all();
+    return Response.json({ parts, tags, allocations, picks: picks.results, dispatchLinks: dispatchLinks.results, jobClosures: jobClosures.results });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "โหลดข้อมูล Stock ไม่สำเร็จ" }, { status: 500 });
   }
@@ -324,12 +348,77 @@ export async function POST(request: Request) {
       }, { status: 201 });
     }
 
+    if (action === "close_job") {
+      if (!hasPermission(user, "stock") || !requireStockRole(user.role)) {
+        return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ปิดรับเข้า Job" }, { status: 403 });
+      }
+      const jobNo = clean(body.jobNo, 160);
+      const materialCode = clean(body.materialCode, 100).toUpperCase();
+      const reason = clean(body.reason, 300);
+      if (!jobNo || !materialCode || !reason) {
+        return Response.json({ error: "กรุณาระบุ Job, Part และสาเหตุที่ปิดรับเข้า" }, { status: 400 });
+      }
+      const { DB } = getRuntimeEnv();
+      if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
+      await DB.prepare(`
+        CREATE TABLE IF NOT EXISTS stock_job_closures (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          job_no TEXT NOT NULL,
+          material_code TEXT NOT NULL,
+          total_qty INTEGER NOT NULL,
+          received_qty INTEGER NOT NULL,
+          ng_qty INTEGER NOT NULL,
+          ng_tag_count INTEGER NOT NULL,
+          reason TEXT NOT NULL DEFAULT '',
+          closed_by_name TEXT NOT NULL,
+          closed_by_code TEXT NOT NULL,
+          closed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `).run();
+      const summary = await DB.prepare(`
+        SELECT coalesce(sum(qty), 0) AS totalQty,
+          coalesce(sum(CASE WHEN status IN ('in_stock', 'depleted') THEN qty ELSE 0 END), 0) AS receivedQty,
+          coalesce(sum(CASE WHEN status = 'printed' THEN qty ELSE 0 END), 0) AS ngQty,
+          coalesce(sum(CASE WHEN status = 'printed' THEN 1 ELSE 0 END), 0) AS ngTagCount
+        FROM stock_tags WHERE job_no = ?1 AND material_code = ?2
+      `).bind(jobNo, materialCode).first<{ totalQty: number; receivedQty: number; ngQty: number; ngTagCount: number }>();
+      if (!summary || Number(summary.ngQty) <= 0) {
+        return Response.json({ error: "Job นี้ไม่มี Tag ที่รอรับเข้าให้ปิดเป็น NG" }, { status: 409 });
+      }
+      await DB.batch([
+        DB.prepare(`UPDATE stock_tags SET status = 'ng' WHERE job_no = ?1 AND material_code = ?2 AND status = 'printed'`).bind(jobNo, materialCode),
+        DB.prepare(`
+          INSERT INTO stock_job_closures
+            (job_no, material_code, total_qty, received_qty, ng_qty, ng_tag_count, reason, closed_by_name, closed_by_code)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+        `).bind(jobNo, materialCode, Number(summary.totalQty), Number(summary.receivedQty), Number(summary.ngQty), Number(summary.ngTagCount), reason, user.displayName, user.employeeCode),
+      ]);
+      return Response.json({ success: true, jobNo, materialCode, ...summary });
+    }
+
+    if (action === "reopen_ng_job") {
+      if (user.role !== "admin" || !hasPermission(user, "stock")) {
+        return Response.json({ error: "เฉพาะ Admin เท่านั้นที่เปิด Job คืนได้" }, { status: 403 });
+      }
+      const jobNo = clean(body.jobNo, 160);
+      const materialCode = clean(body.materialCode, 100).toUpperCase();
+      if (!jobNo || !materialCode) return Response.json({ error: "กรุณาระบุ Job และ Part" }, { status: 400 });
+      const { DB } = getRuntimeEnv();
+      if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
+      const result = await DB.prepare(`
+        UPDATE stock_tags SET status = 'printed'
+        WHERE job_no = ?1 AND material_code = ?2 AND status = 'ng'
+      `).bind(jobNo, materialCode).run();
+      if (!result.meta.changes) return Response.json({ error: "ไม่พบ Tag NG ของ Job นี้" }, { status: 404 });
+      return Response.json({ success: true, reopenedTags: result.meta.changes });
+    }
+
     if (action === "receive") {
       if (!hasPermission(user, "stock")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์รับงานเข้า Stock" }, { status: 403 });
       const tagId = parseInternalTag(clean(body.rawPayload, 1000));
       const [tag] = await db.select().from(stockTags).where(eq(stockTags.tagId, tagId)).limit(1);
       if (!tag) return Response.json({ error: "ไม่พบ Tag Stock นี้ในระบบ" }, { status: 404 });
-      if (tag.status !== "printed") return Response.json({ error: tag.status === "depleted" ? "Tag นี้ถูกขายออกหมดแล้ว" : "Tag นี้รับเข้า Stock แล้ว" }, { status: 409 });
+      if (tag.status !== "printed") return Response.json({ error: tag.status === "ng" ? "Tag นี้ถูกปิดรับเข้าและตีเป็น NG แล้ว กรุณาให้ Admin เปิด Job คืนก่อน" : tag.status === "depleted" ? "Tag นี้ถูกขายออกหมดแล้ว" : "Tag นี้รับเข้า Stock แล้ว" }, { status: 409 });
       const [updated] = await db.update(stockTags).set({
         status: "in_stock", receivedByName: user.displayName, receivedByCode: user.employeeCode,
         receivedAt: sql`CURRENT_TIMESTAMP`,
