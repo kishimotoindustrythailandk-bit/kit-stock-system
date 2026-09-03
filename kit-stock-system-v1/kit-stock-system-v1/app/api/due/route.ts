@@ -82,11 +82,24 @@ async function verifyCustomerTag(rawPayload: string) {
   const alreadyQty = Number(currentRow?.total ?? 0);
   const remainingDue = Math.max(due.reqQty - alreadyQty, 0);
 
+  // งานจัดอาจถูกผูกกับ Due แถวอื่นของงานเดียวกัน (เช่น Seq แยกหลายบรรทัด
+  // หรือมีการนำเข้าแผนซ้ำ) จึงนับแถวตรงก่อน และยอมรับแถวร่วมที่มี
+  // DO / Part / วันที่ / โรงงาน / Line / Shop เดียวกัน โดยไม่ปะปนงานอื่น
   const stagedRow = await DB.prepare(`
-    SELECT coalesce(sum(picked_qty - dispatched_qty), 0) AS avail
-    FROM stock_picks
-    WHERE due_line_id = ?1 AND status IN ('staged', 'partial') AND picked_qty > dispatched_qty
-  `).bind(due.id).first<{ avail: number }>();
+    SELECT coalesce(sum(p.picked_qty - p.dispatched_qty), 0) AS avail
+    FROM stock_picks p
+    INNER JOIN delivery_due_lines pd ON pd.id = p.due_line_id
+    INNER JOIN stock_tags t ON t.id = p.stock_tag_id
+    WHERE p.status IN ('staged', 'partial') AND p.picked_qty > p.dispatched_qty
+      AND t.material_code = ?2
+      AND (
+        p.due_line_id = ?1 OR (
+          pd.do_no = ?3 AND pd.material_code = ?2 AND pd.delivery_date = ?4
+          AND pd.fact = ?5 AND pd.line = ?6 AND pd.shop = ?7
+        )
+      )
+  `).bind(due.id, due.materialCode, due.doNo, due.deliveryDate, due.fact, due.line, due.shop)
+    .first<{ avail: number }>();
   const stagedAvail = Number(stagedRow?.avail ?? 0);
 
   const dueInfo = {
@@ -227,10 +240,17 @@ export async function POST(request: Request) {
         t.production_date AS productionDate, t.received_at AS receivedAt
       FROM stock_picks p
       INNER JOIN stock_tags t ON t.id = p.stock_tag_id
-      WHERE p.due_line_id = ?1 AND p.status IN ('staged', 'partial')
-        AND p.picked_qty > p.dispatched_qty
-      ORDER BY p.picked_at ASC, p.id ASC
-    `).bind(due.id).all<{
+      INNER JOIN delivery_due_lines pd ON pd.id = p.due_line_id
+      WHERE p.status IN ('staged', 'partial') AND p.picked_qty > p.dispatched_qty
+        AND t.material_code = ?2
+        AND (
+          p.due_line_id = ?1 OR (
+            pd.do_no = ?3 AND pd.material_code = ?2 AND pd.delivery_date = ?4
+            AND pd.fact = ?5 AND pd.line = ?6 AND pd.shop = ?7
+          )
+        )
+      ORDER BY CASE WHEN p.due_line_id = ?1 THEN 0 ELSE 1 END, p.picked_at ASC, p.id ASC
+    `).bind(due.id, due.materialCode, due.doNo, due.deliveryDate, due.fact, due.line, due.shop).all<{
       id: number; stockTagId: number; pickedQty: number; dispatchedQty: number;
       pickedByName: string; pickedAt: string; stockTagCode: string; materialCode: string;
       jobNo: string; productionDate: string; receivedAt: string | null;
