@@ -329,15 +329,15 @@ function PartImage({ materialCode, compact = false, version, slot = "master" }: 
 }
 
 /**
- * โชว์รูปคู่กัน: รูปตัวอย่าง (master) และรูปชิ้นงานในกล่อง (actual)
- * ใช้ตอนสแกนขายออกเพื่อให้ผู้ตรวจเทียบว่าชิ้นงานในกล่องตรงกับตัวอย่างจริง
+ * โชว์รูปคู่กันตามตำแหน่งที่ผู้ใช้งานคุ้นเคย: รูปชิ้นงานอยู่ซ้าย และรูปตัวอย่างอยู่ขวา
+ * ใช้ตอนสแกนเพื่อให้ผู้ตรวจเทียบว่าชิ้นงานในกล่องตรงกับตัวอย่างจริง
  */
 function PartImagePair({ materialCode, masterVersion, actualVersion }: { materialCode: string; masterVersion?: string; actualVersion?: string }) {
   const capStyle: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: "#6b7787", marginBottom: 5, textAlign: "center", letterSpacing: "0.02em" };
   const figStyle: React.CSSProperties = { margin: 0, flex: "1 1 130px", minWidth: 0 };
   return <div className="part-image-pair" style={{ display: "flex", gap: 12, flexWrap: "wrap", width: "100%" }}>
-    <figure style={figStyle}><figcaption style={capStyle}>รูปตัวอย่าง (Master)</figcaption><PartImage materialCode={materialCode} slot="master" version={masterVersion} /></figure>
-    <figure style={figStyle}><figcaption style={capStyle}>รูปชิ้นงานในกล่อง</figcaption><PartImage materialCode={materialCode} slot="actual" version={actualVersion} /></figure>
+    <figure style={figStyle}><figcaption style={capStyle}>รูปชิ้นงานในกล่อง</figcaption><PartImage materialCode={materialCode} slot="master" version={masterVersion} /></figure>
+    <figure style={figStyle}><figcaption style={capStyle}>รูปตัวอย่าง (Master)</figcaption><PartImage materialCode={materialCode} slot="actual" version={actualVersion} /></figure>
   </div>;
 }
 
