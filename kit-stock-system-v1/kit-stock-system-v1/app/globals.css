@@ -1403,3 +1403,53 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
   .audit-history-filter-row { grid-template-columns: 1fr; }
   .audit-history-date { width: 100%; }
 }
+
+
+/* v2.22.0 — confirm customer Tag with two Part images before dispatch */
+.dispatch-confirm-backdrop { z-index: 1200; padding: 22px; overflow-y: auto; }
+.dispatch-confirm-modal { width: min(980px, 100%); max-height: calc(100vh - 44px); overflow-y: auto; border-radius: 24px; background: #fff; box-shadow: 0 28px 80px rgba(9,31,77,.34); }
+.dispatch-confirm-modal > header { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px; color: #fff; background: linear-gradient(135deg,#1469e8,#7042e8); }
+.dispatch-confirm-modal > header > div { display: flex; align-items: center; gap: 12px; }
+.dispatch-confirm-modal > header > div > span { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 14px; background: rgba(255,255,255,.2); font-size: 22px; }
+.dispatch-confirm-modal > header small { display: block; color: rgba(255,255,255,.82); }
+.dispatch-confirm-modal > header h3 { margin: 2px 0 0; font-size: 21px; }
+.dispatch-confirm-modal > header > button { width: 38px; height: 38px; border: 1px solid rgba(255,255,255,.35); border-radius: 11px; color: #fff; background: rgba(255,255,255,.12); font-size: 24px; cursor: pointer; }
+.dispatch-confirm-content { display: grid; grid-template-columns: minmax(0,1.15fr) minmax(340px,.85fr); gap: 20px; padding: 22px; }
+.dispatch-confirm-images { min-width: 0; padding: 14px; border: 1px solid #d9e5f7; border-radius: 18px; background: linear-gradient(145deg,#f7faff,#edf4ff); }
+.dispatch-confirm-images .part-image-pair { width: 100%; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+.dispatch-confirm-images .part-image-pair figure { padding: 9px; border-radius: 14px; background: #fff; }
+.dispatch-confirm-images .part-image-pair .part-photo,
+.dispatch-confirm-images .part-image-pair .part-photo-fallback { width: 100%; height: 260px; object-fit: contain; border-radius: 10px; }
+.dispatch-confirm-info { display: grid; align-content: start; gap: 14px; }
+.dispatch-confirm-part { padding: 15px; border-radius: 15px; background: #eef5ff; }
+.dispatch-confirm-part small { color: #7085a4; font-weight: 700; }
+.dispatch-confirm-part b { display: block; margin-top: 3px; color: #114bc4; font-size: 22px; }
+.dispatch-confirm-part p { margin: 4px 0 0; color: #385071; }
+.dispatch-confirm-details { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; }
+.dispatch-confirm-details > div { padding: 10px 12px; border: 1px solid #e0e8f5; border-radius: 11px; }
+.dispatch-confirm-details small, .dispatch-confirm-qty small { display: block; color: #7b8ba3; }
+.dispatch-confirm-details b { display: block; margin-top: 3px; color: #152f5b; }
+.dispatch-confirm-qty { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; }
+.dispatch-confirm-qty > div { padding: 11px; border-radius: 12px; text-align: center; background: #f4f7fb; }
+.dispatch-confirm-qty > div.current { color: #078c45; background: #e3f8eb; }
+.dispatch-confirm-qty b { display: block; color: inherit; font-size: 23px; }
+.dispatch-confirm-qty em { color: #7c8da5; font-size: 11px; font-style: normal; }
+.dispatch-staged-note { margin: 0; padding: 11px; border-radius: 11px; color: #8a6000; background: #fff4d8; text-align: center; font-weight: 700; }
+.dispatch-confirm-modal > footer { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 22px 22px; border-top: 1px solid #e6edf7; }
+.confirm-dispatch-button { color: #fff; border-color: #08a455; background: linear-gradient(135deg,#16b665,#058d43); box-shadow: 0 8px 20px rgba(8,164,85,.24); }
+.dispatch-confirm-blocked { align-items: center; }
+.dispatch-confirm-blocked p { margin: 0 auto 0 0; color: #ce2940; font-weight: 700; }
+@media (max-width: 760px) {
+  .dispatch-confirm-backdrop { padding: 0; align-items: flex-end; }
+  .dispatch-confirm-modal { max-height: 94vh; border-radius: 22px 22px 0 0; }
+  .dispatch-confirm-modal > header { padding: 14px 15px; }
+  .dispatch-confirm-modal > header h3 { font-size: 18px; }
+  .dispatch-confirm-content { grid-template-columns: 1fr; gap: 12px; padding: 14px; }
+  .dispatch-confirm-images { padding: 8px; }
+  .dispatch-confirm-images .part-image-pair .part-photo,
+  .dispatch-confirm-images .part-image-pair .part-photo-fallback { height: 150px; }
+  .dispatch-confirm-details { grid-template-columns: 1fr 1fr; }
+  .dispatch-confirm-modal > footer { position: sticky; bottom: 0; padding: 12px 14px calc(12px + env(safe-area-inset-bottom)); background: #fff; }
+  .dispatch-confirm-modal > footer .button { flex: 1; min-width: 0; }
+  .dispatch-confirm-blocked { flex-direction: column; align-items: stretch !important; }
+}
