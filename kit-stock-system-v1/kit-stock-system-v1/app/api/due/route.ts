@@ -183,7 +183,7 @@ async function verifyCustomerTag(rawPayload: string) {
     id: due.id, doNo: due.doNo, seq: due.seq, materialCode: due.materialCode,
     materialDescription: due.materialDescription, fact: due.fact, line: due.line,
     shop: due.shop, site: due.site, reqQty: due.reqQty,
-    deliveryDate: due.deliveryDate, deliveryTime: due.deliveryTime,
+    deliveryDate: matchMode === "swapped_date" ? tag.deliveryDate : due.deliveryDate, deliveryTime: due.deliveryTime,
     alreadyQty, remainingDue,
     projectedQty: alreadyQty + tag.qty,
     remainingAfter: Math.max(due.reqQty - (alreadyQty + tag.qty), 0),
@@ -287,14 +287,24 @@ export async function POST(request: Request) {
     if (duplicate.length) return Response.json({ error: "Tag นี้ถูกผู้ตรวจสแกนส่งออกและตัดยอดแล้ว" }, { status: 409 });
 
 
-    const { matches } = await resolveCustomerDue(tag);
+    const { matches, matchMode } = await resolveCustomerDue(tag);
     if (!matches.length) {
       return Response.json({ error: `ไม่พบ Due ที่ตรงกับ ${tag.materialCode} / Seq ${tag.seq} / ${tag.deliveryDate}` }, { status: 404 });
     }
     if (matches.length > 1) {
       return Response.json({ error: "พบ Due ซ้ำมากกว่า 1 รายการ กรุณาให้ผู้ดูแลตรวจไฟล์นำเข้า" }, { status: 409 });
     }
-    const due = matches[0];
+    const matchedDue = matches[0];
+    let due = matchedDue;
+    if (matchMode === "swapped_date" && matchedDue.deliveryDate !== tag.deliveryDate) {
+      const [year, month, day] = matchedDue.deliveryDate.split("-");
+      const swappedDate = year && month && day ? `${year}-${day}-${month}` : "";
+      if (swappedDate === tag.deliveryDate) {
+        await db.update(deliveryDueLines).set({ deliveryDate: tag.deliveryDate })
+          .where(eq(deliveryDueLines.id, matchedDue.id));
+        due = { ...matchedDue, deliveryDate: tag.deliveryDate };
+      }
+    }
     const [currentRow] = await db.select({ total: sql<number>`coalesce(sum(${deliveryTagScans.qty}), 0)` })
       .from(deliveryTagScans).where(eq(deliveryTagScans.dueLineId, due.id));
     const currentQty = Number(currentRow?.total ?? 0);
