@@ -358,6 +358,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [importing, setImporting] = useState(false);
   const [rawTag, setRawTag] = useState("");
   const [tagPreview, setTagPreview] = useState<TagPreview | null>(null);
+  const [dispatchConfirmation, setDispatchConfirmation] = useState<VerifyResult | null>(null);
   const [checkingTag, setCheckingTag] = useState(false);
   const [verifyRaw, setVerifyRaw] = useState("");
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
@@ -700,7 +701,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
               } else {
                 setRawTag(value);
                 setTagPreview(null);
-                void processTag(value);
+                void previewDispatchTag(value);
               }
               return;
             }
@@ -931,6 +932,39 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     } finally {
       setDeletingImportId(null);
     }
+  }
+
+  async function previewDispatchTag(value?: string | FormEvent) {
+    const event = typeof value === "object" ? value : undefined;
+    event?.preventDefault();
+    const scannedValue = typeof value === "string" ? value.trim() : rawTag.trim();
+    if (!scannedValue || checkingTag) return;
+    setCheckingTag(true);
+    setDispatchConfirmation(null);
+    setTagPreview(null);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/due", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ rawPayload: scannedValue, mode: "verify" }),
+      });
+      const result = await response.json() as VerifyResult & { error?: string };
+      if (!response.ok) throw new Error(result.error || "ตรวจสอบ Tag ไม่สำเร็จ");
+      setRawTag(scannedValue);
+      setDispatchConfirmation(result);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบ Tag ไม่สำเร็จ" });
+    } finally {
+      setCheckingTag(false);
+    }
+  }
+
+  async function confirmDispatch() {
+    const rawPayload = dispatchConfirmation?.tag?.rawPayload;
+    if (!rawPayload || checkingTag) return;
+    setDispatchConfirmation(null);
+    await processTag(rawPayload);
   }
 
   async function processTag(value?: string | FormEvent) {
@@ -2161,7 +2195,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <div className="scanner-visual"><div className="scan-frame"><span className="qr-symbol">▦</span><b>{checkingTag ? "กำลังบันทึก…" : "พร้อมรับ QR Tag"}</b><small>วาง QR ให้อยู่ในกรอบ หรือยิง Tag ได้ทันที</small><i /></div></div>
           {scanMode === "arrange"
             ? <form className="manual-scan arrange-scan-form" onSubmit={stageStockTag}><label><span>2. จำนวนที่จะหยิบ (เว้นว่าง = จัดเท่าที่ Due ต้องการ)</span><input type="number" min="1" value={arrangeQty} onChange={(e) => setArrangeQty(e.target.value)} placeholder="อัตโนมัติ" /></label><label><span>3. KIT Stock Tag</span><input ref={tagInput} value={arrangeTag} onChange={(e) => { setArrangeTag(e.target.value); setArrangementPreview(null); }} placeholder="ยิง Tag ที่พิมพ์จากระบบ แล้วเครื่องส่ง Enter" autoComplete="off" /></label><button className="button primary" disabled={!effectiveArrangeDueId || !arrangeTag.trim() || checkingTag}>{checkingTag ? "กำลังจัดงาน…" : "จัดงาน / รอขายออก"}</button></form>
-            : <form className="manual-scan" onSubmit={processTag}><label><span>Tag ลูกค้า / ข้อมูลจาก QR</span><input ref={tagInput} value={rawTag} onChange={(e) => { setRawTag(e.target.value); setTagPreview(null); }} placeholder="ยิง Tag ลูกค้า แล้วเครื่องส่ง Enter" autoComplete="off" /></label><button className="button primary" disabled={!rawTag.trim() || checkingTag}>{checkingTag ? "กำลังขายออก…" : "ขายออก / ตัด Stock และ Due"}</button></form>}
+            : <form className="manual-scan" onSubmit={previewDispatchTag}><label><span>Tag ลูกค้า / ข้อมูลจาก QR</span><input ref={tagInput} value={rawTag} onChange={(e) => { setRawTag(e.target.value); setTagPreview(null); setDispatchConfirmation(null); }} placeholder="ยิง Tag ลูกค้า แล้วเครื่องส่ง Enter" autoComplete="off" /></label><button className="button primary" disabled={!rawTag.trim() || checkingTag}>{checkingTag ? "กำลังตรวจสอบ…" : "ตรวจสอบก่อนขายออก"}</button></form>}
         </section>
         <section className="tag-result" ref={tagResultRef}>
           <header><div><p>{scanMode === "arrange" ? "KIT Tag / Job ที่จัด" : "Customer Tag / Due"}</p><h3>{scanMode === "arrange" ? arrangementPreview?.due.materialCode || "รอการสแกน" : tagPreview?.due.materialCode || "รอการสแกน"}</h3></div><span className={`status ${(scanMode === "arrange" ? arrangementPreview : tagPreview) ? "completed" : "pending"}`}>{(scanMode === "arrange" ? arrangementPreview : tagPreview) ? (scanMode === "arrange" ? "จัดรอขายแล้ว" : "ขายออกสำเร็จ") : "ยังไม่มี Tag"}</span></header>
@@ -2348,7 +2382,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     // แบบมีเงื่อนไข ไม่ใช่คอมโพเนนต์ การเรียก hook ในนี้จะผิดกฎ Hooks
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <>
-      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.21.4</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
+      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.22.0</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
       <div className="settings-grid"><Card title="ตั้งค่าการตัดยอด"><Toggle keyName="partial" title="อนุญาตให้ตัดยอดบางส่วน" text="Tag หนึ่งใบสามารถตัดยอดไม่ครบ Due ได้" /><Toggle keyName="confirm" title="ยืนยันก่อนตัดยอดทุกครั้ง" text="แสดงยอดก่อนและหลังให้ตรวจสอบก่อนบันทึก" /></Card><Card title="ตั้งค่าการสแกน"><Toggle keyName="autoFocus" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" title="เสียงแจ้งเตือนเมื่อสำเร็จ" text="เปิดเสียงยืนยันหลังตัดยอดเรียบร้อย" /></Card></div>
       <Card title="รูปแบบการแสดงผล"><div className="form-grid"><label><span>ภาษา</span><select><option>ภาษาไทย</option></select></label><label><span>เขตเวลา</span><select><option>(GMT+07:00) Bangkok, Thailand</option></select></label><label><span>รูปแบบวันที่</span><select><option>DD/MM/YYYY</option></select></label><label><span>หน่วยเริ่มต้น</span><select><option>ชิ้น (PC)</option></select></label></div><div className="save-row"><button className="button primary" onClick={saveSettings}>▣ บันทึกการตั้งค่า</button></div></Card>
       {user.role === "admin" && <Card title="ล้างข้อมูลทดลอง"><div className="permission-note"><span>!</span><div><b>ล้างเฉพาะรายการ Stock</b><p>ลบ Tag Stock และประวัติการจัด/ขายออกทั้งหมด โดยเก็บทะเบียน Part รูปชิ้นงาน แผน Due และผู้ใช้งานไว้</p></div></div><div className="save-row"><button className="button danger" disabled={clearingTestStock || stock.tags.length === 0} onClick={() => void clearTestStock()}>{clearingTestStock ? "กำลังล้างข้อมูล…" : `ล้าง Stock ทดลอง ${fmt(stock.tags.length)} Tag`}</button></div></Card>}
@@ -2397,7 +2431,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
       <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.21.1</span></div></div>
+      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.22.0</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
@@ -2413,6 +2447,19 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button onClick={() => setMenuOpen(true)}><span>☰</span><small>เมนู</small></button>
       <a className="bottom-logout" href={signOutPath} onClick={signOut}><span>↪</span><small>ออกระบบ</small></a>
     </nav>
+    {dispatchConfirmation && <div className="modal-backdrop dispatch-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="dispatch-confirm-title"><div className="dispatch-confirm-modal">
+      <header><div><span>✓</span><div><small>ตรวจพบ Tag ลูกค้า</small><h3 id="dispatch-confirm-title">ตรวจสอบงานก่อนขายออก</h3></div></div><button type="button" onClick={() => setDispatchConfirmation(null)} aria-label="ปิด">×</button></header>
+      <div className="dispatch-confirm-content">
+        <section className="dispatch-confirm-images"><PartImagePair materialCode={dispatchConfirmation.tag?.materialCode || dispatchConfirmation.master?.materialCode || ""} masterVersion={partImages.find((item) => item.materialCode === (dispatchConfirmation.tag?.materialCode || dispatchConfirmation.master?.materialCode))?.updatedAt} actualVersion={partActualImages.find((item) => item.materialCode === (dispatchConfirmation.tag?.materialCode || dispatchConfirmation.master?.materialCode))?.updatedAt} /></section>
+        <section className="dispatch-confirm-info">
+          <div className="dispatch-confirm-part"><small>PART / MATERIAL</small><b>{dispatchConfirmation.tag?.materialCode || dispatchConfirmation.master?.materialCode || "—"}</b><p>{dispatchConfirmation.master?.partName || dispatchConfirmation.due?.materialDescription || "ไม่ระบุชื่อชิ้นงาน"}</p></div>
+          <div className="dispatch-confirm-details"><div><small>Tag ลูกค้า</small><b>{dispatchConfirmation.tag?.tagId || "—"}</b></div><div><small>FAC / Line</small><b>{dispatchConfirmation.due ? dispatchConfirmation.due.fact + " / " + (dispatchConfirmation.due.line || "—") : "—"}</b></div><div><small>DO / Seq</small><b>{dispatchConfirmation.due ? dispatchConfirmation.due.doNo + " / " + dispatchConfirmation.due.seq : "—"}</b></div><div><small>กำหนดส่ง</small><b>{dispatchConfirmation.due ? formatDate(dispatchConfirmation.due.deliveryDate) + " " + dispatchConfirmation.due.deliveryTime : "—"}</b></div></div>
+          <div className="dispatch-confirm-qty"><div><small>Due ทั้งหมด</small><b>{fmt(dispatchConfirmation.due?.reqQty || 0)}</b><em>ชิ้น</em></div><div><small>ขายออกแล้ว</small><b>{fmt(dispatchConfirmation.due?.alreadyQty || 0)}</b><em>ชิ้น</em></div><div className="current"><small>ขายครั้งนี้</small><b>{fmt(dispatchConfirmation.tag?.qty || 0)}</b><em>{dispatchConfirmation.tag?.unit || "ชิ้น"}</em></div><div><small>คงเหลือหลังขาย</small><b>{fmt(dispatchConfirmation.due?.remainingAfter || 0)}</b><em>ชิ้น</em></div></div>
+          {dispatchConfirmation.stagedAvail !== undefined && <p className="dispatch-staged-note">งานที่จัดรอขายไว้ {fmt(dispatchConfirmation.stagedAvail)} ชิ้น</p>}
+        </section>
+      </div>
+      {(dispatchConfirmation.verdict === "ready" || dispatchConfirmation.verdict === "ready_noimg") ? <footer><button type="button" className="button secondary" onClick={() => setDispatchConfirmation(null)}>ยกเลิก / ตรวจใหม่</button><button type="button" className="button confirm-dispatch-button" disabled={checkingTag} onClick={() => void confirmDispatch()}>{checkingTag ? "กำลังขายออก…" : "✓ ยืนยันขายออกและตัดยอด"}</button></footer> : <footer className="dispatch-confirm-blocked"><p>ไม่สามารถขายออกได้: {dispatchConfirmation.message || "ข้อมูลไม่พร้อมขายออก"}</p><button type="button" className="button secondary" onClick={() => setDispatchConfirmation(null)}>ปิดและตรวจใหม่</button></footer>}
+    </div></div>}
     {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>{cameraPurpose === "stock" ? "สแกน Tag รับงานเข้า Stock" : "สแกน QR Tag ด้วยกล้อง"}</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className="camera-view"><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div>{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
     {userEditorOpen && <div className="modal-backdrop"><form className="user-modal permission-modal" onSubmit={saveUser}>
       <header><div><h3>{userForm.id ? "แก้ไขผู้ใช้งานและสิทธิ์" : "เพิ่มผู้ใช้งาน"}</h3><p>เลือกบทบาทและกำหนดหน้าที่แต่ละคนสามารถเปิดใช้งานได้</p></div><button type="button" onClick={() => setUserEditorOpen(false)}>×</button></header>
