@@ -404,6 +404,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [clearingTestStock, setClearingTestStock] = useState(false);
   const [stockPartForm, setStockPartForm] = useState({ materialCode: "", partName: "", customer: "", location: "", standardQty: "" });
   const [partSearch, setPartSearch] = useState("");
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [historyType, setHistoryType] = useState("all");
   const [partPage, setPartPage] = useState(1);
   const [partPageSize, setPartPageSize] = useState(10);
   const [tagSearch, setTagSearch] = useState("");
@@ -2249,35 +2251,48 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }
 
   function renderHistory() {
-    const activities: Array<{ id: string; createdAt: string; action: string; detail: string; actor: string; tone: string }> = [];
+    const activities: Array<{ id: string; createdAt: string; action: string; detail: string; actor: string; tone: string; kind: string }> = [];
     payload.imports.forEach((item) => activities.push({
       id: "import-" + item.id, createdAt: item.createdAt, action: "นำเข้าแผนส่งงาน",
-      detail: item.fileName + " · " + fmt(item.rowCount) + " รายการ", actor: item.importedByName || "—", tone: "purple",
+      detail: item.fileName + " · " + fmt(item.rowCount) + " รายการ", actor: item.importedByName || "—", tone: "purple", kind: "import",
     }));
     stock.tags.forEach((item) => {
       activities.push({
         id: "tag-" + item.id, createdAt: item.createdAt, action: "ออกและพิมพ์ Tag",
         detail: item.tagId + " · " + item.materialCode + " · Job " + item.jobNo + " · " + fmt(item.qty) + " ชิ้น",
-        actor: item.printedByName || "—", tone: "blue",
+        actor: item.printedByName || "—", tone: "blue", kind: "tag",
       });
       if (item.receivedAt) activities.push({
         id: "receive-" + item.id, createdAt: item.receivedAt, action: "รับงานเข้า Stock",
         detail: item.tagId + " · " + item.materialCode + " · " + fmt(item.qty) + " ชิ้น",
-        actor: item.receivedByName || "—", tone: "green",
+        actor: item.receivedByName || "—", tone: "green", kind: "receive",
       });
     });
     stock.picks.forEach((item) => activities.push({
       id: "pick-" + item.id, createdAt: item.pickedAt, action: "จัดงาน",
       detail: item.stockTagCode + " · " + item.materialCode + " · Job " + item.jobNo + " · " + fmt(item.pickedQty) + " ชิ้น",
-      actor: item.pickedByName || "—", tone: "orange",
+      actor: item.pickedByName || "—", tone: "orange", kind: "arrange",
     }));
     payload.scans.forEach((item) => activities.push({
       id: "dispatch-" + item.id, createdAt: item.createdAt, action: "ตรวจและขายออก",
       detail: item.tagId + " · " + item.materialCode + " · " + fmt(item.qty) + " " + item.unit,
-      actor: item.scannedByName || "—", tone: "red",
+      actor: item.scannedByName || "—", tone: "red", kind: "dispatch",
     }));
     activities.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-    const shownActivities = activities.slice(0, 250);
+    const historyNeedle = historyQuery.trim().toLowerCase();
+    const filteredActivities = activities.filter((item) =>
+      (historyType === "all" || item.kind === historyType)
+      && (!historyNeedle || [item.action, item.detail, item.actor, item.createdAt].some((value) => String(value || "").toLowerCase().includes(historyNeedle)))
+    );
+    const historyTabs = [
+      { key: "all", label: "ทั้งหมด", count: activities.length },
+      { key: "import", label: "นำเข้าแผน", count: activities.filter((item) => item.kind === "import").length },
+      { key: "tag", label: "พิมพ์ Tag", count: activities.filter((item) => item.kind === "tag").length },
+      { key: "receive", label: "รับเข้า Stock", count: activities.filter((item) => item.kind === "receive").length },
+      { key: "arrange", label: "จัดงาน", count: activities.filter((item) => item.kind === "arrange").length },
+      { key: "dispatch", label: "ตรวจและขายออก", count: activities.filter((item) => item.kind === "dispatch").length },
+    ];
+    const shownActivities = filteredActivities.slice(0, 250);
     return <>
       <div className="metrics five">
         <MetricCard tone="purple" icon="⇧" label="นำเข้าแผน" value={fmt(payload.imports.length)} suffix="ครั้ง" />
@@ -2286,8 +2301,13 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         <MetricCard tone="orange" icon="⇥" label="จัดงาน" value={fmt(stock.picks.length)} suffix="รายการ" />
         <MetricCard tone="red" icon="⌗" label="ตรวจและขายออก" value={fmt(payload.scans.length)} suffix="รายการ" />
       </div>
-      <Card title="ประวัติผู้ดำเนินการทั้งหมด" action={<button className="button secondary" onClick={() => void Promise.all([loadDue(), loadStock()])}>↻ รีเฟรช</button>}>
-        {shownActivities.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>วันและเวลา</th><th>รายการที่ทำ</th><th>รายละเอียด</th><th>ผู้ดำเนินการ</th><th>ผลลัพธ์</th></tr></thead><tbody>{shownActivities.map((item) => <tr key={item.id}><td data-label="วันและเวลา"><b>{formatDateTime(item.createdAt)}</b></td><td data-label="รายการที่ทำ"><b>{item.action}</b></td><td data-label="รายละเอียด">{item.detail}</td><td data-label="ผู้ดำเนินการ"><b>{item.actor}</b></td><td data-label="ผลลัพธ์"><em className={"status completed audit-" + item.tone}>บันทึกแล้ว</em></td></tr>)}</tbody></table></div> : <Empty title="ยังไม่มีประวัติ" text="เมื่อมีผู้ทำรายการ ระบบจะแสดงชื่อ วันเวลา และรายละเอียดที่หน้านี้" />}
+      <Card className="audit-history-card" title="ประวัติผู้ดำเนินการ" action={<button className="button secondary" onClick={() => void Promise.all([loadDue(), loadStock()])}>↻ รีเฟรช</button>}>
+        <div className="audit-history-controls">
+          <div className="audit-history-tabs">{historyTabs.map((tab) => <button type="button" key={tab.key} className={historyType === tab.key ? "active" : ""} onClick={() => setHistoryType(tab.key)}><span>{tab.label}</span><b>{fmt(tab.count)}</b></button>)}</div>
+          <div className="audit-history-search"><span>⌕</span><input value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder="ค้นหาชื่อผู้ทำรายการ, Tag ID, Part No., Job หรือชื่อไฟล์..." />{historyQuery && <button type="button" onClick={() => setHistoryQuery("")}>×</button>}</div>
+          <p>พบ {fmt(filteredActivities.length)} รายการ{filteredActivities.length > 250 ? " · แสดง 250 รายการล่าสุด" : ""}</p>
+        </div>
+        {shownActivities.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>วันและเวลา</th><th>รายการที่ทำ</th><th>รายละเอียด</th><th>ผู้ดำเนินการ</th><th>ผลลัพธ์</th></tr></thead><tbody>{shownActivities.map((item) => <tr key={item.id}><td data-label="วันและเวลา"><b>{formatDateTime(item.createdAt)}</b></td><td data-label="รายการที่ทำ"><b>{item.action}</b></td><td data-label="รายละเอียด">{item.detail}</td><td data-label="ผู้ดำเนินการ"><b>{item.actor}</b></td><td data-label="ผลลัพธ์"><em className={"status completed audit-" + item.tone}>บันทึกแล้ว</em></td></tr>)}</tbody></table></div> : <Empty title={historyQuery ? "ไม่พบรายการที่ค้นหา" : "ยังไม่มีประวัติในหมวดนี้"} text={historyQuery ? "ลองค้นหาด้วยชื่อผู้ดำเนินการ, Tag ID, Part No. หรือ Job" : "เลือกหมวดอื่นเพื่อดูประวัติรายการ"} />}
       </Card>
     </>;
   }
@@ -2297,7 +2317,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     // แบบมีเงื่อนไข ไม่ใช่คอมโพเนนต์ การเรียก hook ในนี้จะผิดกฎ Hooks
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <>
-      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.21.0</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
+      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.21.1</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
       <div className="settings-grid"><Card title="ตั้งค่าการตัดยอด"><Toggle keyName="partial" title="อนุญาตให้ตัดยอดบางส่วน" text="Tag หนึ่งใบสามารถตัดยอดไม่ครบ Due ได้" /><Toggle keyName="confirm" title="ยืนยันก่อนตัดยอดทุกครั้ง" text="แสดงยอดก่อนและหลังให้ตรวจสอบก่อนบันทึก" /></Card><Card title="ตั้งค่าการสแกน"><Toggle keyName="autoFocus" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" title="เสียงแจ้งเตือนเมื่อสำเร็จ" text="เปิดเสียงยืนยันหลังตัดยอดเรียบร้อย" /></Card></div>
       <Card title="รูปแบบการแสดงผล"><div className="form-grid"><label><span>ภาษา</span><select><option>ภาษาไทย</option></select></label><label><span>เขตเวลา</span><select><option>(GMT+07:00) Bangkok, Thailand</option></select></label><label><span>รูปแบบวันที่</span><select><option>DD/MM/YYYY</option></select></label><label><span>หน่วยเริ่มต้น</span><select><option>ชิ้น (PC)</option></select></label></div><div className="save-row"><button className="button primary" onClick={saveSettings}>▣ บันทึกการตั้งค่า</button></div></Card>
       {user.role === "admin" && <Card title="ล้างข้อมูลทดลอง"><div className="permission-note"><span>!</span><div><b>ล้างเฉพาะรายการ Stock</b><p>ลบ Tag Stock และประวัติการจัด/ขายออกทั้งหมด โดยเก็บทะเบียน Part รูปชิ้นงาน แผน Due และผู้ใช้งานไว้</p></div></div><div className="save-row"><button className="button danger" disabled={clearingTestStock || stock.tags.length === 0} onClick={() => void clearTestStock()}>{clearingTestStock ? "กำลังล้างข้อมูล…" : `ล้าง Stock ทดลอง ${fmt(stock.tags.length)} Tag`}</button></div></Card>}
@@ -2346,7 +2366,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
       <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.21.0</span></div></div>
+      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.21.1</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
