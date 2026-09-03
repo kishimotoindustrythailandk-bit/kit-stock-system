@@ -105,7 +105,6 @@ export async function GET() {
       INNER JOIN delivery_due_lines d ON d.id = l.due_line_id
       ORDER BY l.id DESC LIMIT 150
     `).all() : { results: [] };
-    const { DB } = getRuntimeEnv();
     if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
     await DB.prepare(`
       CREATE TABLE IF NOT EXISTS stock_job_closures (
