@@ -316,7 +316,7 @@ function PartImage({ materialCode, compact = false, version, slot = "master" }: 
 }
 
 /**
- * โชว์รูปคู่กัน: รูปตัวอย่าง (master) และรูปตัวอย่างจริง (actual)
+ * โชว์รูปคู่กัน: รูปตัวอย่าง (master) และรูปชิ้นงานในกล่อง (actual)
  * ใช้ตอนสแกนขายออกเพื่อให้ผู้ตรวจเทียบว่าชิ้นงานในกล่องตรงกับตัวอย่างจริง
  */
 function PartImagePair({ materialCode, masterVersion, actualVersion }: { materialCode: string; masterVersion?: string; actualVersion?: string }) {
@@ -324,7 +324,7 @@ function PartImagePair({ materialCode, masterVersion, actualVersion }: { materia
   const figStyle: React.CSSProperties = { margin: 0, flex: "1 1 130px", minWidth: 0 };
   return <div className="part-image-pair" style={{ display: "flex", gap: 12, flexWrap: "wrap", width: "100%" }}>
     <figure style={figStyle}><figcaption style={capStyle}>รูปตัวอย่าง (Master)</figcaption><PartImage materialCode={materialCode} slot="master" version={masterVersion} /></figure>
-    <figure style={figStyle}><figcaption style={capStyle}>รูปตัวอย่างจริง</figcaption><PartImage materialCode={materialCode} slot="actual" version={actualVersion} /></figure>
+    <figure style={figStyle}><figcaption style={capStyle}>รูปชิ้นงานในกล่อง</figcaption><PartImage materialCode={materialCode} slot="actual" version={actualVersion} /></figure>
   </div>;
 }
 
@@ -1056,7 +1056,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         form.set("image", partActualImageFile);
         const imageResponse = await fetch("/api/part-images", { method: "POST", body: form });
         const imageData = await imageResponse.json() as { error?: string };
-        if (!imageResponse.ok) throw new Error(imageData.error || "บันทึก Part สำเร็จ แต่บันทึกรูปตัวอย่างจริงไม่สำเร็จ");
+        if (!imageResponse.ok) throw new Error(imageData.error || "บันทึก Part สำเร็จ แต่บันทึกรูปชิ้นงานในกล่องไม่สำเร็จ");
       }
       const savedAnyImage = Boolean(partImageFile || partActualImageFile);
       setStockPartForm({ materialCode: "", partName: "", customer: "", standardQty: "" });
@@ -1709,7 +1709,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           </div>
           <div className="part-photo-editor">
             <div className="part-current-photo">{stockPartForm.materialCode ? <PartImage materialCode={stockPartForm.materialCode} slot="actual" version={formActualImage?.updatedAt} /> : <span>▧</span>}</div>
-            <label className="part-change-photo"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setPartActualImageFile(e.target.files?.[0] || null)} /><b>⇧ {formActualImage ? "เปลี่ยนรูปตัวอย่างจริง" : "เพิ่มรูปตัวอย่างจริง"}</b><small>{partActualImageFile?.name || "รูปชิ้นงานจริง · ใช้เทียบตอนขายออก"}</small></label>
+            <label className="part-change-photo"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setPartActualImageFile(e.target.files?.[0] || null)} /><b>⇧ {formActualImage ? "เปลี่ยนรูปชิ้นงานในกล่อง" : "เพิ่มรูปชิ้นงานในกล่อง"}</b><small>{partActualImageFile?.name || "รูปชิ้นงานที่จัดวางในกล่อง · ใช้เทียบตอนขายออก"}</small></label>
           </div>
         </form>
         <div className="part-editor-foot"><span>Excel รองรับคอลัมน์: Part / Material No., Part Name, Customer และ Max Qty per Box</span>{stockPartForm.materialCode && <button type="button" className="tiny-button" onClick={clearPartForm}>＋ เพิ่ม Part ใหม่</button>}</div>
@@ -2176,7 +2176,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     // แบบมีเงื่อนไข ไม่ใช่คอมโพเนนต์ การเรียก hook ในนี้จะผิดกฎ Hooks
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <>
-      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.18.5</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
+      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.19.0</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
       <div className="settings-grid"><Card title="ตั้งค่าการตัดยอด"><Toggle keyName="partial" title="อนุญาตให้ตัดยอดบางส่วน" text="Tag หนึ่งใบสามารถตัดยอดไม่ครบ Due ได้" /><Toggle keyName="confirm" title="ยืนยันก่อนตัดยอดทุกครั้ง" text="แสดงยอดก่อนและหลังให้ตรวจสอบก่อนบันทึก" /></Card><Card title="ตั้งค่าการสแกน"><Toggle keyName="autoFocus" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" title="เสียงแจ้งเตือนเมื่อสำเร็จ" text="เปิดเสียงยืนยันหลังตัดยอดเรียบร้อย" /></Card></div>
       <Card title="รูปแบบการแสดงผล"><div className="form-grid"><label><span>ภาษา</span><select><option>ภาษาไทย</option></select></label><label><span>เขตเวลา</span><select><option>(GMT+07:00) Bangkok, Thailand</option></select></label><label><span>รูปแบบวันที่</span><select><option>DD/MM/YYYY</option></select></label><label><span>หน่วยเริ่มต้น</span><select><option>ชิ้น (PC)</option></select></label></div><div className="save-row"><button className="button primary" onClick={saveSettings}>▣ บันทึกการตั้งค่า</button></div></Card>
       {user.role === "admin" && <Card title="ล้างข้อมูลทดลอง"><div className="permission-note"><span>!</span><div><b>ล้างเฉพาะรายการ Stock</b><p>ลบ Tag Stock และประวัติการจัด/ขายออกทั้งหมด โดยเก็บทะเบียน Part รูปชิ้นงาน แผน Due และผู้ใช้งานไว้</p></div></div><div className="save-row"><button className="button danger" disabled={clearingTestStock || stock.tags.length === 0} onClick={() => void clearTestStock()}>{clearingTestStock ? "กำลังล้างข้อมูล…" : `ล้าง Stock ทดลอง ${fmt(stock.tags.length)} Tag`}</button></div></Card>}
@@ -2225,7 +2225,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
       <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.18.5</span></div></div>
+      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.19.0</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
