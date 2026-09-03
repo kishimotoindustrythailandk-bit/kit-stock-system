@@ -13,7 +13,7 @@ type ImageRow = {
 const ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_BYTES = 5 * 1024 * 1024;
 
-// รูปชิ้นงานมี 2 ช่อง (slot): master = รูปตัวอย่าง, actual = รูปตัวอย่างจริงในกล่อง
+// รูปชิ้นงานมี 2 ช่อง (slot): master = รูปตัวอย่าง, actual = รูปชิ้นงานที่อยู่ในกล่อง
 // เก็บคนละตารางเพื่อไม่ต้อง rebuild ตาราง part_images เดิม และ R2 ใช้ prefix แยกกัน
 type Slot = "master" | "actual";
 function resolveSlot(value: unknown): Slot {
@@ -47,6 +47,18 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const slot = resolveSlot(url.searchParams.get("slot"));
     const table = tableForSlot(slot);
+    if (slot === "actual") {
+      await DB.prepare(`
+        CREATE TABLE IF NOT EXISTS part_actual_images (
+          material_code TEXT PRIMARY KEY NOT NULL,
+          object_key TEXT NOT NULL,
+          original_name TEXT NOT NULL,
+          content_type TEXT NOT NULL,
+          updated_by_name TEXT NOT NULL,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
+        )
+      `).run();
+    }
     const materialCode = cleanMaterialCode(url.searchParams.get("materialCode"));
     if (!materialCode) {
       if (!auth.user || (!hasPermission(auth.user, "parts") && !hasPermission(auth.user, "settings"))) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ดูทะเบียนรูปชิ้นงาน" }, { status: 403 });
@@ -108,6 +120,18 @@ export async function POST(request: Request) {
     const materialCode = cleanMaterialCode(form.get("materialCode"));
     const slot = resolveSlot(form.get("slot"));
     const table = tableForSlot(slot);
+    if (slot === "actual") {
+      await DB.prepare(`
+        CREATE TABLE IF NOT EXISTS part_actual_images (
+          material_code TEXT PRIMARY KEY NOT NULL,
+          object_key TEXT NOT NULL,
+          original_name TEXT NOT NULL,
+          content_type TEXT NOT NULL,
+          updated_by_name TEXT NOT NULL,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
+        )
+      `).run();
+    }
     const image = form.get("image");
     if (!materialCode) return Response.json({ error: "กรุณาระบุ Material / Part No." }, { status: 400 });
     if (!(image instanceof File) || image.size === 0) return Response.json({ error: "กรุณาเลือกไฟล์รูป" }, { status: 400 });
@@ -144,6 +168,18 @@ export async function DELETE(request: Request) {
     const materialCode = cleanMaterialCode(body.materialCode);
     const slot = resolveSlot(body.slot);
     const table = tableForSlot(slot);
+    if (slot === "actual") {
+      await DB.prepare(`
+        CREATE TABLE IF NOT EXISTS part_actual_images (
+          material_code TEXT PRIMARY KEY NOT NULL,
+          object_key TEXT NOT NULL,
+          original_name TEXT NOT NULL,
+          content_type TEXT NOT NULL,
+          updated_by_name TEXT NOT NULL,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
+        )
+      `).run();
+    }
     const row = await DB.prepare(`SELECT object_key AS objectKey FROM ${table} WHERE material_code = ?1 LIMIT 1`).bind(materialCode).first<{ objectKey: string }>();
     if (!row) return Response.json({ error: "ไม่พบรูปชิ้นงาน" }, { status: 404 });
     await DB.prepare(`DELETE FROM ${table} WHERE material_code = ?1`).bind(materialCode).run();
