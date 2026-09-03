@@ -431,6 +431,13 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [stockTagForm, setStockTagForm] = useState({ materialCode: "", qty: "", jobNo: "", productionDate: new Date().toISOString().slice(0, 10) });
   const [stockScan, setStockScan] = useState("");
   const stockScanInputRef = useRef<HTMLInputElement>(null);
+  const stockScanTimerRef = useRef<number | null>(null);
+  const stockScanRequestRef = useRef(false);
+  const dispatchScanTimerRef = useRef<number | null>(null);
+  const dispatchScanRequestRef = useRef(false);
+  const hardwareScanBufferRef = useRef("");
+  const hardwareScanLastKeyRef = useRef(0);
+  const hardwareScanTimerRef = useRef<number | null>(null);
   const [stockReceivePreview, setStockReceivePreview] = useState<StockReceivePreview | null>(null);
   const [stockReceiveQty, setStockReceiveQty] = useState("");
   const [stockSaving, setStockSaving] = useState(false);
@@ -736,10 +743,52 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }, [cameraOpen, cameraPurpose, page]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (page !== "stock" || stockReceivePreview || cameraOpen) return;
-    const timer = window.setTimeout(() => stockScanInputRef.current?.focus(), 80);
-    return () => window.clearTimeout(timer);
-  }, [page, stockReceivePreview, cameraOpen]);
+    const scannerPage = page === "stock" || page === "dispatch";
+    if (!scannerPage || stockReceivePreview || dispatchConfirmation || cameraOpen) return;
+    const activeInput = page === "stock" ? stockScanInputRef.current : tagInput.current;
+    const focusTimer = window.setTimeout(() => activeInput?.focus(), 80);
+    const submitBuffer = () => {
+      const value = hardwareScanBufferRef.current.trim();
+      hardwareScanBufferRef.current = "";
+      if (hardwareScanTimerRef.current !== null) window.clearTimeout(hardwareScanTimerRef.current);
+      hardwareScanTimerRef.current = null;
+      if (value.length < 4) return;
+      if (page === "stock") {
+        setStockScan(value);
+        void receiveStockTag(value);
+      } else {
+        setRawTag(value);
+        setTagPreview(null);
+        void previewDispatchTag(value);
+      }
+    };
+    const onScannerKey = (event: globalThis.KeyboardEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target === activeInput || target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.tagName === "SELECT") return;
+      if (event.key === "Enter" || event.key === "Tab") {
+        if (hardwareScanBufferRef.current) {
+          event.preventDefault();
+          submitBuffer();
+        }
+        return;
+      }
+      if (event.key.length !== 1) return;
+      const now = Date.now();
+      if (now - hardwareScanLastKeyRef.current > 400) hardwareScanBufferRef.current = "";
+      hardwareScanLastKeyRef.current = now;
+      hardwareScanBufferRef.current += event.key;
+      if (hardwareScanTimerRef.current !== null) window.clearTimeout(hardwareScanTimerRef.current);
+      hardwareScanTimerRef.current = window.setTimeout(submitBuffer, 320);
+    };
+    document.addEventListener("keydown", onScannerKey);
+    return () => {
+      window.clearTimeout(focusTimer);
+      if (hardwareScanTimerRef.current !== null) window.clearTimeout(hardwareScanTimerRef.current);
+      hardwareScanBufferRef.current = "";
+      document.removeEventListener("keydown", onScannerKey);
+    };
+  }, [page, stockReceivePreview, dispatchConfirmation, cameraOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function parseExcel(event: ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0] ?? null;
@@ -954,11 +1003,28 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     }
   }
 
+  function updateDispatchScannerValue(value: string) {
+    setRawTag(value);
+    setTagPreview(null);
+    setDispatchConfirmation(null);
+    if (dispatchScanTimerRef.current !== null) window.clearTimeout(dispatchScanTimerRef.current);
+    if (value.trim().length < 4) return;
+    dispatchScanTimerRef.current = window.setTimeout(() => {
+      dispatchScanTimerRef.current = null;
+      void previewDispatchTag(value);
+    }, 320);
+  }
+
   async function previewDispatchTag(value?: string | FormEvent) {
     const event = typeof value === "object" ? value : undefined;
     event?.preventDefault();
+    if (dispatchScanTimerRef.current !== null) {
+      window.clearTimeout(dispatchScanTimerRef.current);
+      dispatchScanTimerRef.current = null;
+    }
     const scannedValue = typeof value === "string" ? value.trim() : rawTag.trim();
-    if (!scannedValue || checkingTag) return;
+    if (!scannedValue || dispatchScanRequestRef.current) return;
+    dispatchScanRequestRef.current = true;
     setCheckingTag(true);
     setDispatchConfirmation(null);
     setTagPreview(null);
@@ -976,6 +1042,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     } catch (caught) {
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบ Tag ไม่สำเร็จ" });
     } finally {
+      dispatchScanRequestRef.current = false;
       setCheckingTag(false);
     }
   }
@@ -1284,10 +1351,25 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     }
   }
 
+  function updateStockScannerValue(value: string) {
+    setStockScan(value);
+    if (stockScanTimerRef.current !== null) window.clearTimeout(stockScanTimerRef.current);
+    if (value.trim().length < 4) return;
+    stockScanTimerRef.current = window.setTimeout(() => {
+      stockScanTimerRef.current = null;
+      void receiveStockTag(value);
+    }, 320);
+  }
+
   async function receiveStockTag(input: FormEvent | string) {
     if (typeof input !== "string") input.preventDefault();
+    if (stockScanTimerRef.current !== null) {
+      window.clearTimeout(stockScanTimerRef.current);
+      stockScanTimerRef.current = null;
+    }
     const rawPayload = (typeof input === "string" ? input : stockScan).trim();
-    if (!rawPayload || stockSaving) return;
+    if (!rawPayload || stockScanRequestRef.current) return;
+    stockScanRequestRef.current = true;
     setStockSaving(true);
     try {
       const response = await fetch("/api/stock", {
@@ -1302,6 +1384,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     } catch (caught) {
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบ Tag ไม่สำเร็จ" });
     } finally {
+      stockScanRequestRef.current = false;
       setStockSaving(false);
     }
   }
@@ -2027,7 +2110,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         <Card className="stock-receive-card" title="1. สแกน Tag เพื่อรับเข้า Stock">
           <button type="button" className="stock-camera-zone" onClick={() => { setCameraPurpose("stock"); setCameraOpen(true); }}><span>⌗</span><b>พร้อมสแกน Tag</b><small>นำ Tag มาแตะที่เครื่องสแกน</small></button>
           <div className="stock-scan-count"><i /> สแกนแล้ว {fmt(receivedStockTags.length)} ใบ</div>
-          <form className="stock-receive-form" onSubmit={receiveStockTag}><input ref={stockScanInputRef} value={stockScan} onChange={(e) => setStockScan(e.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void receiveStockTag(value); } }} placeholder="เช่น TG-20250901-0001" autoComplete="off" autoFocus /><button className="button primary" disabled={!stockScan.trim() || stockSaving}>{stockSaving ? "กำลังตรวจสอบ…" : "ตรวจสอบก่อนรับเข้า"}</button></form>
+          <form className="stock-receive-form" onSubmit={receiveStockTag}><input ref={stockScanInputRef} value={stockScan} onChange={(e) => updateStockScannerValue(e.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void receiveStockTag(value); } }} placeholder="เช่น TG-20250901-0001" autoComplete="off" autoFocus /><button className="button primary" disabled={!stockScan.trim() || stockSaving}>{stockSaving ? "กำลังตรวจสอบ…" : "ตรวจสอบก่อนรับเข้า"}</button></form>
           <div className="stock-guide"><b>↕ ขั้นตอนการทำงาน</b><p>สแกน Tag ทีละใบ เพื่อบันทึกรับเข้า Stock เข้าระบบอัตโนมัติ</p></div>
         </Card>
         <Card className="stock-latest-card" title="2. รายการ Stock ล่าสุด" action={<div className="stock-list-tools"><input value={tagSearch} onChange={(e) => setTagSearch(e.target.value)} placeholder="ค้นหา Tag / รายการสินค้า / Job..." /><button onClick={() => void loadStock()}>↻</button></div>}>
@@ -2278,7 +2361,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <div className="scanner-visual"><div className="scan-frame"><span className="qr-symbol">▦</span><b>{checkingTag ? "กำลังบันทึก…" : "พร้อมรับ QR Tag"}</b><small>วาง QR ให้อยู่ในกรอบ หรือยิง Tag ได้ทันที</small><i /></div></div>
           {scanMode === "arrange"
             ? <form className="manual-scan arrange-scan-form" onSubmit={stageStockTag}><label><span>2. จำนวนที่จะหยิบ (เว้นว่าง = จัดเท่าที่ Due ต้องการ)</span><input type="number" min="1" value={arrangeQty} onChange={(e) => setArrangeQty(e.target.value)} placeholder="อัตโนมัติ" /></label><label><span>3. KIT Stock Tag</span><input ref={tagInput} value={arrangeTag} onChange={(e) => { setArrangeTag(e.target.value); setArrangementPreview(null); }} placeholder="ยิง Tag ที่พิมพ์จากระบบ แล้วเครื่องส่ง Enter" autoComplete="off" /></label><button className="button primary" disabled={!effectiveArrangeDueId || !arrangeTag.trim() || checkingTag}>{checkingTag ? "กำลังจัดงาน…" : "จัดงาน / รอขายออก"}</button></form>
-            : <form className="manual-scan" onSubmit={previewDispatchTag}><label><span>Tag ลูกค้า / ข้อมูลจาก QR</span><input ref={tagInput} value={rawTag} onChange={(e) => { setRawTag(e.target.value); setTagPreview(null); setDispatchConfirmation(null); }} placeholder="ยิง Tag ลูกค้า แล้วเครื่องส่ง Enter" autoComplete="off" /></label><button className="button primary" disabled={!rawTag.trim() || checkingTag}>{checkingTag ? "กำลังตรวจสอบ…" : "ตรวจสอบก่อนขายออก"}</button></form>}
+            : <form className="manual-scan" onSubmit={previewDispatchTag}><label><span>Tag ลูกค้า / ข้อมูลจาก QR</span><input ref={tagInput} value={rawTag} onChange={(e) => updateDispatchScannerValue(e.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void previewDispatchTag(value); } }} placeholder="ยิง Tag ลูกค้าได้ทันที" autoComplete="off" /></label><button className="button primary" disabled={!rawTag.trim() || checkingTag}>{checkingTag ? "กำลังตรวจสอบ…" : "ตรวจสอบก่อนขายออก"}</button></form>}
         </section>
         <section className="tag-result" ref={tagResultRef}>
           <header><div><p>{scanMode === "arrange" ? "KIT Tag / Job ที่จัด" : "Customer Tag / Due"}</p><h3>{scanMode === "arrange" ? arrangementPreview?.due.materialCode || "รอการสแกน" : tagPreview?.due.materialCode || "รอการสแกน"}</h3></div><span className={`status ${(scanMode === "arrange" ? arrangementPreview : tagPreview) ? "completed" : "pending"}`}>{(scanMode === "arrange" ? arrangementPreview : tagPreview) ? (scanMode === "arrange" ? "จัดรอขายแล้ว" : "ขายออกสำเร็จ") : "ยังไม่มี Tag"}</span></header>
