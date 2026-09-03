@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { getCurrentUser, hasPermission } from "../../cloudflare-auth";
 import { getDb } from "../../../db";
 import { stockAllocations, stockParts, stockTags } from "../../../db/schema";
