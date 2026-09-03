@@ -1276,3 +1276,37 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 
 
 /* v2.19.1 — restored complete visual system after CSS regression */
+
+
+/* Stock Job close / NG workflow */
+.stock-job-close-card { margin-top: 18px; }
+.stock-job-close-card .card-title { align-items: center; }
+.stock-job-close-summary { display: grid; gap: 12px; }
+.stock-job-close-row {
+  display: grid; grid-template-columns: minmax(150px,1.1fr) minmax(140px,1fr) repeat(4,minmax(78px,.55fr)) minmax(135px,.8fr);
+  align-items: center; gap: 12px; padding: 15px 16px; border: 1px solid #dce7f7; border-radius: 16px;
+  background: linear-gradient(135deg,#fff 0%,#f8fbff 100%);
+}
+.stock-job-close-row > span { min-width: 0; color: #51627f; font-size: 13px; }
+.stock-job-close-row > span b { display: block; color: #102854; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stock-job-close-row > span small { display: block; margin-top: 3px; color: #8492aa; }
+.stock-job-close-row .job-metric { text-align: center; padding: 9px 8px; border-radius: 11px; background: #eef4ff; }
+.stock-job-close-row .job-metric.received { background: #e9f9ef; color: #159447; }
+.stock-job-close-row .job-metric.waiting { background: #fff5dc; color: #d48600; }
+.stock-job-close-row .job-metric.ng { background: #ffeaed; color: #df3549; }
+.stock-job-close-row .job-actions { display: flex; justify-content: flex-end; gap: 7px; }
+.stock-job-close-row .button { min-height: 40px; padding: 8px 12px; white-space: nowrap; }
+.stock-job-close-help { margin: 0 0 14px; padding: 12px 14px; border-radius: 12px; color: #6b5200; background: #fff8df; border: 1px solid #f4d875; font-size: 13px; }
+.stock-job-close-history { margin-top: 16px; padding-top: 14px; border-top: 1px solid #e5edf8; }
+.stock-job-close-history > b { display: block; margin-bottom: 9px; color: #183361; }
+.stock-job-close-history ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.stock-job-close-history li { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 9px 11px; border-radius: 10px; background: #f7f9fd; color: #63738e; font-size: 12px; }
+.stock-job-close-history li b { color: #173161; }
+.stock-job-close-history li em { color: #d93249; font-style: normal; font-weight: 800; }
+
+@media (max-width: 900px) {
+  .stock-job-close-row { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .stock-job-close-row > span:first-child, .stock-job-close-row > span:nth-child(2), .stock-job-close-row .job-actions { grid-column: 1 / -1; }
+  .stock-job-close-row .job-actions { justify-content: stretch; }
+  .stock-job-close-row .job-actions .button { flex: 1; }
+}
