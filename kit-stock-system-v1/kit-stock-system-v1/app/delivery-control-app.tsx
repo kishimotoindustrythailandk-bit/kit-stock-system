@@ -400,6 +400,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [deletingImportId, setDeletingImportId] = useState<number | null>(null);
   const [stock, setStock] = useState<StockPayload>({ parts: [], tags: [], allocations: [], picks: [], dispatchLinks: [], jobClosures: [] });
   const [jobClosingKey, setJobClosingKey] = useState("");
+  const [jobCloseSearch, setJobCloseSearch] = useState("");
+  const [jobClosePage, setJobClosePage] = useState(1);
   const [stockLoading, setStockLoading] = useState(false);
   const [clearingTestStock, setClearingTestStock] = useState(false);
   const [stockPartForm, setStockPartForm] = useState({ materialCode: "", partName: "", customer: "", location: "", standardQty: "" });
@@ -1913,6 +1915,21 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       jobGroupMap.set(key, current);
     });
     const stockJobGroups = [...jobGroupMap.values()].filter((group) => group.pendingQty > 0 || group.ngQty > 0).sort((a, b) => b.pendingQty - a.pendingQty || a.jobNo.localeCompare(b.jobNo));
+    const jobCloseNeedle = jobCloseSearch.trim().toLowerCase();
+    const filteredStockJobGroups = stockJobGroups.filter((group) => !jobCloseNeedle
+      || group.jobNo.toLowerCase().includes(jobCloseNeedle)
+      || group.materialCode.toLowerCase().includes(jobCloseNeedle)
+      || group.partName.toLowerCase().includes(jobCloseNeedle));
+    const jobClosePageSize = 10;
+    const jobCloseTotalPages = Math.max(1, Math.ceil(filteredStockJobGroups.length / jobClosePageSize));
+    const safeJobClosePage = Math.min(jobClosePage, jobCloseTotalPages);
+    const jobCloseStartIndex = (safeJobClosePage - 1) * jobClosePageSize;
+    const paginatedStockJobGroups = filteredStockJobGroups.slice(jobCloseStartIndex, jobCloseStartIndex + jobClosePageSize);
+    const jobClosePageButtons: Array<number | "…"> = [];
+    for (let current = 1; current <= jobCloseTotalPages; current += 1) {
+      if (current === 1 || current === jobCloseTotalPages || Math.abs(current - safeJobClosePage) <= 1) jobClosePageButtons.push(current);
+      else if (jobClosePageButtons[jobClosePageButtons.length - 1] !== "…") jobClosePageButtons.push("…");
+    }
     return <div className="stock-home">
       <div className="stock-stat-row">
         <article className="stock-stat blue"><span>◇</span><div><small>Tag รอรับเข้า</small><b>{fmt(awaitingReceipt)}</b><em>ใบ</em></div><button onClick={() => go("tags")}>ดูรายละเอียด →</button></article>
@@ -1938,7 +1955,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       </div>
       <Card className="stock-job-close-card" title="ปิดรับเข้า Job / จัดการงาน NG">
         <p className="stock-job-close-help">เมื่อรับงานเข้าไม่ครบตาม Tag ให้ตรวจยอดแล้วกดปิดรับเข้า ระบบจะเปลี่ยนเฉพาะ Tag ที่ยังไม่ถูกยิงเป็น NG และไม่นับรวมใน Stock</p>
-        {stockJobGroups.length ? <div className="stock-job-close-summary">{stockJobGroups.map((group) => {
+        <div className="stock-job-close-search"><span>⌕</span><input value={jobCloseSearch} onChange={(event) => { setJobCloseSearch(event.target.value); setJobClosePage(1); }} placeholder="ค้นหา Job, Part No. หรือชื่อชิ้นงาน..." />{jobCloseSearch && <button type="button" onClick={() => { setJobCloseSearch(""); setJobClosePage(1); }}>×</button>}</div>
+        {filteredStockJobGroups.length ? <><div className="stock-job-close-summary">{paginatedStockJobGroups.map((group) => {
           const key = group.jobNo + "|" + group.materialCode;
           return <div className="stock-job-close-row" key={key}>
             <span><b>{group.jobNo}</b><small>{fmt(group.tagCount)} Tag</small></span>
@@ -1949,7 +1967,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
             <span className="job-metric ng"><small>NG</small><b>{fmt(group.ngQty)}</b></span>
             <span className="job-actions">{group.pendingQty > 0 && <button className="button danger" disabled={Boolean(jobClosingKey)} onClick={() => void closeStockJob(group.jobNo, group.materialCode, group.totalQty, group.receivedQty, group.pendingQty)}>{jobClosingKey === key ? "กำลังปิด…" : "ปิดรับเข้า Job"}</button>}{group.ngQty > 0 && user.role === "admin" && <button className="button secondary" disabled={Boolean(jobClosingKey)} onClick={() => void reopenNgStockJob(group.jobNo, group.materialCode, group.ngQty)}>เปิด Job คืน</button>}</span>
           </div>;
-        })}</div> : <Empty title="ไม่มี Job ที่รอปิดรับเข้า" text="Job ที่รับเข้าครบแล้วหรือยังไม่ได้สร้าง Tag จะไม่แสดงในส่วนนี้" />}
+        })}</div><footer className="stock-job-close-pagination"><span>แสดง {fmt(jobCloseStartIndex + 1)} - {fmt(Math.min(jobCloseStartIndex + jobClosePageSize, filteredStockJobGroups.length))} จาก {fmt(filteredStockJobGroups.length)} Job</span><nav aria-label="หน้ารายการปิดรับเข้า Job"><button disabled={safeJobClosePage === 1} onClick={() => setJobClosePage(Math.max(1, safeJobClosePage - 1))}>‹</button>{jobClosePageButtons.map((item, index) => item === "…" ? <span key={"job-dots-" + index}>…</span> : <button className={item === safeJobClosePage ? "active" : ""} key={item} onClick={() => setJobClosePage(item)}>{item}</button>)}<button disabled={safeJobClosePage === jobCloseTotalPages} onClick={() => setJobClosePage(Math.min(jobCloseTotalPages, safeJobClosePage + 1))}>›</button></nav><b>10 Job / หน้า</b></footer></> : <Empty title={jobCloseSearch ? "ไม่พบ Job ที่ค้นหา" : "ไม่มี Job ที่รอปิดรับเข้า"} text={jobCloseSearch ? "ลองค้นหาด้วย Job, Part No. หรือชื่อชิ้นงาน" : "Job ที่รับเข้าครบแล้วหรือยังไม่ได้สร้าง Tag จะไม่แสดงในส่วนนี้"} />}
         {stock.jobClosures.length > 0 && <div className="stock-job-close-history"><b>ประวัติปิดรับเข้าล่าสุด</b><ul>{stock.jobClosures.slice(0, 5).map((item) => <li key={item.id}><b>{item.jobNo}</b><span>{item.materialCode}</span><em>NG {fmt(item.ngQty)} ชิ้น</em><span>{item.reason}</span><span>{item.closedByName} · {formatDateTime(item.closedAt)}</span></li>)}</ul></div>}
       </Card>
       <div className="stock-analytics-grid">
@@ -2330,7 +2348,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     // แบบมีเงื่อนไข ไม่ใช่คอมโพเนนต์ การเรียก hook ในนี้จะผิดกฎ Hooks
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <>
-      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.21.2</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
+      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.21.3</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
       <div className="settings-grid"><Card title="ตั้งค่าการตัดยอด"><Toggle keyName="partial" title="อนุญาตให้ตัดยอดบางส่วน" text="Tag หนึ่งใบสามารถตัดยอดไม่ครบ Due ได้" /><Toggle keyName="confirm" title="ยืนยันก่อนตัดยอดทุกครั้ง" text="แสดงยอดก่อนและหลังให้ตรวจสอบก่อนบันทึก" /></Card><Card title="ตั้งค่าการสแกน"><Toggle keyName="autoFocus" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" title="เสียงแจ้งเตือนเมื่อสำเร็จ" text="เปิดเสียงยืนยันหลังตัดยอดเรียบร้อย" /></Card></div>
       <Card title="รูปแบบการแสดงผล"><div className="form-grid"><label><span>ภาษา</span><select><option>ภาษาไทย</option></select></label><label><span>เขตเวลา</span><select><option>(GMT+07:00) Bangkok, Thailand</option></select></label><label><span>รูปแบบวันที่</span><select><option>DD/MM/YYYY</option></select></label><label><span>หน่วยเริ่มต้น</span><select><option>ชิ้น (PC)</option></select></label></div><div className="save-row"><button className="button primary" onClick={saveSettings}>▣ บันทึกการตั้งค่า</button></div></Card>
       {user.role === "admin" && <Card title="ล้างข้อมูลทดลอง"><div className="permission-note"><span>!</span><div><b>ล้างเฉพาะรายการ Stock</b><p>ลบ Tag Stock และประวัติการจัด/ขายออกทั้งหมด โดยเก็บทะเบียน Part รูปชิ้นงาน แผน Due และผู้ใช้งานไว้</p></div></div><div className="save-row"><button className="button danger" disabled={clearingTestStock || stock.tags.length === 0} onClick={() => void clearTestStock()}>{clearingTestStock ? "กำลังล้างข้อมูล…" : `ล้าง Stock ทดลอง ${fmt(stock.tags.length)} Tag`}</button></div></Card>}
