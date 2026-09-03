@@ -1310,3 +1310,23 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
   .stock-job-close-row .job-actions { justify-content: stretch; }
   .stock-job-close-row .job-actions .button { flex: 1; }
 }
+
+
+/* v2.20.2 — larger Part photos in the Tag register */
+.tag-modern-row { min-height: 86px; }
+.tag-product-cell { gap: 12px; }
+.tag-product-cell .part-photo,
+.tag-product-cell .part-photo-fallback {
+  width: 68px;
+  height: 68px;
+  border-radius: 12px;
+  flex: 0 0 68px;
+}
+@media (max-width: 760px) {
+  .tag-product-cell .part-photo,
+  .tag-product-cell .part-photo-fallback {
+    width: 82px;
+    height: 82px;
+    flex-basis: 82px;
+  }
+}
