@@ -1301,6 +1301,7 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .stock-job-close-row .job-metric.ng { background: #ffeaed; color: #df3549; }
 .stock-job-close-row .job-actions { display: flex; justify-content: flex-end; gap: 7px; }
 .stock-job-close-row .button { min-height: 40px; padding: 8px 12px; white-space: nowrap; }
+.stock-job-complete { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 8px 13px; border-radius: 11px; background: #e7f8ed; color: #16874a; font-style: normal; font-weight: 800; white-space: nowrap; }
 .stock-job-close-help { margin: 0 0 14px; padding: 12px 14px; border-radius: 12px; color: #6b5200; background: #fff8df; border: 1px solid #f4d875; font-size: 13px; }
 .stock-job-close-pagination { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; margin-top: 14px; color: #6c7d98; font-size: 12px; }
 .stock-job-close-pagination > b { justify-self: end; color: #476184; }
