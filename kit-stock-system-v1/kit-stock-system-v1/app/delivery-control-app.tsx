@@ -80,7 +80,7 @@ type ImportRow = Omit<DueLine, "id" | "importId" | "status" | "scannedQty" | "ar
 type DuePayload = { dues: DueLine[]; imports: DueImport[]; scans: DueScan[]; receipts: DueReceipt[]; error?: string };
 type SystemUser = { id: number; employeeCode: string; displayName: string; email: string; role: string; active: boolean; permissions: PageKey[]; createdAt?: string };
 type PartImageMapping = { materialCode: string; originalName: string; contentType: string; updatedByName: string; updatedAt: string; materialDescription?: string };
-type StockPart = { materialCode: string; partName: string; customer: string; standardQty: number; active: boolean };
+type StockPart = { materialCode: string; partName: string; customer: string; location: string; standardQty: number; active: boolean };
 type StockTag = { id: number; tagId: string; materialCode: string; partName: string; customer: string; qty: number; remainingQty: number; reservedQty: number; jobNo: string; productionDate: string; status: string; printedByName: string; receivedByName: string; receivedAt?: string; createdAt: string; payload?: string; boxNo?: number; boxCount?: number; deliveryQty?: number };
 type StockAllocation = { id: number; customerTagId: string; stockTagCode: string; materialCode: string; qty: number; status: string; reservedByName: string; reservedAt: string; dispatchedByName: string; dispatchedAt?: string };
 type StockPick = {
@@ -402,7 +402,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [jobClosingKey, setJobClosingKey] = useState("");
   const [stockLoading, setStockLoading] = useState(false);
   const [clearingTestStock, setClearingTestStock] = useState(false);
-  const [stockPartForm, setStockPartForm] = useState({ materialCode: "", partName: "", customer: "", standardQty: "" });
+  const [stockPartForm, setStockPartForm] = useState({ materialCode: "", partName: "", customer: "", location: "", standardQty: "" });
   const [partSearch, setPartSearch] = useState("");
   const [partPage, setPartPage] = useState(1);
   const [partPageSize, setPartPageSize] = useState(10);
@@ -1063,7 +1063,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         if (!imageResponse.ok) throw new Error(imageData.error || "บันทึก Part สำเร็จ แต่บันทึกรูปชิ้นงานในกล่องไม่สำเร็จ");
       }
       const savedAnyImage = Boolean(partImageFile || partActualImageFile);
-      setStockPartForm({ materialCode: "", partName: "", customer: "", standardQty: "" });
+      setStockPartForm({ materialCode: "", partName: "", customer: "", location: "", standardQty: "" });
       setPartImageCode("");
       setPartImageFile(null);
       setPartActualImageFile(null);
@@ -1092,6 +1092,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         materialCode: ["partno", "material", "materialno", "materialcode", "partmaterialno", "รหัสpart", "พาร์ท", "รหัสชิ้นงาน"],
         partName: ["partname", "materialdescription", "description", "ชื่อชิ้นงาน", "รายละเอียด"],
         customer: ["customer", "customername", "ลูกค้า"],
+        location: ["location", "locationcode", "storage", "bin", "rack", "โลเคชั่น", "ตำแหน่งจัดเก็บ", "สถานที่จัดเก็บ"],
         standardQty: ["maxqtyperbox", "maxperbox", "packqty", "standardqty", "qtyperbox", "จำนวนสูงสุดต่อกล่อง", "ชิ้นต่อกล่อง", "จำนวนต่อกล่อง"],
       };
       const normalizedAliases = Object.fromEntries(
@@ -1111,6 +1112,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         materialCode: columnIndex(normalizedAliases.materialCode),
         partName: columnIndex(normalizedAliases.partName),
         customer: columnIndex(normalizedAliases.customer),
+        location: columnIndex(normalizedAliases.location),
         standardQty: columnIndex(normalizedAliases.standardQty),
       };
       if (indexes.standardQty < 0) {
@@ -1120,6 +1122,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         materialCode: text(row[indexes.materialCode]).toUpperCase(),
         partName: text(row[indexes.partName]),
         customer: indexes.customer >= 0 ? text(row[indexes.customer]) : "",
+        location: indexes.location >= 0 ? text(row[indexes.location]) : "",
         standardQty: number(row[indexes.standardQty]),
       })).filter((part) => part.materialCode && part.partName && part.standardQty > 0);
       if (!parts.length) throw new Error("ไม่พบข้อมูล Part ที่มี Part No., Part Name และจำนวนต่อกล่องครบถ้วน");
@@ -1336,7 +1339,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       const boxNo = tag.boxNo || Number(boxMatch?.[1] || 1);
       const boxCount = tag.boxCount || Number(boxMatch?.[2] || 1);
       const batchCode = tag.tagId.replace(/-B\d+OF\d+$/, "");
-      const packQty = Number(stock.parts.find((part) => part.materialCode === tag.materialCode)?.standardQty || 0);
+      const tagPart = stock.parts.find((part) => part.materialCode === tag.materialCode);
+      const packQty = Number(tagPart?.standardQty || 0);
+      const location = tagPart?.location || "—";
       const isFullBox = packQty > 0 ? tag.qty >= packQty : boxNo < boxCount;
       const boxType = isFullBox ? "FULL BOX / กล่องเต็ม" : "REMAINDER BOX / กล่องเศษ";
       const deliveryQty = tag.deliveryQty || stock.tags
@@ -1344,7 +1349,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         .reduce((sum, item) => sum + Number(item.qty), 0) || tag.qty;
       return `<section class="tag"><header><div class="brand">KiT<small>DELIVERY DUE CONTROL</small></div><div class="tag-title"><b>STOCK RECEIVING TAG</b><small>TAG รับงานเข้า STOCK</small></div></header>
         <div class="product"><div class="photo-wrap">${imageUrl ? `<img class="photo" src="${imageUrl}" alt="รูปชิ้นงาน ${html(tag.materialCode)}" />` : `<div class="photo-fallback"><strong>◇</strong>ยังไม่มีรูปชิ้นงาน</div>`}</div><div class="qr-wrap"><img class="qr" src="${qr}" alt="QR"><small>QR / BARCODE</small></div><div class="main"><small>CUSTOMER</small><p class="customer">${html(tag.customer || "—")}</p><small>PART NO. / MATERIAL</small><b>${html(tag.materialCode)}</b><small>PART NAME</small><p>${html(tag.partName)}</p></div></div>
-        <div class="grid"><div><small>DELIVERY QTY / จำนวนงานรวม</small><b class="qty">${fmt(deliveryQty)}</b> <span class="unit">PC</span></div><div><small>QTY IN BOX / จำนวนในกล่อง</small><b class="qty">${fmt(tag.qty)}</b> <span class="unit">PC</span></div><div class="box-cell"><small>BOX / กล่อง</small><b>${fmt(boxNo)} / ${fmt(boxCount)}</b><span class="box-type ${isFullBox ? "full" : "remainder"}">${boxType}</span></div><div><small>JOB NO.</small><b>${html(tag.jobNo)}</b></div><div><small>PRODUCTION DATE / วันที่ผลิต</small><b>${html(formatDate(tag.productionDate))}</b></div><div><small>TAG ID</small><b>${html(tag.tagId)}</b></div></div>
+        <div class="grid"><div><small>DELIVERY QTY / จำนวนงานรวม</small><b class="qty">${fmt(deliveryQty)}</b> <span class="unit">PC</span></div><div><small>QTY IN BOX / จำนวนในกล่อง</small><b class="qty">${fmt(tag.qty)}</b> <span class="unit">PC</span></div><div class="box-cell"><small>BOX / กล่อง</small><b>${fmt(boxNo)} / ${fmt(boxCount)}</b><span class="box-type ${isFullBox ? "full" : "remainder"}">${boxType}</span></div><div><small>JOB NO.</small><b>${html(tag.jobNo)}</b></div><div><small>PRODUCTION DATE / วันที่ผลิต</small><b>${html(formatDate(tag.productionDate))}</b></div><div><small>LOCATION / ตำแหน่งจัดเก็บ</small><b>${html(location)}</b></div></div>
         <footer><b class="code">${html(tag.tagId)}</b><p class="payload">${html(payloadValue)}</p><div class="hint">ยิง QR เพื่อรับงานเข้า Stock</div></footer>
       </section>`;
     }));
@@ -1706,7 +1711,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const visibleParts = stock.parts.filter((item) => !partNeedle
       || item.materialCode.toLowerCase().includes(partNeedle)
       || item.partName.toLowerCase().includes(partNeedle)
-      || item.customer.toLowerCase().includes(partNeedle));
+      || item.customer.toLowerCase().includes(partNeedle)
+      || item.location.toLowerCase().includes(partNeedle));
     const activeParts = stock.parts.filter((item) => item.active).length;
     const partTotalPages = Math.max(1, Math.ceil(visibleParts.length / partPageSize));
     const safePartPage = Math.min(partPage, partTotalPages);
@@ -1725,14 +1731,14 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const formImage = partImages.find((item) => item.materialCode === formCode);
     const formActualImage = partActualImages.find((item) => item.materialCode === formCode);
     const editPart = (part: StockPart) => {
-      setStockPartForm({ materialCode: part.materialCode, partName: part.partName, customer: part.customer, standardQty: String(part.standardQty || "") });
+      setStockPartForm({ materialCode: part.materialCode, partName: part.partName, customer: part.customer, location: part.location || "", standardQty: String(part.standardQty || "") });
       setPartImageCode(part.materialCode);
       setPartImageFile(null);
       setPartActualImageFile(null);
       window.scrollTo({ top: 0, behavior: "smooth" });
     };
     const clearPartForm = () => {
-      setStockPartForm({ materialCode: "", partName: "", customer: "", standardQty: "" });
+      setStockPartForm({ materialCode: "", partName: "", customer: "", location: "", standardQty: "" });
       setPartImageCode("");
       setPartImageFile(null);
       setPartActualImageFile(null);
@@ -1750,6 +1756,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <label><span>Part / Material No. *</span><input value={stockPartForm.materialCode} onChange={(e) => { const code=e.target.value.toUpperCase(); setStockPartForm((current) => ({ ...current, materialCode: code })); setPartImageCode(code); }} required /></label>
           <label><span>ชื่อชิ้นงาน *</span><input value={stockPartForm.partName} onChange={(e) => setStockPartForm((current) => ({ ...current, partName: e.target.value }))} required /></label>
           <label><span>ลูกค้า</span><input value={stockPartForm.customer} onChange={(e) => setStockPartForm((current) => ({ ...current, customer: e.target.value }))} /></label>
+          <label><span>Location</span><input value={stockPartForm.location} onChange={(e) => setStockPartForm((current) => ({ ...current, location: e.target.value.toUpperCase() }))} placeholder="เช่น A-01 หรือ RACK-02" /></label>
           <label><span>จำนวนสูงสุดต่อกล่อง *</span><input type="number" min="1" value={stockPartForm.standardQty} onChange={(e) => setStockPartForm((current) => ({ ...current, standardQty: e.target.value }))} required /></label>
           <div className="part-photo-editor">
             <div className="part-current-photo">{stockPartForm.materialCode ? <PartImage materialCode={stockPartForm.materialCode} version={formImage?.updatedAt} /> : <span>▧</span>}</div>
@@ -1760,18 +1767,18 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
             <label className="part-change-photo"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setPartActualImageFile(e.target.files?.[0] || null)} /><b>⇧ {formActualImage ? "เปลี่ยนรูปชิ้นงานในกล่อง" : "เพิ่มรูปชิ้นงานในกล่อง"}</b><small>{partActualImageFile?.name || "รูปชิ้นงานที่จัดวางในกล่อง · ใช้เทียบตอนขายออก"}</small></label>
           </div>
         </form>
-        <div className="part-editor-foot"><span>Excel รองรับคอลัมน์: Part / Material No., Part Name, Customer และ Max Qty per Box</span>{stockPartForm.materialCode && <button type="button" className="tiny-button" onClick={clearPartForm}>＋ เพิ่ม Part ใหม่</button>}</div>
+        <div className="part-editor-foot"><span>Excel รองรับคอลัมน์: Part / Material No., Part Name, Customer, Location และ Max Qty per Box</span>{stockPartForm.materialCode && <button type="button" className="tiny-button" onClick={clearPartForm}>＋ เพิ่ม Part ใหม่</button>}</div>
       </Card>}
 
-      <Card className="part-list-card" title="รายการ Part ทั้งหมด" action={<div className="part-list-actions"><input value={partSearch} onChange={(e) => { setPartSearch(e.target.value); setPartPage(1); }} placeholder="⌕ ค้นหา Part No., ชื่อชิ้นงาน หรือลูกค้า..." /><button className="button secondary" onClick={() => void Promise.all([loadStock(), loadPartImages()])}>↻ รีเฟรช</button></div>}>
+      <Card className="part-list-card" title="รายการ Part ทั้งหมด" action={<div className="part-list-actions"><input value={partSearch} onChange={(e) => { setPartSearch(e.target.value); setPartPage(1); }} placeholder="⌕ ค้นหา Part No., ชื่อชิ้นงาน, ลูกค้า หรือ Location..." /><button className="button secondary" onClick={() => void Promise.all([loadStock(), loadPartImages()])}>↻ รีเฟรช</button></div>}>
         {visibleParts.length ? <div className="part-modern-table">
-          <div className="part-modern-head"><span>Part / Material No.</span><span>ชื่อชิ้นงาน</span><span>ลูกค้า</span><span>จำนวนสูงสุดต่อกล่อง</span><span>สถานะ</span><span>จัดการ</span></div>
+          <div className="part-modern-head"><span>Part / Material No.</span><span>ชื่อชิ้นงาน</span><span>ลูกค้า</span><span>Location</span><span>จำนวนสูงสุดต่อกล่อง</span><span>สถานะ</span><span>จัดการ</span></div>
           <div className="part-modern-body">{paginatedParts.map((part) => {
             const image = partImages.find((item) => item.materialCode === part.materialCode);
             const hasTag = stock.tags.some((tag) => tag.materialCode === part.materialCode);
             return <div className="part-modern-row" key={part.materialCode}>
               <span className="part-code-cell"><PartImage materialCode={part.materialCode} compact version={image?.updatedAt} /><span><b>{part.materialCode}</b><small>{image ? "มีรูปชิ้นงาน" : "ยังไม่มีรูป"}</small></span></span>
-              <span>{part.partName}</span><span>{part.customer || "—"}</span><span>{part.standardQty > 0 ? fmt(part.standardQty) + " ชิ้น" : "ยังไม่กำหนด"}</span>
+              <span>{part.partName}</span><span>{part.customer || "—"}</span><span><b>{part.location || "—"}</b></span><span>{part.standardQty > 0 ? fmt(part.standardQty) + " ชิ้น" : "ยังไม่กำหนด"}</span>
               <span><em className={"part-active " + (part.active ? "on" : "off")}>{part.active ? "ใช้งาน" : "ยกเลิก"}</em></span>
               <span className="part-row-actions"><button className="tiny-button" onClick={() => editPart(part)}>✎ แก้ไข</button>{hasTag ? <small>มีประวัติ Stock</small> : <button className="tiny-button danger-outline" disabled={Boolean(deletingPartCode)} onClick={() => void deleteStockPart(part)}>♲ {deletingPartCode === part.materialCode ? "กำลังลบ…" : "ลบ"}</button>}</span>
             </div>;
@@ -2252,7 +2259,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     // แบบมีเงื่อนไข ไม่ใช่คอมโพเนนต์ การเรียก hook ในนี้จะผิดกฎ Hooks
     const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <>
-      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.20.2</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
+      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.20.3</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
       <div className="settings-grid"><Card title="ตั้งค่าการตัดยอด"><Toggle keyName="partial" title="อนุญาตให้ตัดยอดบางส่วน" text="Tag หนึ่งใบสามารถตัดยอดไม่ครบ Due ได้" /><Toggle keyName="confirm" title="ยืนยันก่อนตัดยอดทุกครั้ง" text="แสดงยอดก่อนและหลังให้ตรวจสอบก่อนบันทึก" /></Card><Card title="ตั้งค่าการสแกน"><Toggle keyName="autoFocus" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" title="เสียงแจ้งเตือนเมื่อสำเร็จ" text="เปิดเสียงยืนยันหลังตัดยอดเรียบร้อย" /></Card></div>
       <Card title="รูปแบบการแสดงผล"><div className="form-grid"><label><span>ภาษา</span><select><option>ภาษาไทย</option></select></label><label><span>เขตเวลา</span><select><option>(GMT+07:00) Bangkok, Thailand</option></select></label><label><span>รูปแบบวันที่</span><select><option>DD/MM/YYYY</option></select></label><label><span>หน่วยเริ่มต้น</span><select><option>ชิ้น (PC)</option></select></label></div><div className="save-row"><button className="button primary" onClick={saveSettings}>▣ บันทึกการตั้งค่า</button></div></Card>
       {user.role === "admin" && <Card title="ล้างข้อมูลทดลอง"><div className="permission-note"><span>!</span><div><b>ล้างเฉพาะรายการ Stock</b><p>ลบ Tag Stock และประวัติการจัด/ขายออกทั้งหมด โดยเก็บทะเบียน Part รูปชิ้นงาน แผน Due และผู้ใช้งานไว้</p></div></div><div className="save-row"><button className="button danger" disabled={clearingTestStock || stock.tags.length === 0} onClick={() => void clearTestStock()}>{clearingTestStock ? "กำลังล้างข้อมูล…" : `ล้าง Stock ทดลอง ${fmt(stock.tags.length)} Tag`}</button></div></Card>}
@@ -2301,7 +2308,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
       <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.20.2</span></div></div>
+      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.20.3</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
