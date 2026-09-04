@@ -14,15 +14,15 @@ function parseInternalTag(raw: string) {
 }
 
 function canAccess(user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>) {
-  return user.role === "admin" || hasPermission(user, "replacement") || hasPermission(user, "arrange") || hasPermission(user, "dispatch") || hasPermission(user, "stock");
+  return hasPermission(user, "replacement");
 }
 
 function canRequest(user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>) {
-  return user.role === "admin" || hasPermission(user, "replacement") || hasPermission(user, "dispatch");
+  return hasPermission(user, "replacement");
 }
 
 function canIssue(user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>) {
-  return user.role === "admin" || hasPermission(user, "replacement") || hasPermission(user, "arrange") || hasPermission(user, "stock");
+  return hasPermission(user, "replacement");
 }
 
 /**

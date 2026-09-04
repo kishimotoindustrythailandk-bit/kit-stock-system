@@ -166,14 +166,16 @@ test("places Job close and NG management on Print Tag with Stock authorization",
   assert.match(tagsSection, /\{canPrintTags && <Card className="tag-list-card"/);
   assert.match(tagsSection, /allowedPages\.has\("stock"\) && <Card className="stock-job-close-card"/);
   assert.match(pageAccess, /const canPrintTags = user\.role === "admin" \|\| user\.permissions\?\.includes\("tags"\)/);
-  assert.match(pageAccess, /if \(set\.has\("stock"\)\) set\.add\("tags"\)/);
+  assert.match(pageAccess, /new Set<PageKey>/);
+  assert.doesNotMatch(pageAccess, /\.add\("tags"\)|\.add\("replacement"\)/);
   assert.doesNotMatch(stockSection, /ปิดรับเข้า Job \/ จัดการงาน NG/);
   assert.doesNotMatch(stockSection, /const jobGroupMap = new Map/);
 
-  assert.match(closeJobAction, /!hasPermission\(user, "stock"\) \|\| !requireStockRole\(user\.role\)/);
+  assert.match(closeJobAction, /if \(!hasPermission\(user, "stock"\)\)/);
+  assert.doesNotMatch(closeJobAction, /requireStockRole|user\.role/);
   assertBefore(closeJobAction, /hasPermission\(user, "stock"\)/, /UPDATE stock_tags SET status = 'ng'/);
   assert.match(reopenJobAction, /user\.role !== "admin" \|\| !hasPermission\(user, "stock"\)/);
-  assertBefore(reopenJobAction, /hasPermission\(user, "stock"\)/, /UPDATE stock_tags SET status = 'printed'/);
+  assertBefore(reopenJobAction, /user\.role !== "admin"/, /UPDATE stock_tags SET status = 'printed'/);
 });
 
 test("splits a Job into full and remainder boxes in the authoritative API", async () => {
@@ -265,7 +267,7 @@ test("connects camera Stock receipt preview to explicit confirmation", async () 
   assert.match(receiveAction, /INSERT INTO stock_receipt_adjustments/);
 });
 
-test("supports per-user page permissions and authoritative schema", async () => {
+test("supports canonical user roles with explicit page permissions", async () => {
   const [appSource, authSource, usersApi, schema, migration] = await Promise.all([
     source("../app/delivery-control-app.tsx"),
     source("../app/cloudflare-auth.ts"),
@@ -273,14 +275,74 @@ test("supports per-user page permissions and authoritative schema", async () => 
     source("../db/schema.ts"),
     source("../migrations/0005_user_permissions.sql"),
   ]);
-  assert.match(appSource, /สิทธิ์เข้าใช้งานรายบุคคล/);
-  assert.match(appSource, /allowedPages\.has/);
-  assert.match(appSource, /บันทึกผู้ใช้งานและสิทธิ์/);
-  assert.match(authSource, /PERMISSION_KEYS/);
-  assert.match(authSource, /hasPermission/);
-  assert.match(usersApi, /replacePermissions/);
+  const pageAccess = sourceSection(appSource, "const canPrintTags", "const restoredPageRef");
+  const userEditor = sourceSection(appSource, "{userEditorOpen &&", "</form></div>}");
+
+  for (const [value, label] of [["production", "Production"], ["stock", "Stock"], ["qc", "QC"], ["delivery", "Delivery"]]) {
+    assert.match(userEditor, new RegExp(`<option value="${value}">${label}</option>`));
+    assert.match(usersApi, new RegExp(`"${value}"`));
+  }
+  assert.match(appSource, /const ROLE_LABELS/);
+  assert.match(userEditor, /setUserForm\(\(current\) => \(\{ \.\.\.current, role \}\)\)/);
+  assert.doesNotMatch(appSource, /ROLE_PERMISSIONS/);
+  assert.match(userEditor, /รวมถึงหน้าหลัก/);
+  assert.doesNotMatch(userEditor, /disabled=\{item\.key === "dashboard"\}/);
+  assert.match(userEditor, /disabled=\{userSaving \|\| !userForm\.permissions\.length\}/);
+  assert.match(usersApi, /กรุณาเลือกสิทธิ์เข้าใช้งานอย่างน้อย 1 หน้า/);
+  assert.match(usersApi, /if \(user\.role !== "admin"\)/);
+  assert.match(usersApi, /const LEGACY_ROLES = new Set\(\["dispatcher", "inspector"\]\)/);
+  assert.match(usersApi, /else if \(!roleUnchanged\)/);
+  assert.match(usersApi, /defaultPermissions\(target\.role\)/);
+  assertBefore(usersApi, /defaultPermissions\(target\.role\)/, /getDb\(\)\.update\(appUsers\)/);
+
+  assert.match(pageAccess, /new Set<PageKey>/);
+  assert.doesNotMatch(pageAccess, /\.add\("dashboard"\)|\.add\("tags"\)|\.add\("replacement"\)/);
+  assert.match(appSource, /const firstAllowedPage = NAV\.find/);
+  assert.match(appSource, /savedPage && allowedPages\.has\(savedPage\) \? savedPage : firstAllowedPage/);
+  assert.match(authSource, /dispatcher: \["dashboard", "stock", "parts", "tags", "arrange", "replacement", "history"\]/);
+  assert.match(authSource, /inspector: \["dashboard", "replacement", "dispatch", "history"\]/);
+  assert.match(authSource, /ROLE_DEFAULTS\[role\] \|\| \[\]/);
+  assert.doesNotMatch(authSource, /normalized\.unshift\("dashboard"\)/);
+
   assert.match(schema, /appUserPermissions/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS app_user_permissions/);
+});
+
+test("uses page permissions for normal workflows while preserving Admin-only operations", async () => {
+  const [appSource, dueApi, stockApi, replacementsApi, usersApi] = await Promise.all([
+    source("../app/delivery-control-app.tsx"),
+    source("../app/api/due/route.ts"),
+    source("../app/api/stock/route.ts"),
+    source("../app/api/replacements/route.ts"),
+    source("../app/api/users/route.ts"),
+  ]);
+  const duePost = sourceSection(dueApi, "export async function POST", "} catch (error)");
+  const stockGet = sourceSection(stockApi, "export async function GET", "export async function POST");
+  const closeJobAction = sourceSection(stockApi, 'if (action === "close_job")', 'if (action === "reopen_ng_job")');
+  const manualReceiveAction = sourceSection(stockApi, 'if (action === "manual_receive")', 'if (action === "preview_stock_count"');
+
+  assert.match(appSource, /const hasDueDataPermission/);
+  assert.match(appSource, /if \(!hasDueDataPermission\)/);
+  assert.match(appSource, /const workflowPage: PageKey \| null = allowedPages\.has\("dispatch"\)/);
+  assert.match(dueApi, /const DUE_READ_PERMISSIONS = \["dashboard", "plan", "arrange", "dispatch", "exports", "reports", "history"\]/);
+  assert.match(duePost, /hasPermission\(user, "dispatch"\)/);
+  assert.doesNotMatch(duePost, /user\.role|inspector/);
+
+  assert.doesNotMatch(stockApi, /requireStockRole/);
+  assert.match(stockGet, /const canReadFullStock = fullStockPermissions\.some/);
+  assert.match(stockGet, /const canReadPartsOnly = hasPermission\(user, "parts"\) \|\| hasPermission\(user, "replacement"\)/);
+  assertBefore(stockGet, /if \(!canReadFullStock\)/, /const db = getDb\(\)/);
+  assert.match(stockGet, /parts, tags: \[\], allocations: \[\], picks: \[\], dispatchLinks: \[\], jobClosures: \[\]/);
+  assert.match(closeJobAction, /if \(!hasPermission\(user, "stock"\)\)/);
+  assert.doesNotMatch(closeJobAction, /user\.role/);
+  assert.match(manualReceiveAction, /if \(!hasPermission\(user, "stock"\)\)/);
+  assert.doesNotMatch(manualReceiveAction, /user\.role/);
+
+  assert.match(replacementsApi, /function canAccess[\s\S]*return hasPermission\(user, "replacement"\)/);
+  assert.doesNotMatch(replacementsApi, /hasPermission\(user, "arrange"\) \|\||hasPermission\(user, "dispatch"\) \|\||hasPermission\(user, "stock"\) \|\|/);
+  assert.match(usersApi, /if \(user\.role !== "admin"\)/);
+  assert.match(stockApi, /user\.role !== "admin" \|\| !hasPermission\(user, "stock"\)/);
+  assert.match(stockApi, /user\.role !== "admin" \|\| !hasPermission\(user, "tags"\)/);
 });
 
 test("separates arranging and dispatching with guards before mutations", async () => {
@@ -319,7 +381,8 @@ test("separates arranging and dispatching with guards before mutations", async (
   assert.match(duePost, /if \(!user\).*status: 401/);
   assertBefore(duePost, /hasPermission\(user, "dispatch"\)/, /const payload = await request\.json/);
   assertBefore(duePost, /hasPermission\(user, "dispatch"\)/, /DB\.batch/);
-  assert.match(duePost, /user\.role !== "admin" && user\.role !== "inspector"/);
+  assert.doesNotMatch(duePost, /user\.role !== "admin" && user\.role !== "inspector"/);
+  assert.doesNotMatch(duePost, /inspector/);
   assert.match(duePost, /status: 403/);
 
   assert.match(css, /\.mobile-bottom-nav \.bottom-logout/);
