@@ -77,10 +77,15 @@ npx wrangler d1 execute DB --remote --command "PRAGMA table_info(stock_parts)"
   จริงชื่อ `kit-stock-system` ใครเช็คเอาต์รีโปแล้วสั่ง `npm run deploy` จะได้ Worker
   ตัวใหม่ที่ผูก D1 production ตัวเดียวกัน กลายเป็นสองระบบเขียนฐานเดียว
 
-**โครงสร้างรีโป**
+**โครงสร้างรีโปและ Cloudflare Builds**
 
-- ไฟล์เดิมซ้อนอยู่ใต้ `kit-stock-system-v1/kit-stock-system-v1/` สองชั้น ซึ่งเป็น
-  สิ่งที่ README ของตัวเองเตือนห้ามทำ ย้ายขึ้นมาที่รากรีโปแล้ว
+- ยังรักษา path `kit-stock-system-v1/kit-stock-system-v1/` ไว้ชั่วคราว เพราะ
+  Cloudflare Workers Builds ผูก `root_directory` กับ path นี้อยู่ การย้ายขึ้นรากรีโป
+  ทำให้ preview build ของ PR ล้มทันทีตั้งแต่ก่อนเริ่ม build
+- ควรเปลี่ยน Root directory ใน Cloudflare > Worker `kit-stock-system` > Settings >
+  Builds เป็น `/` ก่อน แล้วค่อยย้ายไฟล์ขึ้นรากใน PR แยก เพื่อไม่ทำ CI/CD production พัง
+- OAuth token ของ Wrangler ที่ใช้อยู่ไม่มีสิทธิ์ `Workers Builds Configuration`
+  จึงแก้ trigger ผ่าน Builds API ในรอบนี้ไม่ได้ และไม่ควรข้าม build failure แล้ว merge
 
 ## ยังไม่ได้แก้ในรุ่นนี้
 
