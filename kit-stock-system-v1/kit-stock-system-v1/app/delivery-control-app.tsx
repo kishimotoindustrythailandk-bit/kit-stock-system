@@ -419,8 +419,8 @@ function PartImagePair({ materialCode, masterVersion, actualVersion }: { materia
   const capStyle: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: "#6b7787", marginBottom: 5, textAlign: "center", letterSpacing: "0.02em" };
   const figStyle: React.CSSProperties = { margin: 0, flex: "1 1 130px", minWidth: 0 };
   return <div className="part-image-pair" style={{ display: "flex", gap: 12, flexWrap: "wrap", width: "100%" }}>
-    <figure style={figStyle}><figcaption style={capStyle}>รูปชิ้นงานในกล่อง</figcaption><PartImage materialCode={materialCode} slot="master" version={masterVersion} /></figure>
-    <figure style={figStyle}><figcaption style={capStyle}>รูปตัวอย่าง (Master)</figcaption><PartImage materialCode={materialCode} slot="actual" version={actualVersion} /></figure>
+    <figure style={figStyle}><figcaption style={capStyle}>รูปชิ้นงานในกล่อง</figcaption><PartImage materialCode={materialCode} slot="actual" version={actualVersion} /></figure>
+    <figure style={figStyle}><figcaption style={capStyle}>รูปตัวอย่าง (Master)</figcaption><PartImage materialCode={materialCode} slot="master" version={masterVersion} /></figure>
   </div>;
 }
 
@@ -491,7 +491,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [partImageCode, setPartImageCode] = useState("");
   const [partImageFile, setPartImageFile] = useState<File | null>(null);
   const [partImageSaving, setPartImageSaving] = useState(false);
-  const [bulkImageFiles, setBulkImageFiles] = useState<File[]>([]);
+  const [bulkMasterImageFiles, setBulkMasterImageFiles] = useState<File[]>([]);
+  const [bulkActualImageFiles, setBulkActualImageFiles] = useState<File[]>([]);
   const [bulkImageRunning, setBulkImageRunning] = useState(false);
   const [bulkImageProgress, setBulkImageProgress] = useState({ done: 0, total: 0 });
   const [bulkImageFailed, setBulkImageFailed] = useState<Array<{ name: string; reason: string }>>([]);
@@ -756,44 +757,51 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }
 
   /**
-   * อัปโหลดรูปหลายไฟล์ในคราวเดียว โดยใช้ชื่อไฟล์เป็น Material Code
-   *
-   * ส่งทีละไฟล์ผ่าน API เดิม ไม่ได้เพิ่มเส้นทางใหม่ที่ฝั่ง server
-   * ส่งทีละไฟล์เพื่อไม่ให้ยิงพร้อมกันจนโดนจำกัด และเพื่อให้รู้ว่าไฟล์ไหนล้มเหลว
+   * อัปโหลดรูป Master และรูปชิ้นงานในกล่องหลายไฟล์ในรอบเดียว
+   * โดยใช้ชื่อไฟล์ (ไม่รวมนามสกุล) เป็น Material Code
    */
   async function uploadPartImagesBulk(event: FormEvent) {
     event.preventDefault();
-    if (!bulkImageFiles.length) return;
+    const uploads = [
+      ...bulkMasterImageFiles.map((file) => ({ file, slot: "master" as const, label: "Master" })),
+      ...bulkActualImageFiles.map((file) => ({ file, slot: "actual" as const, label: "รูปในกล่อง" })),
+    ];
+    if (!uploads.length) return;
     setBulkImageRunning(true);
     setNotice(null);
     setBulkImageFailed([]);
-    setBulkImageProgress({ done: 0, total: bulkImageFiles.length });
+    setBulkImageProgress({ done: 0, total: uploads.length });
 
     const failed: Array<{ name: string; reason: string }> = [];
     let saved = 0;
 
-    for (const [index, file] of bulkImageFiles.entries()) {
-      const materialCode = materialCodeFromFileName(file.name);
+    for (const [index, upload] of uploads.entries()) {
+      const materialCode = materialCodeFromFileName(upload.file.name);
       try {
         if (!materialCode) throw new Error("ชื่อไฟล์ว่าง ตั้งชื่อไฟล์ให้ตรงกับ Part No.");
+        if (!stock.parts.some((part) => part.materialCode === materialCode)) {
+          throw new Error(`ไม่พบ Part ${materialCode} ในทะเบียน`);
+        }
         const form = new FormData();
         form.set("materialCode", materialCode);
-        form.set("image", file);
+        form.set("slot", upload.slot);
+        form.set("image", upload.file);
         const response = await fetch("/api/part-images", { method: "POST", body: form });
         const data = await response.json() as { error?: string };
         if (!response.ok) throw new Error(data.error || "อัปโหลดไม่สำเร็จ");
         saved += 1;
       } catch (caught) {
-        failed.push({ name: file.name, reason: caught instanceof Error ? caught.message : "อัปโหลดไม่สำเร็จ" });
+        failed.push({ name: `${upload.label} · ${upload.file.name}`, reason: caught instanceof Error ? caught.message : "อัปโหลดไม่สำเร็จ" });
       }
-      setBulkImageProgress({ done: index + 1, total: bulkImageFiles.length });
+      setBulkImageProgress({ done: index + 1, total: uploads.length });
     }
 
     setBulkImageFailed(failed);
     setNotice(failed.length
       ? { type: "error", text: `อัปโหลดสำเร็จ ${fmt(saved)} รูป ไม่สำเร็จ ${fmt(failed.length)} รูป ดูรายการด้านล่าง` }
-      : { type: "success", text: `อัปโหลดรูปชิ้นงานสำเร็จทั้งหมด ${fmt(saved)} รูป` });
-    setBulkImageFiles([]);
+      : { type: "success", text: `อัปโหลดรูป Master และรูปในกล่องสำเร็จทั้งหมด ${fmt(saved)} รูป` });
+    setBulkMasterImageFiles([]);
+    setBulkActualImageFiles([]);
     setBulkImageRunning(false);
     await loadPartImages();
   }
@@ -1488,6 +1496,27 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     return parts;
   }
 
+  async function downloadPartWorkbook(mode: "template" | "export") {
+    try {
+      const xlsx = await import("xlsx");
+      const headers = ["Part / Material No.", "Part Name", "Customer", "Location", "Max Qty per Box"];
+      const rows = mode === "export"
+        ? stock.parts.map((part) => [part.materialCode, part.partName, part.customer, part.location, part.standardQty])
+        : [];
+      const worksheet = xlsx.utils.aoa_to_sheet([headers, ...rows]);
+      worksheet["!cols"] = [{ wch: 24 }, { wch: 36 }, { wch: 24 }, { wch: 20 }, { wch: 20 }];
+      const workbook = xlsx.utils.book_new();
+      xlsx.utils.book_append_sheet(workbook, worksheet, "Parts");
+      const fileName = mode === "template"
+        ? "KIT-Part-Import-Template.xlsx"
+        : `KIT-Part-Registry-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      xlsx.writeFile(workbook, fileName);
+      setNotice({ type: "success", text: mode === "template" ? "ดาวน์โหลด Template ทะเบียน Part แล้ว" : `ดาวน์โหลดข้อมูล Part ${fmt(rows.length)} รายการแล้ว` });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ดาวน์โหลดไฟล์ Part ไม่สำเร็จ" });
+    }
+  }
+
   async function importPartExcel(event: ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0];
     if (!selected) return;
@@ -1544,7 +1573,6 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     setNotice(null);
     try {
       if (!partBundleExcel) throw new Error("กรุณาเลือกไฟล์ Excel ทะเบียน Part");
-      if (!partBundleMasterFiles.length && !partBundleActualFiles.length) throw new Error("กรุณาเลือกรูปตัวอย่างหรือรูปชิ้นงานในกล่องอย่างน้อย 1 รูป");
       const parts = await parsePartExcel(partBundleExcel);
       const master = matchBundleImages(partBundleMasterFiles, parts);
       const actual = matchBundleImages(partBundleActualFiles, parts);
@@ -2379,7 +2407,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         <article className="part-stat purple"><span>◇</span><div><small>มีรูปชิ้นงาน</small><b>{fmt(partImages.length)}</b><em>รายการ</em></div></article>
       </div>
 
-      {user.role === "admin" && <Card className="part-bundle-card" title={<span className="part-bundle-title"><i>⇧</i><span>นำเข้าทะเบียน Part พร้อมรูป<small>เลือก Excel และรูปหลาย Part ส่งเข้าระบบพร้อมกัน</small></span></span>} action={partBundlePreview && <span className="part-bundle-ready">✓ ตรวจสอบแล้ว {fmt(partBundlePreview.rows.length)} Part</span>}>
+      {user.role === "admin" && <Card className="part-bundle-card" title={<span className="part-bundle-title"><i>⇧</i><span>นำเข้าทะเบียน Part จาก Excel<small>เลือก Excel อย่างเดียว หรือแนบรูป Master และรูปในกล่องหลายไฟล์พร้อมกัน</small></span></span>} action={partBundlePreview && <span className="part-bundle-ready">✓ ตรวจสอบแล้ว {fmt(partBundlePreview.rows.length)} Part</span>}>
         <form className="part-bundle-form" onSubmit={previewPartBundle}>
           <label className={partBundleExcel ? "selected" : ""}>
             <span className="part-bundle-icon excel">X</span>
@@ -2388,7 +2416,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           </label>
           <label className={partBundleMasterFiles.length ? "selected" : ""}>
             <span className="part-bundle-icon master">▧</span>
-            <span><b>2. รูปตัวอย่าง (Master)</b><small>{partBundleMasterFiles.length ? `${fmt(partBundleMasterFiles.length)} รูป` : "เลือกหลายรูปได้ · ตั้งชื่อเป็น Part No."}</small></span>
+            <span><b>2. รูปตัวอย่าง (Master) — ไม่บังคับ</b><small>{partBundleMasterFiles.length ? `${fmt(partBundleMasterFiles.length)} รูป` : "เลือกหลายรูปได้ · ตั้งชื่อเป็น Part No."}</small></span>
             <input ref={partBundleMasterInput} type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={partBundleRunning} onChange={(e) => { setPartBundleMasterFiles([...(e.target.files || [])]); setPartBundlePreview(null); setPartBundleFailed([]); }} />
           </label>
           <label className={partBundleActualFiles.length ? "selected" : ""}>
@@ -2396,7 +2424,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
             <span><b>3. รูปชิ้นงานในกล่อง</b><small>{partBundleActualFiles.length ? `${fmt(partBundleActualFiles.length)} รูป` : "ไม่บังคับ · ใช้เทียบตอนขายออก"}</small></span>
             <input ref={partBundleActualInput} type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={partBundleRunning} onChange={(e) => { setPartBundleActualFiles([...(e.target.files || [])]); setPartBundlePreview(null); setPartBundleFailed([]); }} />
           </label>
-          <button className="button primary part-bundle-check" disabled={partBundleRunning || !partBundleExcel || (!partBundleMasterFiles.length && !partBundleActualFiles.length)}>⌕ ตรวจสอบและจับคู่</button>
+          <button className="button primary part-bundle-check" disabled={partBundleRunning || !partBundleExcel}>⌕ ตรวจสอบข้อมูลและจับคู่รูป</button>
         </form>
         <p className="part-bundle-help">ชื่อรูปต้องตรงกับ Part No. ใน Excel เช่น <code>BA04U385G05-F.jpg</code> · รองรับ JPG, PNG, WebP ไม่เกิน 5MB ต่อรูป</p>
 
@@ -2445,7 +2473,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         <div className="part-editor-foot"><span>Excel รองรับคอลัมน์: Part / Material No., Part Name, Customer, Location และ Max Qty per Box</span>{stockPartForm.materialCode && <button type="button" className="tiny-button" onClick={clearPartForm}>＋ เพิ่ม Part ใหม่</button>}</div>
       </Card>}
 
-      <Card className="part-list-card" title="รายการ Part ทั้งหมด" action={<div className="part-list-actions"><input value={partSearch} onChange={(e) => { setPartSearch(e.target.value); setPartPage(1); }} placeholder="⌕ ค้นหา Part No., ชื่อชิ้นงาน, ลูกค้า หรือ Location..." /><button className="button secondary" onClick={() => void Promise.all([loadStock(), loadPartImages()])}>↻ รีเฟรช</button></div>}>
+      <Card className="part-list-card" title="รายการ Part ทั้งหมด" action={<div className="part-list-actions"><input value={partSearch} onChange={(e) => { setPartSearch(e.target.value); setPartPage(1); }} placeholder="⌕ ค้นหา Part No., ชื่อชิ้นงาน, ลูกค้า หรือ Location..." /><button className="button secondary" onClick={() => void downloadPartWorkbook("template")}>⇩ ดาวน์โหลด Template</button><button className="button secondary" disabled={!stock.parts.length} onClick={() => void downloadPartWorkbook("export")}>⇩ ดาวน์โหลดข้อมูล Part</button><button className="button secondary" onClick={() => void Promise.all([loadStock(), loadPartImages()])}>↻ รีเฟรช</button></div>}>
         {visibleParts.length ? <div className="part-modern-table">
           <div className="part-modern-head"><span>Part / Material No.</span><span>ชื่อชิ้นงาน</span><span>ลูกค้า</span><span>Location</span><span>จำนวนสูงสุดต่อกล่อง</span><span>สถานะ</span><span>จัดการ</span></div>
           <div className="part-modern-body">{paginatedParts.map((part) => {
@@ -2470,7 +2498,15 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         </div> : <Empty title="ไม่พบ Part" text={partNeedle ? "ลองเปลี่ยนคำค้นหา" : "ยังไม่มี Part ในทะเบียน Stock"} />}
       </Card>
 
-      {user.role === "admin" && <details className="part-bulk-panel"><summary>อัปโหลดรูปหลาย Part พร้อมกัน</summary><form className="part-image-upload bulk" onSubmit={uploadPartImagesBulk}><label className="part-file bulk-file"><span>ตั้งชื่อไฟล์ให้ตรงกับ Part No.</span><input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={bulkImageRunning} onChange={(e) => { setBulkImageFiles([...(e.target.files || [])]); setBulkImageFailed([]); }} /></label><button className="button primary" disabled={bulkImageRunning || !bulkImageFiles.length}>{bulkImageRunning ? "กำลังอัปโหลด " + fmt(bulkImageProgress.done) + "/" + fmt(bulkImageProgress.total) + "…" : "⇧ อัปโหลด " + (bulkImageFiles.length ? fmt(bulkImageFiles.length) + " รูป" : "ทั้งหมด")}</button></form>{bulkImageFailed.length > 0 && <div className="bulk-preview failed"><b>ไฟล์ที่อัปโหลดไม่สำเร็จ</b><ul>{bulkImageFailed.map((item) => <li key={item.name}><code>{item.name}</code><small>{item.reason}</small></li>)}</ul></div>}</details>}
+      {user.role === "admin" && <details className="part-bulk-panel"><summary>อัปโหลดรูปหลาย Part พร้อมกัน — Master และรูปในกล่อง</summary>
+        <form className="part-image-upload bulk" onSubmit={uploadPartImagesBulk}>
+          <label className="part-file bulk-file"><span>รูปตัวอย่าง (Master) · ชื่อไฟล์ต้องตรงกับ Part No.</span><input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={bulkImageRunning} onChange={(e) => { setBulkMasterImageFiles([...(e.target.files || [])]); setBulkImageFailed([]); }} /><small>{bulkMasterImageFiles.length ? `เลือกแล้ว ${fmt(bulkMasterImageFiles.length)} รูป` : "เลือกได้หลายรูป"}</small></label>
+          <label className="part-file bulk-file"><span>รูปชิ้นงานในกล่อง · ชื่อไฟล์ต้องตรงกับ Part No.</span><input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={bulkImageRunning} onChange={(e) => { setBulkActualImageFiles([...(e.target.files || [])]); setBulkImageFailed([]); }} /><small>{bulkActualImageFiles.length ? `เลือกแล้ว ${fmt(bulkActualImageFiles.length)} รูป` : "เลือกได้หลายรูป"}</small></label>
+          <button className="button primary" disabled={bulkImageRunning || (!bulkMasterImageFiles.length && !bulkActualImageFiles.length)}>{bulkImageRunning ? `กำลังอัปโหลด ${fmt(bulkImageProgress.done)}/${fmt(bulkImageProgress.total)}…` : `⇧ อัปโหลด ${fmt(bulkMasterImageFiles.length + bulkActualImageFiles.length)} รูป`}</button>
+        </form>
+        <p className="part-bundle-help">ตั้งชื่อไฟล์เป็น Part No. เช่น <code>BA04U385G05-F.jpg</code> ระบบจะแยกเก็บ Master และรูปในกล่องตามช่องที่เลือก</p>
+        {bulkImageFailed.length > 0 && <div className="bulk-preview failed"><b>ไฟล์ที่อัปโหลดไม่สำเร็จ</b><ul>{bulkImageFailed.map((item) => <li key={item.name}><code>{item.name}</code><small>{item.reason}</small></li>)}</ul></div>}
+      </details>}
     </div>;
   }
 
