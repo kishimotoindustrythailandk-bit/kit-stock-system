@@ -41,3 +41,6 @@ next-env.d.ts
 /.npm-cache/
 /outputs/
 /work/
+
+# typescript incremental build cache (สร้างจาก npm run typecheck)
+tsconfig.tsbuildinfo

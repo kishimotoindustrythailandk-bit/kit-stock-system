@@ -1,25 +1,135 @@
-# KIT Delivery Due Control v2.9.0 — ซ่อมการติดตั้ง ฐานข้อมูล และความปลอดภัยบัญชี
+# KIT Delivery Due Control v2.9.1 — schema มีแหล่งอ้างอิงเดียว
 
-รุ่นนี้ไม่ได้เพิ่มฟีเจอร์ใหม่ แต่ซ่อมสิ่งที่ทำให้ติดตั้งใหม่ไม่สำเร็จมาตลอด
+รุ่นนี้ไม่ได้เพิ่มฟีเจอร์ใหม่ แต่ทำให้ "โครงสร้างฐานข้อมูลที่รีโปบอก" ตรงกับ
+"โครงสร้างที่ฐานจริงมี" และเลิกสร้างตารางตอน runtime
 
 ## ติดตั้งหรืออัปเกรด
 
-**ฐานข้อมูลที่ใช้งานอยู่แล้ว** (เคยรัน `database-upgrade-*.sql` ด้วยมือ) — รัน baseline ครั้งเดียวก่อน:
+**ฐานที่รันโค้ด v2.9.0 อยู่แล้ว** (รวมถึง Worker `kit-stock-system` ตัวจริง):
 
 ```
 npm install
-npm run db:baseline      # ครั้งเดียวเท่านั้น บอก wrangler ว่า migration เก่ามีอยู่แล้ว
-npm run db:migrate       # รันเฉพาะ 0010, 0011, 0013
-npm run check            # typecheck + lint + test ต้องผ่านทั้งหมด
+npm run db:baseline:runtime-ddl   # ครั้งเดียว บอก wrangler ว่าคอลัมน์ location มีอยู่แล้ว
+npm run db:migrate                # รัน 0014–0017 (idempotent ทั้งชุด)
+npm run build                     # ต้องผ่าน
+npm run lint                      # ต้องเป็น 0 error
 npm run deploy
 ```
 
-**ฐานข้อมูลใหม่ที่ยังว่าง** — ข้าม `db:baseline` แล้วรัน `npm run db:migrate` ได้เลย
+**ฐานที่ยังไม่เคยผ่าน v2.9** (เคยรัน `database-upgrade-*.sql` ด้วยมือ):
 
-หรือใช้ `INSTALL-MAC-LINUX.sh` / `INSTALL-WINDOWS.bat` ซึ่งทำตามลำดับนี้ให้อัตโนมัติ
+```
+npm install
+npm run db:baseline      # ครั้งเดียว บอก wrangler ว่า 0000–0009 กับ 0012 มีอยู่แล้ว
+npm run db:migrate       # รัน 0010, 0011, 0013–0018
+npm run build
+npm run lint
+npm run deploy
+```
 
-> **สำคัญ:** ต้องรัน migration ก่อน deploy เสมอ โค้ดรุ่นนี้ต้องการตาราง
-> `app_login_attempts` และคอลัมน์ `app_users.must_change_pin`
+> `npm run check` ยัง **ไม่ผ่าน** บน `main` ตั้งแต่ก่อนรุ่นนี้ (typecheck 13 error,
+> test fail 8/20) รายละเอียดอยู่ในหัวข้อ "ยังไม่ได้แก้ในรุ่นนี้" ด้านล่าง
+> จึงยังใช้ `npm run check` เป็นประตูก่อน deploy ไม่ได้ ให้ใช้ `build` + `lint` ไปก่อน
+
+**ฐานข้อมูลใหม่ที่ยังว่าง** — ข้าม baseline ทั้งสองตัว แล้วรัน `npm run db:migrate` ได้เลย
+
+ไม่แน่ใจว่าฐานอยู่สถานะไหน ตรวจได้จาก:
+
+```bash
+npx wrangler d1 execute DB --remote --command "SELECT name FROM d1_migrations ORDER BY id"
+npx wrangler d1 execute DB --remote --command "PRAGMA table_info(stock_parts)"
+```
+
+ถ้า `stock_parts` มีคอลัมน์ `location` แล้ว ให้ใช้ชุดคำสั่งแรก
+
+> **สำคัญ:** ต้องรัน migration ให้ครบก่อน deploy เสมอ v2.9.1 ถอด CREATE TABLE
+> และ ALTER TABLE ออกจาก route handler แล้ว จึงไม่มีอะไรสร้างตารางให้ตอน runtime อีก
+
+## สิ่งที่แก้ใน v2.9.1
+
+**schema มีแหล่งอ้างอิงเดียว**
+
+- `app/api/stock/route.ts` เดิมยิง `CREATE TABLE` / `CREATE INDEX` 6 คำสั่งผ่าน
+  `DB.batch()` บวก `CREATE TABLE` ของ `stock_receipt_adjustments`,
+  `stock_job_closures` และ `PRAGMA table_info` + `ALTER TABLE` ของ
+  `stock_parts.location` **ทุกครั้งที่มี request เข้ามา** ทั้งใน GET และ POST
+  `app/api/replacements/route.ts` และ `app/api/part-images/route.ts` ก็ทำแบบเดียวกัน
+  ตอนนี้ถอดออกหมดแล้ว ทุก request ไม่ต้องจ่ายค่า DDL อีก
+- `stock_receipt_adjustments` กับ `stock_job_closures` เดิมไม่มีอยู่ทั้งใน
+  `migrations/` และ `db/schema.ts` เลย มีแต่ใน route handler จึงไม่มีทางรู้จากรีโป
+  ได้ว่าฐานจริงมีตารางอะไร ตอนนี้อยู่ใน `migrations/0017` และ `db/schema.ts`
+- คอลัมน์ `stock_parts.location` ย้ายไปอยู่ใน `migrations/0018` และประกาศใน
+  `db/schema.ts` แล้ว
+- เพิ่ม index `idx_stock_job_closures_job_material` ที่ฐาน production ไม่มี
+  เพราะโค้ดที่สร้างตารางไม่ได้สร้าง index ให้ ทั้งที่ `close_job` อ่านด้วย
+  `job_no` + `material_code` ทุกครั้ง
+
+ตรวจแล้วด้วยการรัน `npm run db:migrate:local` บนฐานเปล่า: migration 0000–0018
+ผ่านทั้ง 19 ไฟล์ และได้ตารางตรงกับฐาน production ครบ 28 ตาราง เหลือต่างกันแค่
+`employees` กับ `employee_sessions` ที่มีบน production เท่านั้น (ตกทอดจาก
+`database-setup.sql` ของระบบ auth รุ่นก่อน ไม่มี migration ไหนสร้าง และโค้ด
+ปัจจุบันใช้ `app_users` / `app_sessions` แทนแล้ว) กับตารางภายในของ D1 เอง
+(`_cf_KV` บน production เทียบกับ `_cf_METADATA` ของ miniflare)
+
+**ชื่อ Worker ใน wrangler.jsonc**
+
+- เดิมเป็น `kit-stock` ซึ่งไม่มี Worker ชื่อนี้อยู่บน account เลย Worker ที่ให้บริการ
+  จริงชื่อ `kit-stock-system` ใครเช็คเอาต์รีโปแล้วสั่ง `npm run deploy` จะได้ Worker
+  ตัวใหม่ที่ผูก D1 production ตัวเดียวกัน กลายเป็นสองระบบเขียนฐานเดียว
+
+**โครงสร้างรีโปและ Cloudflare Builds**
+
+- ยังรักษา path `kit-stock-system-v1/kit-stock-system-v1/` ไว้ชั่วคราว เพราะ
+  Cloudflare Workers Builds ผูก `root_directory` กับ path นี้อยู่ การย้ายขึ้นรากรีโป
+  ทำให้ preview build ของ PR ล้มทันทีตั้งแต่ก่อนเริ่ม build
+- ควรเปลี่ยน Root directory ใน Cloudflare > Worker `kit-stock-system` > Settings >
+  Builds เป็น `/` ก่อน แล้วค่อยย้ายไฟล์ขึ้นรากใน PR แยก เพื่อไม่ทำ CI/CD production พัง
+- OAuth token ของ Wrangler ที่ใช้อยู่ไม่มีสิทธิ์ `Workers Builds Configuration`
+  จึงแก้ trigger ผ่าน Builds API ในรอบนี้ไม่ได้ และไม่ควรข้าม build failure แล้ว merge
+
+## ยังไม่ได้แก้ในรุ่นนี้
+
+- ตาราง `stock_manual_receipts`, `stock_count_adjustments`, `replacement_*` และ
+  `part_actual_images` บนฐาน production **ไม่มี FOREIGN KEY และ CHECK** ตามที่
+  migration 0014–0016 เขียนไว้ เพราะถูกสร้างจาก route handler รุ่นเก่าที่ไม่ได้ใส่
+  เอาไว้ก่อน แล้ว `CREATE TABLE IF NOT EXISTS` ก็ไม่แก้ตารางที่มีอยู่แล้ว
+  การเพิ่ม FK ต้อง rebuild ตารางบน production ซึ่งเป็นงานแยกอีกชุด
+  migration 0017 จึงคัดลอก DDL ให้ตรงกับฐานจริงโดยเจตนา เพื่อไม่ให้ฐาน production
+  กับฐานที่ติดตั้งใหม่มี schema ต่างกัน
+**`npm run check` ยังไม่ผ่าน — เกิดก่อนรุ่นนี้ ไม่ได้เกิดจาก v2.9.1**
+
+ตรวจแล้วว่าจำนวน error และรายชื่อ test ที่ fail เท่ากันทั้งบน `main` และบนรุ่นนี้
+
+- `npm run typecheck` — 13 error
+  - `app/stock-app.tsx` import `jsbarcode` แต่ `jsbarcode` ไม่มีใน `package.json`
+    เลย ไฟล์นี้ (869 บรรทัด) ไม่ถูก import จากที่ไหนทั้งสิ้น จึงไม่เข้า build
+    `npm run build` ผ่านได้เพราะ bundler ไม่แตะไฟล์นี้ แต่ `tsc` ตรวจทุกไฟล์
+    ต้องตัดสินใจว่าจะลบไฟล์ตายทิ้ง หรือเพิ่ม `jsbarcode` เป็น dependency จริง
+  - `app/delivery-control-app.tsx` 12 error `TS2367` ใน `renderScan()`
+    บล็อก `if (scanMode === "arrange")` ที่บรรทัด 2574 return ออกไปก่อนแล้ว
+    โค้ดหลังจากนั้น `scanMode` จึงเป็น `"dispatch"` แน่นอน แต่ยังมีเงื่อนไข
+    `scanMode === "arrange" ? ก : ข` เหลืออยู่อีก 12 จุด ซึ่งเลือกข้าง `ข` เสมอ
+    พฤติกรรมตอนรันถูกอยู่แล้ว เป็นเงื่อนไขตายที่ค้างจากการแยกโหมด
+- `npm test` — fail 8 จาก 20 (README v2.9.0 เขียนว่า "ผ่านครบ 16/16" ซึ่งไม่จริงแล้ว)
+  - `v2.8.9 separates arranging and dispatching` คาด `"arrange", "dispatch"` ติดกัน
+    ใน `PERMISSION_KEYS` แต่ commit "Add replacement withdrawal permission"
+    แทรก `"replacement"` เข้าไปกลางสองตัวนั้นโดยไม่แก้ test
+  - อีก 7 ตัวยืนยันเนื้อหาใน `app/stock-app.tsx` ซึ่งเป็นไฟล์ตายตัวเดียวกันข้างต้น
+    (พิมพ์ Tag, กล้อง, ลบ Part) test จึงตรวจโค้ดที่ไม่ได้ถูกใช้งานจริง
+
+**อื่นๆ**
+
+- race condition ตอนจัดงาน (`stage`) ที่ทำให้จัดเกินของจริงได้
+- `DB.batch` ตอนตัดยอดไม่ได้ตรวจ `meta.changes` จึงเงียบเมื่อ guard ไม่ผ่าน
+- `xlsx@0.18.5` ยังมีช่องโหว่ ต้องย้ายไป SheetJS CDN
+- โค้ดตายใน `app/employees/` และตารางรุ่นเก่าใน `db/schema.ts`
+- secret `SETUP_KEY` ยังอยู่บน Worker แต่ไม่มีโค้ดไหนอ่านค่านี้แล้ว
+
+---
+
+# v2.9.0 — ซ่อมการติดตั้ง ฐานข้อมูล และความปลอดภัยบัญชี
+
+รุ่นนี้ไม่ได้เพิ่มฟีเจอร์ใหม่ แต่ซ่อมสิ่งที่ทำให้ติดตั้งใหม่ไม่สำเร็จมาตลอด
 
 ## สิ่งที่แก้ใน v2.9.0
 

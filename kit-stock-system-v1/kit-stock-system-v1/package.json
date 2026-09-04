@@ -1,6 +1,6 @@
 {
   "name": "kit-stock-system-cloudflare",
-  "version": "2.9.0",
+  "version": "2.9.1",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -11,6 +11,7 @@
     "preview": "npm run build && wrangler dev --config dist/server/wrangler.json",
     "deploy": "npm run build && wrangler deploy --config dist/server/wrangler.json",
     "db:baseline": "wrangler d1 execute DB --remote --file=scripts/baseline-existing-d1.sql",
+    "db:baseline:runtime-ddl": "wrangler d1 execute DB --remote --file=scripts/baseline-runtime-ddl.sql",
     "db:migrate": "wrangler d1 migrations apply DB --remote",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "db:generate": "drizzle-kit generate",

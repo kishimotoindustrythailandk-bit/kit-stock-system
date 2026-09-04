@@ -31,59 +31,19 @@ function createTagId(batchCode: string, boxNo: number, boxCount: number) {
   return `${batchCode}-B${String(boxNo).padStart(width, "0")}OF${String(boxCount).padStart(width, "0")}`;
 }
 
-async function ensureStockManagementTables(DB: D1Database) {
-  const statements = [
-    DB.prepare(`
-      CREATE TABLE IF NOT EXISTS stock_manual_receipts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        stock_tag_id INTEGER NOT NULL,
-        tag_id TEXT NOT NULL,
-        material_code TEXT NOT NULL,
-        qty INTEGER NOT NULL,
-        job_no TEXT NOT NULL,
-        production_date TEXT NOT NULL,
-        reference_no TEXT NOT NULL DEFAULT '',
-        note TEXT NOT NULL DEFAULT '',
-        received_by_name TEXT NOT NULL,
-        received_by_code TEXT NOT NULL,
-        received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-      )
-    `),
-    DB.prepare("CREATE INDEX IF NOT EXISTS idx_stock_manual_receipts_material_date ON stock_manual_receipts(material_code, received_at)"),
-    DB.prepare(`
-      CREATE TABLE IF NOT EXISTS stock_count_adjustments (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        adjustment_no TEXT NOT NULL UNIQUE,
-        count_date TEXT NOT NULL,
-        material_code TEXT NOT NULL,
-        system_qty INTEGER NOT NULL,
-        counted_qty INTEGER NOT NULL,
-        difference INTEGER NOT NULL,
-        reason TEXT NOT NULL,
-        adjusted_by_name TEXT NOT NULL,
-        adjusted_by_code TEXT NOT NULL,
-        adjusted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-      )
-    `),
-    DB.prepare("CREATE INDEX IF NOT EXISTS idx_stock_count_adjustments_material_date ON stock_count_adjustments(material_code, count_date, id)"),
-    DB.prepare(`
-      CREATE TABLE IF NOT EXISTS stock_count_adjustment_lines (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        adjustment_id INTEGER NOT NULL,
-        stock_tag_id INTEGER NOT NULL,
-        stock_tag_code TEXT NOT NULL,
-        qty_change INTEGER NOT NULL,
-        before_qty INTEGER NOT NULL,
-        after_qty INTEGER NOT NULL,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (adjustment_id) REFERENCES stock_count_adjustments(id) ON DELETE CASCADE
-      )
-    `),
-    DB.prepare("CREATE INDEX IF NOT EXISTS idx_stock_count_adjustment_lines_adjustment ON stock_count_adjustment_lines(adjustment_id, id)")
-  ];
-  await DB.batch(statements);
-}
-
+/**
+ * เดิมไฟล์นี้มี ensureStockManagementTables() ที่ยิง CREATE TABLE / CREATE INDEX
+ * 6 คำสั่งผ่าน DB.batch() ทุกครั้งที่ GET หรือ POST เข้ามา บวกกับ CREATE TABLE
+ * ของ stock_receipt_adjustments, stock_job_closures และ PRAGMA table_info +
+ * ALTER TABLE ของ stock_parts.location อีกชุด
+ *
+ * ตารางทั้งหมดย้ายไปอยู่ใน migrations/0016, 0017 และ 0018 แล้ว
+ * schema จึงมีแหล่งอ้างอิงเดียวคือ migrations/ + db/schema.ts และ request
+ * ไม่ต้องจ่ายค่า DDL ทุกครั้งอีก
+ *
+ * ต้องรัน npm run db:migrate ให้ผ่านก่อน deploy รุ่นนี้ ไม่มีอะไรสร้างตารางให้
+ * ตอน runtime อีกแล้ว
+ */
 function createAdjustmentNo(prefix = "ADJ") {
   const now = new Date();
   const stamp = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, "0")}${String(now.getUTCDate()).padStart(2, "0")}`;
@@ -126,30 +86,6 @@ export async function GET() {
     }
     const { DB } = getRuntimeEnv();
     if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
-    await ensureStockManagementTables(DB);
-    await DB.prepare(`
-      CREATE TABLE IF NOT EXISTS stock_receipt_adjustments (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        stock_tag_id INTEGER NOT NULL,
-        tag_id TEXT NOT NULL,
-        original_qty INTEGER NOT NULL,
-        received_qty INTEGER NOT NULL,
-        ng_qty INTEGER NOT NULL,
-        received_by_name TEXT NOT NULL,
-        received_by_code TEXT NOT NULL,
-        received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-      )
-    `).run();
-    await DB.prepare("CREATE INDEX IF NOT EXISTS idx_stock_receipt_adjustments_tag ON stock_receipt_adjustments(stock_tag_id, id)").run();
-    const partColumns = await DB.prepare("PRAGMA table_info(stock_parts)").all<{ name: string }>();
-    if (!(partColumns.results || []).some((column) => column.name === "location")) {
-      try {
-        await DB.prepare("ALTER TABLE stock_parts ADD COLUMN location TEXT NOT NULL DEFAULT ''").run();
-      } catch {
-        const refreshedColumns = await DB.prepare("PRAGMA table_info(stock_parts)").all<{ name: string }>();
-        if (!(refreshedColumns.results || []).some((column) => column.name === "location")) throw new Error("เพิ่มช่อง Location ในทะเบียน Part ไม่สำเร็จ");
-      }
-    }
     const partsResult = await DB.prepare(`
       SELECT material_code AS materialCode, part_name AS partName, customer, location,
         standard_qty AS standardQty, active, created_at AS createdAt, updated_at AS updatedAt
@@ -223,22 +159,6 @@ export async function GET() {
       INNER JOIN delivery_due_lines d ON d.id = l.due_line_id
       ORDER BY l.id DESC LIMIT 150
     `).all() : { results: [] };
-    if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
-    await DB.prepare(`
-      CREATE TABLE IF NOT EXISTS stock_job_closures (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        job_no TEXT NOT NULL,
-        material_code TEXT NOT NULL,
-        total_qty INTEGER NOT NULL,
-        received_qty INTEGER NOT NULL,
-        ng_qty INTEGER NOT NULL,
-        ng_tag_count INTEGER NOT NULL,
-        reason TEXT NOT NULL DEFAULT '',
-        closed_by_name TEXT NOT NULL,
-        closed_by_code TEXT NOT NULL,
-        closed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-      )
-    `).run();
     const jobClosures = await DB.prepare(`
       SELECT id, job_no AS jobNo, material_code AS materialCode, total_qty AS totalQty,
         received_qty AS receivedQty, ng_qty AS ngQty, ng_tag_count AS ngTagCount,
@@ -293,30 +213,6 @@ export async function POST(request: Request) {
     const db = getDb();
     const { DB: runtimeDb } = getRuntimeEnv();
     if (!runtimeDb) throw new Error("ไม่พบการเชื่อมต่อ D1");
-    await ensureStockManagementTables(runtimeDb);
-    await runtimeDb.prepare(`
-      CREATE TABLE IF NOT EXISTS stock_receipt_adjustments (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        stock_tag_id INTEGER NOT NULL,
-        tag_id TEXT NOT NULL,
-        original_qty INTEGER NOT NULL,
-        received_qty INTEGER NOT NULL,
-        ng_qty INTEGER NOT NULL,
-        received_by_name TEXT NOT NULL,
-        received_by_code TEXT NOT NULL,
-        received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-      )
-    `).run();
-    await runtimeDb.prepare("CREATE INDEX IF NOT EXISTS idx_stock_receipt_adjustments_tag ON stock_receipt_adjustments(stock_tag_id, id)").run();
-    const partColumns = await runtimeDb.prepare("PRAGMA table_info(stock_parts)").all<{ name: string }>();
-    if (!(partColumns.results || []).some((column) => column.name === "location")) {
-      try {
-        await runtimeDb.prepare("ALTER TABLE stock_parts ADD COLUMN location TEXT NOT NULL DEFAULT ''").run();
-      } catch {
-        const refreshedColumns = await runtimeDb.prepare("PRAGMA table_info(stock_parts)").all<{ name: string }>();
-        if (!(refreshedColumns.results || []).some((column) => column.name === "location")) throw new Error("เพิ่มช่อง Location ในทะเบียน Part ไม่สำเร็จ");
-      }
-    }
 
     if (action === "save_part") {
       if (user.role !== "admin" || !hasPermission(user, "tags")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์เพิ่มหรือแก้ไข Part" }, { status: 403 });
@@ -550,21 +446,6 @@ export async function POST(request: Request) {
       }
       const { DB } = getRuntimeEnv();
       if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
-      await DB.prepare(`
-        CREATE TABLE IF NOT EXISTS stock_job_closures (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          job_no TEXT NOT NULL,
-          material_code TEXT NOT NULL,
-          total_qty INTEGER NOT NULL,
-          received_qty INTEGER NOT NULL,
-          ng_qty INTEGER NOT NULL,
-          ng_tag_count INTEGER NOT NULL,
-          reason TEXT NOT NULL DEFAULT '',
-          closed_by_name TEXT NOT NULL,
-          closed_by_code TEXT NOT NULL,
-          closed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-      `).run();
       const summary = await DB.prepare(`
         SELECT coalesce(sum(st.qty), 0) AS totalQty,
           coalesce(sum(CASE WHEN st.status IN ('in_stock', 'depleted') THEN

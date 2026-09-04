@@ -1,6 +1,10 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "kit-stock",
+  // ต้องตรงกับ Worker ที่ให้บริการอยู่จริงเท่านั้น
+  // เดิมเป็น "kit-stock" ซึ่งไม่มี Worker ชื่อนี้อยู่บน account เลย
+  // ใครเช็คเอาต์รีโปแล้วสั่ง npm run deploy จะได้ Worker ตัวใหม่ที่ผูก
+  // D1 production ตัวเดียวกัน กลายเป็นสองระบบเขียนฐานเดียวโดยไม่มีใครรู้
+  "name": "kit-stock-system",
   "account_id": "62a2ea38f1cd68495040944279373469",
   "main": "./worker/index.ts",
   "compatibility_date": "2026-05-22",
