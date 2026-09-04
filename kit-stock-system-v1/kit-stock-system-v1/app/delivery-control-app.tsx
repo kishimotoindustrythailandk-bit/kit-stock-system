@@ -348,25 +348,55 @@ function html(value: unknown) {
   return String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character] || character);
 }
 
-function dueDeadlinePassed(due: DueLine) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(due.deliveryDate)) return false;
-  const now = new Date();
-  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  return due.deliveryDate < today;
+const BANGKOK_DATE_TIME_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Bangkok",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+function bangkokDateTimeKey(value = new Date()) {
+  const parts = Object.fromEntries(
+    BANGKOK_DATE_TIME_FORMATTER.formatToParts(value)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
 }
 
-function stateOf(due: DueLine) {
+function isDeliveryOverdue(due: DueLine, now = new Date()) {
+  const status = String(due.status || "").trim().toLowerCase();
+  if (["completed", "cancelled", "canceled"].includes(status)) return false;
+  const required = Number(due.reqQty);
+  const dispatched = Number(due.scannedQty);
+  if (!Number.isFinite(required) || required <= 0 || !Number.isFinite(dispatched) || dispatched >= required) return false;
+
+  const dateMatch = due.deliveryDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const timeMatch = due.deliveryTime.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  if (!dateMatch || !timeMatch) return false;
+  const year = Number(dateMatch[1]);
+  const month = Number(dateMatch[2]);
+  const day = Number(dateMatch[3]);
+  const validDate = new Date(Date.UTC(year, month - 1, day));
+  if (validDate.getUTCFullYear() !== year || validDate.getUTCMonth() !== month - 1 || validDate.getUTCDate() !== day) return false;
+
+  return `${due.deliveryDate}T${due.deliveryTime}` < bangkokDateTimeKey(now);
+}
+
+function stateOf(due: DueLine, now = new Date()) {
   const scanned = Number(due.scannedQty);
-  if (scanned > due.reqQty) return "over";
-  if (scanned === due.reqQty) return "completed";
-  if (dueDeadlinePassed(due)) return "over";
+  if (scanned >= Number(due.reqQty)) return "completed";
+  if (isDeliveryOverdue(due, now)) return "over";
   if (scanned > 0) return "partial";
   return "pending";
 }
 
-function stateLabel(due: DueLine) {
-  const state = stateOf(due);
-  if (state === "over") return "เกิน Due";
+function stateLabel(due: DueLine, now = new Date()) {
+  const state = stateOf(due, now);
+  if (state === "over") return "เกินดิวจัดส่งงาน";
   if (state === "completed") return "ครบตามแผน";
   if (Number(due.arrangedQty) > 0 && Number(due.scannedQty) > 0) return "ส่งบางส่วน / มีงานรอ";
   if (Number(due.arrangedQty) > 0) return "จัดแล้ว รอขายออก";
@@ -443,11 +473,38 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [loading, setLoading] = useState(hasDueDataPermission);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [dueLoadedAt, setDueLoadedAt] = useState<string | null>(null);
+  const [deadlineClock, setDeadlineClock] = useState(() => Date.now());
   useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(null), 4000);
     return () => window.clearTimeout(timer);
   }, [notice]);
+  useEffect(() => {
+    let timer: number | undefined;
+    const refreshClock = () => setDeadlineClock(Date.now());
+    const scheduleNextMinute = () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      const delay = 60_000 - (Date.now() % 60_000) + 50;
+      timer = window.setTimeout(() => {
+        refreshClock();
+        scheduleNextMinute();
+      }, delay);
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      refreshClock();
+      scheduleNextMinute();
+    };
+    scheduleNextMinute();
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, []);
   const [file, setFile] = useState<File | null>(null);
   const [previewRows, setPreviewRows] = useState<ImportRow[]>([]);
   const [parsing, setParsing] = useState(false);
@@ -604,9 +661,10 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       const data = await response.json() as DuePayload;
       if (!response.ok) throw new Error(data.error || "โหลดข้อมูล Due ไม่สำเร็จ");
       setPayload(data);
+      setDueLoadedAt(new Date().toISOString());
       if (!filterDate && data.dues.length) {
         const dates = [...new Set(data.dues.map((due) => due.deliveryDate))].sort();
-        const today = new Date().toISOString().slice(0, 10);
+        const today = bangkokDateTimeKey().slice(0, 10);
         setFilterDate(dates.includes(today) ? today : dates.at(-1) || "");
       }
       if (!selectedScan && data.scans.length) setSelectedScan(data.scans[0]);
@@ -1915,31 +1973,48 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       && (!search || [due.materialCode, due.materialDescription, due.doNo, String(due.seq), due.line, due.shop].some((value) => value.toUpperCase().includes(search)));
   }), [payload.dues, filterDate, filterFact, filterTime, query]);
 
-  const summary = useMemo(() => filtered.reduce((total, due) => {
-    total.items += 1;
-    total.plan += Number(due.reqQty);
-    total.sent += Number(due.scannedQty);
-    total[stateOf(due)] += 1;
-    return total;
-  }, { items: 0, plan: 0, sent: 0, completed: 0, partial: 0, pending: 0, over: 0 }), [filtered]);
+  const overdueDues = useMemo(() => {
+    if (!deadlineClock) return [];
+    const now = new Date(deadlineClock);
+    return payload.dues.filter((due) => isDeliveryOverdue(due, now)).sort((left, right) =>
+      left.deliveryDate.localeCompare(right.deliveryDate) || left.deliveryTime.localeCompare(right.deliveryTime),
+    );
+  }, [payload.dues, deadlineClock]);
+
+  const summary = useMemo(() => {
+    const now = new Date(deadlineClock);
+    return filtered.reduce((total, due) => {
+      total.items += 1;
+      total.plan += Number(due.reqQty);
+      total.sent += Number(due.scannedQty);
+      total[stateOf(due, now)] += 1;
+      return total;
+    }, { items: 0, plan: 0, sent: 0, completed: 0, partial: 0, pending: 0, over: 0 });
+  }, [filtered, deadlineClock]);
   const completePct = summary.items ? Math.round((summary.completed / summary.items) * 100) : 0;
 
-  const facStats = useMemo(() => facts.map((fact) => {
-    const rows = payload.dues.filter((due) => due.fact === fact && (!filterDate || due.deliveryDate === filterDate));
-    return {
-      fact,
-      items: rows.length,
-      plan: rows.reduce((sum, row) => sum + Number(row.reqQty), 0),
-      sent: rows.reduce((sum, row) => sum + Number(row.scannedQty), 0),
-      completed: rows.filter((row) => stateOf(row) === "completed").length,
-      remaining: rows.filter((row) => ["pending", "partial", "over"].includes(stateOf(row))).length,
-    };
-  }).sort((a, b) => b.items - a.items), [facts, payload.dues, filterDate]);
+  const facStats = useMemo(() => {
+    const now = new Date(deadlineClock);
+    return facts.map((fact) => {
+      const rows = payload.dues.filter((due) => due.fact === fact && (!filterDate || due.deliveryDate === filterDate));
+      return {
+        fact,
+        items: rows.length,
+        plan: rows.reduce((sum, row) => sum + Number(row.reqQty), 0),
+        sent: rows.reduce((sum, row) => sum + Number(row.scannedQty), 0),
+        completed: rows.filter((row) => stateOf(row, now) === "completed").length,
+        remaining: rows.filter((row) => ["pending", "partial", "over"].includes(stateOf(row, now))).length,
+      };
+    }).sort((a, b) => b.items - a.items);
+  }, [facts, payload.dues, filterDate, deadlineClock]);
 
-  const dailyStats = useMemo(() => dates.map((date) => {
-    const rows = payload.dues.filter((due) => due.deliveryDate === date);
-    return { date, items: rows.length, completed: rows.filter((row) => stateOf(row) === "completed").length, partial: rows.filter((row) => stateOf(row) === "partial").length, pending: rows.filter((row) => stateOf(row) === "pending").length, over: rows.filter((row) => stateOf(row) === "over").length, qty: rows.reduce((sum, row) => sum + Number(row.scannedQty), 0) };
-  }), [dates, payload.dues]);
+  const dailyStats = useMemo(() => {
+    const now = new Date(deadlineClock);
+    return dates.map((date) => {
+      const rows = payload.dues.filter((due) => due.deliveryDate === date);
+      return { date, items: rows.length, completed: rows.filter((row) => stateOf(row, now) === "completed").length, partial: rows.filter((row) => stateOf(row, now) === "partial").length, pending: rows.filter((row) => stateOf(row, now) === "pending").length, over: rows.filter((row) => stateOf(row, now) === "over").length, qty: rows.reduce((sum, row) => sum + Number(row.scannedQty), 0) };
+    });
+  }, [dates, payload.dues, deadlineClock]);
 
   const arrangeableDues = useMemo(() => payload.dues.filter((due) =>
     Number(due.reqQty) > Number(due.scannedQty) + Number(due.arrangedQty || 0)
@@ -1961,6 +2036,19 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     if (next === "replacement") void loadReplacements();
     setMenuOpen(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function showOverduePlan() {
+    if (!allowedPages.has("plan")) {
+      setNotice({ type: "error", text: "บัญชีนี้ไม่มีสิทธิ์ดูหน้าแผนส่งงาน กรุณาติดต่อ Admin" });
+      return;
+    }
+    setFilterDate("");
+    setFilterFact("ALL");
+    setFilterTime("ALL");
+    setQuery("");
+    setPlanPage(1);
+    go("plan");
   }
 
   function exportCsv() {
@@ -2010,7 +2098,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         ["FAC", filterFact === "ALL" ? "ทั้งหมด" : filterFact],
         ["เวลา", filterTime === "ALL" ? "ทั้งหมด" : filterTime],
         ["จำนวนรายการ", summary.items], ["แผนทั้งหมด (ชิ้น)", summary.plan], ["ส่งแล้ว (ชิ้น)", summary.sent],
-        ["ครบตามแผน", summary.completed], ["คงเหลือ", summary.partial + summary.pending], ["เกิน Due", summary.over],
+        ["ครบตามแผน", summary.completed], ["คงเหลือ", summary.partial + summary.pending], ["เกินดิวจัดส่ง", summary.over],
       ]);
       const detailSheet = xlsx.utils.aoa_to_sheet(reportTableRows());
       detailSheet["!cols"] = [12, 8, 12, 12, 12, 24, 8, 24, 36, 14, 14, 14, 14, 20].map((wch) => ({ wch }));
@@ -2226,7 +2314,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const segments = [
       { key: "completed", label: "ส่งออกครบ", value: summary.completed, className: "ok" },
       { key: "remaining", label: "ค้างเหลือ", value: remainingItems, className: "warn" },
-      { key: "over", label: "เกิน Due", value: summary.over, className: "crit" },
+      { key: "over", label: "เกินดิวจัดส่ง", value: summary.over, className: "crit" },
     ].filter((item) => item.value > 0);
 
     // โดนัทวาดด้วย SVG เส้นรอบวง 2πr โดย r = 54
@@ -2240,27 +2328,21 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       return arc;
     });
 
-    const pendingDues = filtered
-      .filter((due) => ["partial", "pending", "over"].includes(stateOf(due)))
-      .slice()
-      .sort((a, b) => a.deliveryDate.localeCompare(b.deliveryDate) || a.deliveryTime.localeCompare(b.deliveryTime))
-      .slice(0, 5);
-
-    // ป้ายวันที่สื่อความเร่งด่วนจริง ไม่ใช่แค่สถานะ pending/partial
-    // เทียบด้วยสตริง YYYY-MM-DD ตามเวลาเครื่องผู้ใช้ จึงไม่มีปัญหาข้ามวันจาก UTC
-    const todayKey = (() => {
-      const now = new Date();
-      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-    })();
-    const soonKey = (() => {
-      const soon = new Date();
-      soon.setDate(soon.getDate() + 2);
-      return `${soon.getFullYear()}-${String(soon.getMonth() + 1).padStart(2, "0")}-${String(soon.getDate()).padStart(2, "0")}`;
-    })();
-    const urgency = (deliveryDate: string) => {
-      if (!deliveryDate) return "";
-      if (deliveryDate <= todayKey) return "hot";
-      if (deliveryDate <= soonKey) return "soon";
+    const overdueIds = new Set(overdueDues.map((due) => due.id));
+    const pendingDues = [
+      ...overdueDues,
+      ...filtered
+        .filter((due) => !overdueIds.has(due.id) && ["partial", "pending"].includes(stateOf(due)))
+        .slice()
+        .sort((a, b) => a.deliveryDate.localeCompare(b.deliveryDate) || a.deliveryTime.localeCompare(b.deliveryTime)),
+    ].slice(0, 5);
+    const todayKey = bangkokDateTimeKey(new Date(deadlineClock)).slice(0, 10);
+    const soonDate = new Date(`${todayKey}T00:00:00Z`);
+    soonDate.setUTCDate(soonDate.getUTCDate() + 2);
+    const soonKey = soonDate.toISOString().slice(0, 10);
+    const urgency = (due: DueLine) => {
+      if (overdueIds.has(due.id) || due.deliveryDate <= todayKey) return "hot";
+      if (due.deliveryDate <= soonKey) return "soon";
       return "";
     };
 
@@ -2268,11 +2350,16 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const plannedPieces = payload.dues.reduce((sum, due) => sum + Number(due.reqQty || 0), 0);
 
     return <div className="home">
+      {overdueDues.length > 0 && (allowedPages.has("plan") ? <button className="overdue-alert" onClick={showOverduePlan}>
+        <span>!</span><div><b>แจ้งเตือน: มีงานเกินดิวจัดส่ง {fmt(overdueDues.length)} รายการ</b><small>เลยวันและเวลาจัดส่งแล้ว แต่ยอดส่งยังไม่ครบ กดเพื่อดูรายการทั้งหมด</small></div><strong>ดูรายการ →</strong>
+      </button> : <div className="overdue-alert" role="status">
+        <span>!</span><div><b>แจ้งเตือน: มีงานเกินดิวจัดส่ง {fmt(overdueDues.length)} รายการ</b><small>เลยวันและเวลาจัดส่งแล้ว แต่ยอดส่งยังไม่ครบ</small></div>
+      </div>)}
       <div className="stat-row">
         <article className="stat-tile blue"><span className="stat-icon">▤</span><div><small>Due ทั้งหมด</small><b>{fmt(summary.items)}</b><em>รายการ</em></div></article>
         <article className="stat-tile green"><span className="stat-icon">✓</span><div><small>ส่งออกแล้ว</small><b>{fmt(summary.completed)}</b><em>รายการ · {share(summary.completed)}%</em></div></article>
         <article className="stat-tile orange"><span className="stat-icon">◷</span><div><small>ค้างตัดยอด</small><b>{fmt(remainingItems)}</b><em>รายการ</em></div></article>
-        <article className="stat-tile red"><span className="stat-icon">!</span><div><small>เกิน Due</small><b>{fmt(summary.over)}</b><em>รายการ</em></div></article>
+        <article className="stat-tile red"><span className="stat-icon">!</span><div><small>เกินดิวจัดส่ง</small><b>{fmt(overdueDues.length)}</b><em>รายการทั้งหมด</em></div></article>
       </div>
 
       <div className="home-grid">
@@ -2280,7 +2367,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           {summary.items ? <>
             <div className="chart-body">
             <div className="donut-wrap">
-              <svg viewBox="0 0 120 120" className="donut-svg" role="img" aria-label={`ส่งออกครบ ${summary.completed} ค้างเหลือ ${remainingItems} เกิน Due ${summary.over} จากทั้งหมด ${summary.items} รายการ`}>
+              <svg viewBox="0 0 120 120" className="donut-svg" role="img" aria-label={`ส่งออกครบ ${summary.completed} ค้างเหลือ ${remainingItems} เกินดิวจัดส่ง ${summary.over} จากทั้งหมด ${summary.items} รายการ`}>
                 <circle className="donut-track" cx="60" cy="60" r="54" />
                 {arcs.map((arc) => <circle
                   key={arc.key}
@@ -2295,19 +2382,19 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
             <ul className="donut-legend">
               <li><i className="ok" /><span>ส่งออกครบ</span><b>{fmt(summary.completed)}</b><em>{share(summary.completed)}%</em></li>
               <li><i className="warn" /><span>ค้างเหลือ</span><b>{fmt(remainingItems)}</b><em>{share(remainingItems)}%</em></li>
-              <li><i className="crit" /><span>เกิน Due</span><b>{fmt(summary.over)}</b><em>{share(summary.over)}%</em></li>
+              <li><i className="crit" /><span>เกินดิวจัดส่ง</span><b>{fmt(summary.over)}</b><em>{share(summary.over)}%</em></li>
             </ul>
             </div>
             <footer className="chart-foot">
-              <small>อัปเดตล่าสุด {formatDateTime(new Date().toISOString())}</small>
+              <small>อัปเดตล่าสุด {dueLoadedAt ? formatDateTime(dueLoadedAt) : "—"}</small>
               <button className="tiny-button" onClick={() => void loadDue()}>↻ รีเฟรช</button>
             </footer>
           </> : <Empty title="ยังไม่มีข้อมูล Due" text="นำเข้าแผนส่งงานเพื่อเริ่มดูภาพรวม" />}
         </Card>
 
         <Card title="Due ที่ค้างตัดยอด (รายการล่าสุด)" action={allowedPages.has("plan") ? <button className="text-button" onClick={() => go("plan")}>ดูทั้งหมด →</button> : undefined}>
-          {pendingDues.length ? <div className="pending-list">{pendingDues.map((due) => <button key={due.id} className="pending-row" onClick={() => go("plan")}>
-            <span className={`date-pill ${urgency(due.deliveryDate)}`}>{formatDate(due.deliveryDate)}</span>
+          {pendingDues.length ? <div className="pending-list">{pendingDues.map((due) => <button key={due.id} className={`pending-row ${overdueIds.has(due.id) ? "overdue" : ""}`} onClick={overdueIds.has(due.id) ? showOverduePlan : () => go("plan")} disabled={!allowedPages.has("plan")}>
+            <span className={`date-pill ${urgency(due)}`}>{formatDate(due.deliveryDate)} · {due.deliveryTime}</span>
             <span className="pending-main"><b>{due.materialCode}</b><small>{due.materialDescription || `${due.fact}${due.line ? ` / ${due.line}` : ""}`}</small></span>
             <span className="pending-qty">{fmt(Math.max(Number(due.reqQty) - Number(due.scannedQty), 0))}</span>
           </button>)}</div> : <Empty title="ไม่มี Due ค้าง" text="ทุกรายการตามตัวกรองปัจจุบันตัดยอดครบแล้ว" />}
@@ -2713,10 +2800,15 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }
 
   function renderPlan() {
-    const planTotalPages = Math.max(1, Math.ceil(filtered.length / planPageSize));
+    const prioritizedDues = filtered.slice().sort((left, right) =>
+      Number(isDeliveryOverdue(right)) - Number(isDeliveryOverdue(left))
+      || left.deliveryDate.localeCompare(right.deliveryDate)
+      || left.deliveryTime.localeCompare(right.deliveryTime),
+    );
+    const planTotalPages = Math.max(1, Math.ceil(prioritizedDues.length / planPageSize));
     const safePlanPage = Math.min(planPage, planTotalPages);
     const planStartIndex = (safePlanPage - 1) * planPageSize;
-    const paginatedDues = filtered.slice(planStartIndex, planStartIndex + planPageSize);
+    const paginatedDues = prioritizedDues.slice(planStartIndex, planStartIndex + planPageSize);
     const planPageButtons: Array<number | "…"> = [];
     for (let current = 1; current <= planTotalPages; current += 1) {
       if (current === 1 || current === planTotalPages || Math.abs(current - safePlanPage) <= 1) planPageButtons.push(current);
@@ -2729,11 +2821,14 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
 
     return <div className="plan-home">
       <input ref={fileInput} type="file" accept=".xlsx,.xls" hidden onChange={parseExcel} />
+      {overdueDues.length > 0 && <button className="overdue-alert plan-overdue-alert" onClick={showOverduePlan}>
+        <span>!</span><div><b>แจ้งเตือนงานเกินดิวจัดส่ง {fmt(overdueDues.length)} รายการ</b><small>ระบบเรียงรายการที่เกินวันและเวลาจัดส่งไว้ด้านบน กดเพื่อล้างตัวกรองและดูทั้งหมด</small></div><strong>แสดงทั้งหมด →</strong>
+      </button>}
       <div className="plan-top-row">
         <article className="plan-stat blue"><span>▤</span><div><small>แผนทั้งหมด</small><b>{fmt(summary.items)}</b><em>รายการ</em></div></article>
         <article className="plan-stat green"><span>✓</span><div><small>ครบตามแผน</small><b>{fmt(summary.completed)}</b><em>รายการ</em></div></article>
         <article className="plan-stat orange"><span>◷</span><div><small>คงเหลือ</small><b>{fmt(summary.partial + summary.pending)}</b><em>รายการ</em></div></article>
-        <article className="plan-stat red"><span>!</span><div><small>เกิน Due</small><b>{fmt(summary.over)}</b><em>รายการ</em></div></article>
+        <article className="plan-stat red"><span>!</span><div><small>เกินดิวจัดส่ง</small><b>{fmt(overdueDues.length)}</b><em>รายการทั้งหมด</em></div></article>
         <button className="plan-import-button" onClick={() => fileInput.current?.click()}>⇧ นำเข้าแผนส่งงาน Excel</button>
       </div>
 
@@ -2756,7 +2851,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <div className="plan-modern-body">{paginatedDues.map((due) => {
             const image = partImages.find((item) => item.materialCode === due.materialCode);
             const importRow = payload.imports.find((item) => item.id === due.importId);
-            return <div className="plan-modern-row" key={due.id}>
+            return <div className={`plan-modern-row ${isDeliveryOverdue(due) ? "overdue" : ""}`} key={due.id}>
               <span><b>{formatDate(due.deliveryDate)}</b><small>{due.shop || "—"}</small></span>
               <span><b>{due.fact}</b><small>{due.line || due.shop || "—"}</small></span>
               <span><b>{due.deliveryTime}</b></span>
@@ -2783,7 +2878,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const selectedArrangeDue = payload.dues.find((due) => String(due.id) === effectiveArrangeDueId);
     if (scanMode === "arrange") {
       const completedCount = payload.dues.filter((due) => Number(due.scannedQty) >= Number(due.reqQty)).length;
-      const overdueCount = payload.dues.filter((due) => dueDeadlinePassed(due) && Number(due.scannedQty) < Number(due.reqQty)).length;
+      const overdueCount = payload.dues.filter((due) => isDeliveryOverdue(due) && Number(due.scannedQty) < Number(due.reqQty)).length;
       const remainingCount = payload.dues.filter((due) => Number(due.scannedQty) < Number(due.reqQty)).length;
       const needle = arrangeDueSearch.trim().toLowerCase();
       const arrangeRows = arrangeableDues.filter((due) => !needle || [due.materialCode, due.materialDescription, due.doNo, due.fact, due.line, due.site, formatDate(due.deliveryDate), due.deliveryTime].join(" ").toLowerCase().includes(needle));
@@ -2806,7 +2901,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <article className="arrange-color-card blue" style={{ background: "linear-gradient(135deg,#e4f1ff 0%,#b9d8ff 100%)", borderColor: "#8fbdff" }}><span style={{ background: "linear-gradient(145deg,#48aaff,#075fe0)" }}>▦</span><div><small>งานทั้งหมด</small><b>{fmt(payload.dues.length)}</b><em>รายการ</em></div></article>
           <article className="arrange-color-card green" style={{ background: "linear-gradient(135deg,#e0faeb 0%,#abeac7 100%)", borderColor: "#7bd6a5" }}><span style={{ background: "linear-gradient(145deg,#50dc96,#08a455)" }}>✓</span><div><small>ครบตามแผน</small><b>{fmt(completedCount)}</b><em>รายการ</em></div></article>
           <article className="arrange-color-card orange" style={{ background: "linear-gradient(135deg,#fff3d4 0%,#ffd58a 100%)", borderColor: "#f3b94f" }}><span style={{ background: "linear-gradient(145deg,#ffc653,#ee8200)" }}>◷</span><div><small>คงเหลือ</small><b>{fmt(remainingCount)}</b><em>รายการ</em></div></article>
-          <article className="arrange-color-card red" style={{ background: "linear-gradient(135deg,#ffe7eb 0%,#ffb5c1 100%)", borderColor: "#f28a9c" }}><span style={{ background: "linear-gradient(145deg,#ff7182,#df263f)" }}>!</span><div><small>เกิน Due</small><b>{fmt(overdueCount)}</b><em>รายการ</em></div></article>
+          <article className="arrange-color-card red" style={{ background: "linear-gradient(135deg,#ffe7eb 0%,#ffb5c1 100%)", borderColor: "#f28a9c" }}><span style={{ background: "linear-gradient(145deg,#ff7182,#df263f)" }}>!</span><div><small>เกินดิวจัดส่ง</small><b>{fmt(overdueCount)}</b><em>รายการ</em></div></article>
           <article className="arrange-brand-card"><span>◇</span><div><b>จัดงานด้วย KIT Tag</b><small>เลือก Due แล้วสแกน Tag เพื่อบันทึกงานรอขายออก</small></div></article>
         </div>
 
@@ -2867,7 +2962,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
                 <td data-label="ต้องจัด" className="num"><b>{fmt(due.reqQty)}</b></td>
                 <td data-label="จัดแล้ว" className="num"><b>{fmt(due.arrangedQty || 0)}</b></td>
                 <td data-label="คงเหลือ" className="num"><b>{fmt(remaining)}</b></td>
-                <td data-label="สถานะ"><span className={`status ${dueDeadlinePassed(due) ? "over" : Number(due.arrangedQty || 0) > 0 ? "partial" : "completed"}`}>{dueDeadlinePassed(due) ? "เกิน Due" : Number(due.arrangedQty || 0) > 0 ? "จัดบางส่วน" : "พร้อมจัด"}</span></td>
+                <td data-label="สถานะ"><span className={`status ${isDeliveryOverdue(due) ? "over" : Number(due.arrangedQty || 0) > 0 ? "partial" : "completed"}`}>{isDeliveryOverdue(due) ? "เกินดิวจัดส่ง" : Number(due.arrangedQty || 0) > 0 ? "จัดบางส่วน" : "พร้อมจัด"}</span></td>
               </tr>;
             })}
           </tbody></table></div> : <Empty title="ไม่มีรายการที่ต้องจัด" text="ทุกรายการจัดครบแล้ว หรือไม่พบข้อมูลตามคำค้นหา" />}
@@ -2938,7 +3033,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       ready: { tone: "pass", icon: "✓", title: "ตรงกับงานที่ต้องส่งออก" },
       ready_noimg: { tone: "pass", icon: "✓", title: "ตรงกับงาน (ยังไม่มีรูป master)" },
       short: { tone: "warn", icon: "!", title: "งานที่จัดรอไว้ไม่พอ" },
-      over: { tone: "warn", icon: "!", title: "จำนวนเกิน Due" },
+      over: { tone: "warn", icon: "!", title: "จำนวนเกินแผน Due" },
       no_due: { tone: "fail", icon: "✕", title: "ไม่พบงานที่ตรงกับ Tag นี้" },
       ambiguous: { tone: "fail", icon: "✕", title: "พบ Due ซ้ำมากกว่า 1 รายการ" },
       already: { tone: "fail", icon: "✕", title: "Tag นี้ขายออกไปแล้ว" },
@@ -3090,7 +3185,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const full = exported.filter((due) => stateOf(due) === "completed").length;
     const part = exported.filter((due) => stateOf(due) === "partial").length;
     const over = exported.filter((due) => stateOf(due) === "over").length;
-    return <><Card><Filters /></Card><div className="metrics five"><MetricCard tone="blue" icon="▱" label="ส่งออกทั้งหมด" value={fmt(exported.length)} suffix="รายการ" /><MetricCard tone="green" icon="✓" label="ส่งออกครบ" value={fmt(full)} suffix="รายการ" /><MetricCard tone="orange" icon="◷" label="บางส่วน" value={fmt(part)} suffix="รายการ" /><MetricCard tone="red" icon="×" label="เกิน Due" value={fmt(over)} suffix="รายการ" /><MetricCard tone="purple" icon="□" label="รวมจำนวน" value={fmt(exported.reduce((sum, due) => sum + Number(due.scannedQty), 0))} suffix="ชิ้น" /></div><Card title="รายการส่งออก" action={<button className="button secondary" onClick={exportCsv}>⇩ ส่งออก CSV</button>}><DueTable rows={filtered.filter((due) => Number(due.scannedQty) > 0)} /></Card></>;
+    return <><Card><Filters /></Card><div className="metrics five"><MetricCard tone="blue" icon="▱" label="ส่งออกทั้งหมด" value={fmt(exported.length)} suffix="รายการ" /><MetricCard tone="green" icon="✓" label="ส่งออกครบ" value={fmt(full)} suffix="รายการ" /><MetricCard tone="orange" icon="◷" label="บางส่วน" value={fmt(part)} suffix="รายการ" /><MetricCard tone="red" icon="×" label="เกินดิวจัดส่ง" value={fmt(over)} suffix="รายการ" /><MetricCard tone="purple" icon="□" label="รวมจำนวน" value={fmt(exported.reduce((sum, due) => sum + Number(due.scannedQty), 0))} suffix="ชิ้น" /></div><Card title="รายการส่งออก" action={<button className="button secondary" onClick={exportCsv}>⇩ ส่งออก CSV</button>}><DueTable rows={filtered.filter((due) => Number(due.scannedQty) > 0)} /></Card></>;
   }
 
   function renderReports() {
@@ -3098,9 +3193,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     return <>
       <Card><Filters /></Card>
       <Card title="ส่งออกรายงานตามตัวกรองปัจจุบัน"><div className="report-export-actions"><div><b>{fmt(filtered.length)} รายการ</b><small>{filterDate ? formatDate(filterDate) : "ทุกวันที่"} · {filterFact === "ALL" ? "ทุก FAC" : filterFact} · {filterTime === "ALL" ? "ทุกเวลา" : filterTime}</small></div><button className="export-button excel" onClick={() => void exportReportExcel()}><span>▦</span><b>Excel</b><small>.xlsx</small></button><button className="export-button pdf" onClick={exportReportPdf}><span>▤</span><b>PDF</b><small>พิมพ์ / บันทึก</small></button><button className="export-button csv" onClick={exportReportCsv}><span>≡</span><b>CSV</b><small>.csv</small></button></div></Card>
-      <div className="metrics five"><MetricCard tone="blue" icon="◈" label="แผนทั้งหมด" value={fmt(summary.items)} suffix="รายการ" /><MetricCard tone="green" icon="✓" label="ครบตามแผน" value={fmt(summary.completed)} suffix="รายการ" /><MetricCard tone="orange" icon="◷" label="คงเหลือ" value={fmt(summary.partial + summary.pending)} suffix="รายการ" /><MetricCard tone="red" icon="!" label="เกิน Due" value={fmt(summary.over)} suffix="รายการ" /><MetricCard tone="purple" icon="□" label="ส่งแล้วรวม" value={fmt(summary.sent)} suffix="ชิ้น" /></div>
+      <div className="metrics five"><MetricCard tone="blue" icon="◈" label="แผนทั้งหมด" value={fmt(summary.items)} suffix="รายการ" /><MetricCard tone="green" icon="✓" label="ครบตามแผน" value={fmt(summary.completed)} suffix="รายการ" /><MetricCard tone="orange" icon="◷" label="คงเหลือ" value={fmt(summary.partial + summary.pending)} suffix="รายการ" /><MetricCard tone="red" icon="!" label="เกินดิวจัดส่ง" value={fmt(summary.over)} suffix="รายการ" /><MetricCard tone="purple" icon="□" label="ส่งแล้วรวม" value={fmt(summary.sent)} suffix="ชิ้น" /></div>
       <div className="report-grid">
-        <Card title="สัดส่วนสถานะการส่งงาน"><div className="donut-layout"><div className="donut" style={{ "--complete": `${completePct * 3.6}deg` } as React.CSSProperties}><span><b>{summary.items}</b>รายการ</span></div><div className="legend"><p><i className="green" />ครบตามแผน <b>{summary.completed}</b></p><p><i className="orange" />คงเหลือ <b>{summary.partial + summary.pending}</b></p><p><i className="red" />เกิน Due <b>{summary.over}</b></p></div></div></Card>
+        <Card title="สัดส่วนสถานะการส่งงาน"><div className="donut-layout"><div className="donut" style={{ "--complete": `${completePct * 3.6}deg` } as React.CSSProperties}><span><b>{summary.items}</b>รายการ</span></div><div className="legend"><p><i className="green" />ครบตามแผน <b>{summary.completed}</b></p><p><i className="orange" />คงเหลือ <b>{summary.partial + summary.pending}</b></p><p><i className="red" />เกินดิวจัดส่ง <b>{summary.over}</b></p></div></div></Card>
         <Card title="ส่งออกตาม FAC / Line"><div className="bar-chart">{facStats.length ? facStats.slice(0, 7).map((item) => <div key={item.fact}><b>{item.fact}</b><span><i style={{ width: `${Math.max(4, item.items / maxFac * 100)}%` }} /></span><strong>{item.items}</strong></div>) : <Empty />}</div></Card>
       </div>
       <div className="split-grid">
@@ -3246,7 +3341,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
-      <header className="control-topbar"><button className="menu-button" onClick={() => setMenuOpen(true)}>☰</button><div><h1>{activeNav.label}</h1><p>หน้าหลัก <span>›</span> {PAGE_SUBTITLE[page]}</p></div><div className="top-user"><button className="notification">♧<i>{notice ? "1" : "0"}</i></button><span className="user-avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div><b>{user.displayName}</b><small>{ROLE_LABELS[user.role] || user.role}</small></div><a href={signOutPath} onClick={signOut}>ออกจากระบบ</a></div></header>
+      <header className="control-topbar"><button className="menu-button" onClick={() => setMenuOpen(true)}>☰</button><div><h1>{activeNav.label}</h1><p>หน้าหลัก <span>›</span> {PAGE_SUBTITLE[page]}</p></div><div className="top-user"><button className="notification" onClick={showOverduePlan} disabled={!overdueDues.length || !allowedPages.has("plan")} aria-label={`งานเกินดิวจัดส่ง ${overdueDues.length} รายการ`}>♧<i>{fmt(overdueDues.length)}</i></button><span className="user-avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div><b>{user.displayName}</b><small>{ROLE_LABELS[user.role] || user.role}</small></div><a href={signOutPath} onClick={signOut}>ออกจากระบบ</a></div></header>
       <div className="control-content">
         {notice && <div className={`toast ${notice.type} auto-dismiss`}><span>{notice.type === "success" ? "✓" : "!"}</span><p>{notice.text}</p><button onClick={() => setNotice(null)}>×</button></div>}
         {error && <div className="toast error"><span>!</span><p>{error}</p><button onClick={() => void loadDue()}>ลองใหม่</button></div>}
