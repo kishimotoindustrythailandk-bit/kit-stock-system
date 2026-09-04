@@ -1943,9 +1943,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     if (!item) return setNotice({ type: "error", text: "ไม่พบข้อมูลใบขอเบิกสำหรับพิมพ์" });
     const popup = window.open("", "_blank", "width=900,height=900");
     if (!popup) return setNotice({ type: "error", text: "เบราว์เซอร์บล็อกหน้าพิมพ์ กรุณาอนุญาต Pop-up" });
-    const safe = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
-      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;",
-    }[character] || character));
+    const entities: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" };
+    const safe = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (character) => entities[character] || character);
     const reason = item.reasonType === "defect" ? "งานเสีย" : item.reasonType === "shortage" ? "งานขาด" : "อื่น ๆ";
     popup.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${safe(issue.noticeNo)}</title><style>
       @page{size:A4;margin:12mm}*{box-sizing:border-box}body{font-family:Arial,"Noto Sans Thai",sans-serif;color:#10234a;margin:0}.sheet{border:2px solid #1767df;border-radius:18px;overflow:hidden}.head{padding:24px 28px;color:#fff;background:linear-gradient(135deg,#096fe8,#753fe0);display:flex;justify-content:space-between;align-items:center}.head h1{margin:0 0 4px;font-size:28px}.head p,.head b{margin:0}.body{padding:28px}.part{background:#eef5ff;border-radius:14px;padding:22px;margin-bottom:20px}.part small{color:#65789d}.part h2{font-size:28px;margin:6px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.cell{border:1px solid #d9e4f6;border-radius:12px;padding:14px}.cell small{display:block;color:#6f7d99;margin-bottom:6px}.qty{margin:22px 0;display:grid;grid-template-columns:repeat(3,1fr);text-align:center;border:1px solid #d9e4f6;border-radius:14px;overflow:hidden}.qty div{padding:16px;border-right:1px solid #d9e4f6}.qty div:last-child{border:0}.qty b{display:block;font-size:24px;color:#0963da}.sign{display:grid;grid-template-columns:1fr 1fr;gap:50px;margin-top:70px;text-align:center}.sign span{display:block;border-top:1px solid #7786a5;padding-top:8px}.foot{padding:15px 28px;background:#f5f8fd;color:#6f7d99;font-size:12px}@media print{button{display:none}}</style></head><body>
