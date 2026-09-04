@@ -81,6 +81,15 @@ type DuePayload = { dues: DueLine[]; imports: DueImport[]; scans: DueScan[]; rec
 type SystemUser = { id: number; employeeCode: string; displayName: string; email: string; role: string; active: boolean; permissions: PageKey[]; createdAt?: string };
 type PartImageMapping = { materialCode: string; originalName: string; contentType: string; updatedByName: string; updatedAt: string; materialDescription?: string };
 type StockPart = { materialCode: string; partName: string; customer: string; location: string; standardQty: number; active: boolean };
+type PartImportItem = Pick<StockPart, "materialCode" | "partName" | "customer" | "location" | "standardQty">;
+type PartBundleRow = { part: PartImportItem; masterFile?: File; actualFile?: File };
+type PartBundlePreview = {
+  fileName: string;
+  rows: PartBundleRow[];
+  unmatchedMaster: string[];
+  unmatchedActual: string[];
+  duplicateImages: string[];
+};
 type StockTag = { id: number; tagId: string; materialCode: string; partName: string; customer: string; qty: number; remainingQty: number; reservedQty: number; receivedQty?: number; ngQty?: number; jobNo: string; productionDate: string; status: string; printedByName: string; receivedByName: string; receivedAt?: string; createdAt: string; payload?: string; boxNo?: number; boxCount?: number; deliveryQty?: number; location?: string };
 type StockReceivePreview = { action: "receive_preview"; rawPayload: string; tag: StockTag; master: { materialCode: string; partName: string; customer: string; hasImage: boolean } };
 type StockAllocation = { id: number; customerTagId: string; stockTagCode: string; materialCode: string; qty: number; status: string; reservedByName: string; reservedAt: string; dispatchedByName: string; dispatchedAt?: string };
@@ -474,6 +483,13 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [bulkImageRunning, setBulkImageRunning] = useState(false);
   const [bulkImageProgress, setBulkImageProgress] = useState({ done: 0, total: 0 });
   const [bulkImageFailed, setBulkImageFailed] = useState<Array<{ name: string; reason: string }>>([]);
+  const [partBundleExcel, setPartBundleExcel] = useState<File | null>(null);
+  const [partBundleMasterFiles, setPartBundleMasterFiles] = useState<File[]>([]);
+  const [partBundleActualFiles, setPartBundleActualFiles] = useState<File[]>([]);
+  const [partBundlePreview, setPartBundlePreview] = useState<PartBundlePreview | null>(null);
+  const [partBundleRunning, setPartBundleRunning] = useState(false);
+  const [partBundleProgress, setPartBundleProgress] = useState({ done: 0, total: 0 });
+  const [partBundleFailed, setPartBundleFailed] = useState<Array<{ name: string; reason: string }>>([]);
   const [partImageNeedle, setPartImageNeedle] = useState("");
   const [deletingImportId, setDeletingImportId] = useState<number | null>(null);
   const [stock, setStock] = useState<StockPayload>({ parts: [], tags: [], allocations: [], picks: [], dispatchLinks: [], jobClosures: [], manualReceipts: [], countAdjustments: [], countAdjustmentLines: [] });
@@ -526,6 +542,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [createdStockTags, setCreatedStockTags] = useState<StockTag[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
   const partFileInput = useRef<HTMLInputElement>(null);
+  const partBundleExcelInput = useRef<HTMLInputElement>(null);
+  const partBundleMasterInput = useRef<HTMLInputElement>(null);
+  const partBundleActualInput = useRef<HTMLInputElement>(null);
   const tagInput = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const tagResultRef = useRef<HTMLElement>(null);
@@ -1407,56 +1426,62 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     }
   }
 
+  async function parsePartExcel(selected: File): Promise<PartImportItem[]> {
+    if (!/\.xlsx?$/i.test(selected.name)) throw new Error("กรุณาเลือกไฟล์ Excel .xlsx หรือ .xls");
+    const xlsx = await import("xlsx");
+    const workbook = xlsx.read(await selected.arrayBuffer(), { type: "array", cellDates: true });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const grid = xlsx.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: "" });
+    const normalized = (value: unknown) => text(value).toLowerCase().replace(/[\s._/()\-]+/g, "");
+    const aliases = {
+      materialCode: ["partno", "material", "materialno", "materialcode", "partmaterialno", "itemno", "itemnumber", "รหัสpart", "พาร์ท", "รหัสชิ้นงาน"],
+      partName: ["partname", "materialdescription", "description", "itemname", "ชื่อชิ้นงาน", "รายละเอียด"],
+      customer: ["customer", "customername", "ลูกค้า"],
+      location: ["location", "locationcode", "storage", "bin", "rack", "โลเคชั่น", "ตำแหน่งจัดเก็บ", "สถานที่จัดเก็บ"],
+      standardQty: ["maxqtyperbox", "maxperbox", "packqty", "standardqty", "qtyperbox", "จำนวนสูงสุดต่อกล่อง", "ชิ้นต่อกล่อง", "จำนวนต่อกล่อง"],
+    };
+    const normalizedAliases = Object.fromEntries(
+      Object.entries(aliases).map(([key, values]) => [key, values.map(normalized)]),
+    ) as Record<keyof typeof aliases, string[]>;
+    const headerIndex = grid.findIndex((row) => {
+      const headers = row.map(normalized);
+      return normalizedAliases.materialCode.some((name) => headers.includes(name))
+        && normalizedAliases.partName.some((name) => headers.includes(name));
+    });
+    if (headerIndex < 0) throw new Error("ไม่พบหัวตาราง Part / Material No. (หรือ Item No.) และ Part Name ในไฟล์");
+    const headers = grid[headerIndex].map(normalized);
+    const columnIndex = (names: string[]) => headers.findIndex((header) => names.includes(header));
+    const indexes = {
+      materialCode: columnIndex(normalizedAliases.materialCode),
+      partName: columnIndex(normalizedAliases.partName),
+      customer: columnIndex(normalizedAliases.customer),
+      location: columnIndex(normalizedAliases.location),
+      standardQty: columnIndex(normalizedAliases.standardQty),
+    };
+    if (indexes.standardQty < 0) throw new Error("ไม่พบคอลัมน์ Max Qty per Box / จำนวนสูงสุดต่อกล่อง");
+    const byCode = new Map<string, PartImportItem>();
+    for (const row of grid.slice(headerIndex + 1)) {
+      const part = {
+        materialCode: text(row[indexes.materialCode]).toUpperCase(),
+        partName: text(row[indexes.partName]),
+        customer: indexes.customer >= 0 ? text(row[indexes.customer]) : "",
+        location: indexes.location >= 0 ? text(row[indexes.location]).toUpperCase() : "",
+        standardQty: number(row[indexes.standardQty]),
+      };
+      if (part.materialCode && part.partName && part.standardQty > 0) byCode.set(part.materialCode, part);
+    }
+    const parts = [...byCode.values()];
+    if (!parts.length) throw new Error("ไม่พบข้อมูล Part ที่มี Part No., Part Name และจำนวนต่อกล่องครบถ้วน");
+    return parts;
+  }
+
   async function importPartExcel(event: ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0];
     if (!selected) return;
     setStockSaving(true);
     setNotice(null);
     try {
-      if (!/\.xlsx?$/i.test(selected.name)) throw new Error("กรุณาเลือกไฟล์ Excel .xlsx หรือ .xls");
-      const xlsx = await import("xlsx");
-      const workbook = xlsx.read(await selected.arrayBuffer(), { type: "array", cellDates: true });
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      const grid = xlsx.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: "" });
-      const normalized = (value: unknown) => text(value).toLowerCase().replace(/[\s._/()\-]+/g, "");
-      const aliases = {
-        materialCode: ["partno", "material", "materialno", "materialcode", "partmaterialno", "รหัสpart", "พาร์ท", "รหัสชิ้นงาน"],
-        partName: ["partname", "materialdescription", "description", "ชื่อชิ้นงาน", "รายละเอียด"],
-        customer: ["customer", "customername", "ลูกค้า"],
-        location: ["location", "locationcode", "storage", "bin", "rack", "โลเคชั่น", "ตำแหน่งจัดเก็บ", "สถานที่จัดเก็บ"],
-        standardQty: ["maxqtyperbox", "maxperbox", "packqty", "standardqty", "qtyperbox", "จำนวนสูงสุดต่อกล่อง", "ชิ้นต่อกล่อง", "จำนวนต่อกล่อง"],
-      };
-      const normalizedAliases = Object.fromEntries(
-        Object.entries(aliases).map(([key, values]) => [key, values.map(normalized)]),
-      ) as Record<keyof typeof aliases, string[]>;
-      const headerIndex = grid.findIndex((row) => {
-        const headers = row.map(normalized);
-        return normalizedAliases.materialCode.some((name) => headers.includes(name))
-          && normalizedAliases.partName.some((name) => headers.includes(name));
-      });
-      if (headerIndex < 0) {
-        throw new Error("ไม่พบหัวตาราง Part / Material No. และ Part Name ในไฟล์");
-      }
-      const headers = grid[headerIndex].map(normalized);
-      const columnIndex = (names: string[]) => headers.findIndex((header) => names.includes(header));
-      const indexes = {
-        materialCode: columnIndex(normalizedAliases.materialCode),
-        partName: columnIndex(normalizedAliases.partName),
-        customer: columnIndex(normalizedAliases.customer),
-        location: columnIndex(normalizedAliases.location),
-        standardQty: columnIndex(normalizedAliases.standardQty),
-      };
-      if (indexes.standardQty < 0) {
-        throw new Error("ไม่พบคอลัมน์ Max Qty per Box / จำนวนสูงสุดต่อกล่อง");
-      }
-      const parts = grid.slice(headerIndex + 1).map((row) => ({
-        materialCode: text(row[indexes.materialCode]).toUpperCase(),
-        partName: text(row[indexes.partName]),
-        customer: indexes.customer >= 0 ? text(row[indexes.customer]) : "",
-        location: indexes.location >= 0 ? text(row[indexes.location]) : "",
-        standardQty: number(row[indexes.standardQty]),
-      })).filter((part) => part.materialCode && part.partName && part.standardQty > 0);
-      if (!parts.length) throw new Error("ไม่พบข้อมูล Part ที่มี Part No., Part Name และจำนวนต่อกล่องครบถ้วน");
+      const parts = await parsePartExcel(selected);
       const response = await fetch("/api/stock", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1471,6 +1496,116 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     } finally {
       setStockSaving(false);
       if (partFileInput.current) partFileInput.current.value = "";
+    }
+  }
+
+  function matchBundleImages(files: File[], parts: PartImportItem[]) {
+    const codes = parts.map((part) => part.materialCode).sort((a, b) => b.length - a.length);
+    const matched = new Map<string, File>();
+    const unmatched: string[] = [];
+    const duplicates: string[] = [];
+    for (const file of files) {
+      if (!/^image\/(jpeg|png|webp)$/i.test(file.type) || file.size > 5 * 1024 * 1024) {
+        unmatched.push(`${file.name} — รองรับ JPG, PNG, WebP ขนาดไม่เกิน 5MB`);
+        continue;
+      }
+      const stem = materialCodeFromFileName(file.name);
+      const code = codes.find((item) => stem === item || stem.startsWith(`${item}_`) || stem.startsWith(`${item}-MASTER`) || stem.startsWith(`${item}-ACTUAL`) || stem.startsWith(`${item}-BOX`) || stem.startsWith(`${item}-SAMPLE`));
+      if (!code) {
+        unmatched.push(`${file.name} — ไม่พบ Part No. ที่ตรงกันใน Excel`);
+        continue;
+      }
+      const previous = matched.get(code);
+      if (previous) {
+        duplicates.push(`${code}: ${previous.name}, ${file.name}`);
+        continue;
+      }
+      matched.set(code, file);
+    }
+    return { matched, unmatched, duplicates };
+  }
+
+  async function previewPartBundle(event: FormEvent) {
+    event.preventDefault();
+    setPartBundleFailed([]);
+    setNotice(null);
+    try {
+      if (!partBundleExcel) throw new Error("กรุณาเลือกไฟล์ Excel ทะเบียน Part");
+      if (!partBundleMasterFiles.length && !partBundleActualFiles.length) throw new Error("กรุณาเลือกรูปตัวอย่างหรือรูปชิ้นงานในกล่องอย่างน้อย 1 รูป");
+      const parts = await parsePartExcel(partBundleExcel);
+      const master = matchBundleImages(partBundleMasterFiles, parts);
+      const actual = matchBundleImages(partBundleActualFiles, parts);
+      setPartBundlePreview({
+        fileName: partBundleExcel.name,
+        rows: parts.map((part) => ({ part, masterFile: master.matched.get(part.materialCode), actualFile: actual.matched.get(part.materialCode) })),
+        unmatchedMaster: master.unmatched,
+        unmatchedActual: actual.unmatched,
+        duplicateImages: [...master.duplicates.map((item) => `รูปตัวอย่าง · ${item}`), ...actual.duplicates.map((item) => `รูปในกล่อง · ${item}`)],
+      });
+    } catch (caught) {
+      setPartBundlePreview(null);
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบไฟล์ไม่สำเร็จ" });
+    }
+  }
+
+  function resetPartBundle() {
+    setPartBundleExcel(null);
+    setPartBundleMasterFiles([]);
+    setPartBundleActualFiles([]);
+    setPartBundlePreview(null);
+    setPartBundleFailed([]);
+    setPartBundleProgress({ done: 0, total: 0 });
+    if (partBundleExcelInput.current) partBundleExcelInput.current.value = "";
+    if (partBundleMasterInput.current) partBundleMasterInput.current.value = "";
+    if (partBundleActualInput.current) partBundleActualInput.current.value = "";
+  }
+
+  async function importPartBundle() {
+    if (!partBundlePreview || partBundleRunning) return;
+    setPartBundleRunning(true);
+    setPartBundleFailed([]);
+    setNotice(null);
+    const uploads = partBundlePreview.rows.flatMap((row) => [
+      ...(row.masterFile ? [{ materialCode: row.part.materialCode, file: row.masterFile, slot: "master" as const }] : []),
+      ...(row.actualFile ? [{ materialCode: row.part.materialCode, file: row.actualFile, slot: "actual" as const }] : []),
+    ]);
+    setPartBundleProgress({ done: 0, total: uploads.length + 1 });
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "import_parts", parts: partBundlePreview.rows.map((row) => row.part) }),
+      });
+      const data = await response.json() as { imported?: number; error?: string };
+      if (!response.ok) throw new Error(data.error || "นำเข้าทะเบียน Part ไม่สำเร็จ");
+      setPartBundleProgress({ done: 1, total: uploads.length + 1 });
+      const failed: Array<{ name: string; reason: string }> = [];
+      for (const [index, upload] of uploads.entries()) {
+        try {
+          const form = new FormData();
+          form.set("materialCode", upload.materialCode);
+          form.set("slot", upload.slot);
+          form.set("image", upload.file);
+          const imageResponse = await fetch("/api/part-images", { method: "POST", body: form });
+          const imageData = await imageResponse.json() as { error?: string };
+          if (!imageResponse.ok) throw new Error(imageData.error || "อัปโหลดรูปไม่สำเร็จ");
+        } catch (caught) {
+          failed.push({ name: `${upload.materialCode} · ${upload.file.name}`, reason: caught instanceof Error ? caught.message : "อัปโหลดรูปไม่สำเร็จ" });
+        }
+        setPartBundleProgress({ done: index + 2, total: uploads.length + 1 });
+      }
+      setPartBundleFailed(failed);
+      await Promise.all([loadStock(), loadPartImages()]);
+      if (failed.length) {
+        setNotice({ type: "error", text: `บันทึก Part สำเร็จ ${fmt(data.imported || 0)} รายการ แต่อัปโหลดรูปไม่สำเร็จ ${fmt(failed.length)} รูป` });
+      } else {
+        setNotice({ type: "success", text: `นำเข้า Part ${fmt(data.imported || 0)} รายการ พร้อมรูป ${fmt(uploads.length)} รูปเรียบร้อย` });
+        resetPartBundle();
+      }
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "นำเข้า Part พร้อมรูปไม่สำเร็จ" });
+    } finally {
+      setPartBundleRunning(false);
     }
   }
 
@@ -2217,6 +2352,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const formCode = stockPartForm.materialCode.trim().toUpperCase();
     const formImage = partImages.find((item) => item.materialCode === formCode);
     const formActualImage = partActualImages.find((item) => item.materialCode === formCode);
+    const bundleMasterMatched = partBundlePreview?.rows.filter((row) => row.masterFile).length || 0;
+    const bundleActualMatched = partBundlePreview?.rows.filter((row) => row.actualFile).length || 0;
+    const bundleWarningCount = (partBundlePreview?.unmatchedMaster.length || 0) + (partBundlePreview?.unmatchedActual.length || 0) + (partBundlePreview?.duplicateImages.length || 0);
     const editPart = (part: StockPart) => {
       setStockPartForm({ materialCode: part.materialCode, partName: part.partName, customer: part.customer, location: part.location || "", standardQty: String(part.standardQty || "") });
       setPartImageCode(part.materialCode);
@@ -2238,7 +2376,54 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         <article className="part-stat purple"><span>◇</span><div><small>มีรูปชิ้นงาน</small><b>{fmt(partImages.length)}</b><em>รายการ</em></div></article>
       </div>
 
-      {user.role === "admin" && <Card className="part-editor-card" title={stockPartForm.materialCode ? "แก้ไข Part" : "เพิ่ม / แก้ไข Part"} action={<div className="user-actions"><input ref={partFileInput} type="file" accept=".xlsx,.xls" hidden onChange={importPartExcel} /><button className="button secondary" disabled={stockSaving} onClick={() => partFileInput.current?.click()}>⇧ นำเข้า Part Excel</button><button className="button primary" form="part-editor-form" disabled={stockSaving}>▣ {stockSaving ? "กำลังบันทึก…" : "บันทึก Part"}</button></div>}>
+      {user.role === "admin" && <Card className="part-bundle-card" title={<span className="part-bundle-title"><i>⇧</i><span>นำเข้าทะเบียน Part พร้อมรูป<small>เลือก Excel และรูปหลาย Part ส่งเข้าระบบพร้อมกัน</small></span></span>} action={partBundlePreview && <span className="part-bundle-ready">✓ ตรวจสอบแล้ว {fmt(partBundlePreview.rows.length)} Part</span>}>
+        <form className="part-bundle-form" onSubmit={previewPartBundle}>
+          <label className={partBundleExcel ? "selected" : ""}>
+            <span className="part-bundle-icon excel">X</span>
+            <span><b>1. ไฟล์ทะเบียน Part</b><small>{partBundleExcel?.name || "Excel .xlsx หรือ .xls"}</small></span>
+            <input ref={partBundleExcelInput} type="file" accept=".xlsx,.xls" disabled={partBundleRunning} onChange={(e) => { setPartBundleExcel(e.target.files?.[0] || null); setPartBundlePreview(null); setPartBundleFailed([]); }} />
+          </label>
+          <label className={partBundleMasterFiles.length ? "selected" : ""}>
+            <span className="part-bundle-icon master">▧</span>
+            <span><b>2. รูปตัวอย่าง (Master)</b><small>{partBundleMasterFiles.length ? `${fmt(partBundleMasterFiles.length)} รูป` : "เลือกหลายรูปได้ · ตั้งชื่อเป็น Part No."}</small></span>
+            <input ref={partBundleMasterInput} type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={partBundleRunning} onChange={(e) => { setPartBundleMasterFiles([...(e.target.files || [])]); setPartBundlePreview(null); setPartBundleFailed([]); }} />
+          </label>
+          <label className={partBundleActualFiles.length ? "selected" : ""}>
+            <span className="part-bundle-icon actual">◈</span>
+            <span><b>3. รูปชิ้นงานในกล่อง</b><small>{partBundleActualFiles.length ? `${fmt(partBundleActualFiles.length)} รูป` : "ไม่บังคับ · ใช้เทียบตอนขายออก"}</small></span>
+            <input ref={partBundleActualInput} type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={partBundleRunning} onChange={(e) => { setPartBundleActualFiles([...(e.target.files || [])]); setPartBundlePreview(null); setPartBundleFailed([]); }} />
+          </label>
+          <button className="button primary part-bundle-check" disabled={partBundleRunning || !partBundleExcel || (!partBundleMasterFiles.length && !partBundleActualFiles.length)}>⌕ ตรวจสอบและจับคู่</button>
+        </form>
+        <p className="part-bundle-help">ชื่อรูปต้องตรงกับ Part No. ใน Excel เช่น <code>BA04U385G05-F.jpg</code> · รองรับ JPG, PNG, WebP ไม่เกิน 5MB ต่อรูป</p>
+
+        {partBundlePreview && <div className="part-bundle-preview">
+          <div className="part-bundle-summary">
+            <span className="blue"><small>Part จาก Excel</small><b>{fmt(partBundlePreview.rows.length)}</b></span>
+            <span className="purple"><small>จับคู่รูป Master</small><b>{fmt(bundleMasterMatched)}</b></span>
+            <span className="green"><small>จับคู่รูปในกล่อง</small><b>{fmt(bundleActualMatched)}</b></span>
+            <span className={bundleWarningCount ? "orange" : "green"}><small>ต้องตรวจสอบ</small><b>{fmt(bundleWarningCount)}</b></span>
+          </div>
+          <div className="part-bundle-table">
+            <div className="part-bundle-head"><span>Part No.</span><span>ชื่อชิ้นงาน / Location</span><span>รูป Master</span><span>รูปในกล่อง</span></div>
+            <div className="part-bundle-body">{partBundlePreview.rows.slice(0, 100).map((row) => <div className="part-bundle-row" key={row.part.materialCode}>
+              <span><b>{row.part.materialCode}</b><small>{fmt(row.part.standardQty)} ชิ้น/กล่อง</small></span>
+              <span><b>{row.part.partName}</b><small>{row.part.location || "ไม่ระบุ Location"}</small></span>
+              <span className={row.masterFile ? "matched" : "missing"}>{row.masterFile ? `✓ ${row.masterFile.name}` : "— ไม่มีรูป"}</span>
+              <span className={row.actualFile ? "matched" : "optional"}>{row.actualFile ? `✓ ${row.actualFile.name}` : "— ไม่ได้เลือก"}</span>
+            </div>)}</div>
+            {partBundlePreview.rows.length > 100 && <p className="part-bundle-more">และอีก {fmt(partBundlePreview.rows.length - 100)} รายการ</p>}
+          </div>
+          {bundleWarningCount > 0 && <div className="part-bundle-warnings"><b>ไฟล์ที่ต้องตรวจสอบก่อนนำเข้า</b><ul>{[...partBundlePreview.unmatchedMaster, ...partBundlePreview.unmatchedActual, ...partBundlePreview.duplicateImages].map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></div>}
+          {partBundleFailed.length > 0 && <div className="part-bundle-warnings failed"><b>รูปที่อัปโหลดไม่สำเร็จ</b><ul>{partBundleFailed.map((item) => <li key={item.name}><strong>{item.name}</strong> — {item.reason}</li>)}</ul></div>}
+          <div className="part-bundle-actions">
+            <button type="button" className="button secondary" disabled={partBundleRunning} onClick={resetPartBundle}>ล้างไฟล์</button>
+            <button type="button" className="button primary" disabled={partBundleRunning} onClick={() => void importPartBundle()}>{partBundleRunning ? `กำลังบันทึก ${fmt(partBundleProgress.done)}/${fmt(partBundleProgress.total)}…` : `✓ ยืนยันนำเข้า ${fmt(partBundlePreview.rows.length)} Part พร้อม ${fmt(bundleMasterMatched + bundleActualMatched)} รูป`}</button>
+          </div>
+        </div>}
+      </Card>}
+
+      {user.role === "admin" && <Card className="part-editor-card" title={stockPartForm.materialCode ? "แก้ไข Part" : "เพิ่ม / แก้ไข Part"} action={<div className="user-actions"><input ref={partFileInput} type="file" accept=".xlsx,.xls" hidden onChange={importPartExcel} /><button className="button secondary" disabled={stockSaving} onClick={() => partFileInput.current?.click()}>⇧ นำเข้า Part Excel (เฉพาะข้อมูล)</button><button className="button primary" form="part-editor-form" disabled={stockSaving}>▣ {stockSaving ? "กำลังบันทึก…" : "บันทึก Part"}</button></div>}>
         <form id="part-editor-form" className="part-editor-grid" onSubmit={saveStockPart}>
           <label><span>Part / Material No. *</span><input value={stockPartForm.materialCode} onChange={(e) => { const code=e.target.value.toUpperCase(); setStockPartForm((current) => ({ ...current, materialCode: code })); setPartImageCode(code); }} required /></label>
           <label><span>ชื่อชิ้นงาน *</span><input value={stockPartForm.partName} onChange={(e) => setStockPartForm((current) => ({ ...current, partName: e.target.value }))} required /></label>

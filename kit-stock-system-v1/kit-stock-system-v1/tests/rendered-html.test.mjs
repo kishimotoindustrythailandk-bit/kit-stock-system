@@ -207,6 +207,26 @@ test("imports Parts from Excel and prints complete Stock Tag data", async () => 
   assert.match(stockApi, /deliveryQty: totalQty/);
 });
 
+test("previews and imports a Part register with matched Master and box images", async () => {
+  const [appSource, css] = await Promise.all([
+    source("../app/delivery-control-app.tsx"),
+    source("../app/globals.css"),
+  ]);
+  const bundleFlow = sourceSection(appSource, "async function previewPartBundle", "async function syncDueParts");
+  const partsPage = sourceSection(appSource, "function renderParts()", "function renderTags()");
+
+  assert.match(bundleFlow, /parsePartExcel\(partBundleExcel\)/);
+  assert.match(bundleFlow, /matchBundleImages/);
+  assert.match(bundleFlow, /action: "import_parts"/);
+  assert.match(bundleFlow, /form\.set\("slot", upload\.slot\)/);
+  assert.match(partsPage, /นำเข้าทะเบียน Part พร้อมรูป/);
+  assert.match(partsPage, /รูปตัวอย่าง \(Master\)/);
+  assert.match(partsPage, /รูปชิ้นงานในกล่อง/);
+  assert.match(partsPage, /ตรวจสอบและจับคู่/);
+  assert.match(css, /\.part-bundle-form/);
+  assert.match(css, /@media\(max-width:760px\).*\.part-bundle-form\{grid-template-columns:1fr\}/s);
+});
+
 test("separates Stock receiving from Tag printing and Job management", async () => {
   const appSource = await source("../app/delivery-control-app.tsx");
   const tagsSection = sourceSection(appSource, "function renderTags()", "function renderStock()");
