@@ -18,12 +18,13 @@ export type PermissionKey = (typeof PERMISSION_KEYS)[number];
 
 const ROLE_DEFAULTS: Record<string, PermissionKey[]> = {
   admin: [...PERMISSION_KEYS],
+  // คงค่าเดิมไว้เฉพาะบัญชี legacy ที่ยังไม่มีแถว permission ระหว่างเปลี่ยนระบบ
   dispatcher: ["dashboard", "stock", "parts", "tags", "arrange", "replacement", "history"],
   inspector: ["dashboard", "replacement", "dispatch", "history"],
 };
 
 export function defaultPermissions(role: string): PermissionKey[] {
-  return [...(ROLE_DEFAULTS[role] || ["dashboard"])];
+  return [...(ROLE_DEFAULTS[role] || [])];
 }
 
 export function normalizePermissions(value: unknown, role: string): PermissionKey[] {
@@ -31,7 +32,6 @@ export function normalizePermissions(value: unknown, role: string): PermissionKe
   const source = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
   const allowed = new Set<string>(PERMISSION_KEYS);
   const normalized = source.map((item) => String(item).trim()).filter((item): item is PermissionKey => allowed.has(item));
-  if (!normalized.includes("dashboard")) normalized.unshift("dashboard");
   return [...new Set(normalized)];
 }
 

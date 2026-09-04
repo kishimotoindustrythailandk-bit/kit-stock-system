@@ -160,13 +160,19 @@ type ReplacementIssuePreview = {
   tag: StockTag & { availableQty: number; stagedQty?: number; legacyReservedQty?: number; location?: string };
   suggestedQty: number;
 };
-type UserForm = { id?: number; employeeCode: string; displayName: string; email: string; role: "dispatcher" | "inspector"; pin: string; active: boolean; permissions: PageKey[] };
+type UserRole = "production" | "stock" | "qc" | "delivery" | "dispatcher" | "inspector";
+type UserForm = { id?: number; employeeCode: string; displayName: string; email: string; role: UserRole; pin: string; active: boolean; permissions: PageKey[] };
 
-const ROLE_PERMISSIONS: Record<UserForm["role"], PageKey[]> = {
-  dispatcher: ["dashboard", "stock", "parts", "tags", "arrange", "replacement", "history"],
-  inspector: ["dashboard", "replacement", "dispatch", "history"],
+const ROLE_LABELS: Record<string, string> = {
+  admin: "ผู้ดูแลระบบ",
+  production: "Production",
+  stock: "Stock",
+  qc: "QC",
+  delivery: "Delivery",
+  dispatcher: "ผู้จัดงาน (Legacy)",
+  inspector: "ผู้ตรวจงาน (Legacy)",
 };
-const EMPTY_USER: UserForm = { employeeCode: "", displayName: "", email: "", role: "dispatcher", pin: "", active: true, permissions: [...ROLE_PERMISSIONS.dispatcher] };
+const EMPTY_USER: UserForm = { employeeCode: "", displayName: "", email: "", role: "production", pin: "", active: true, permissions: [] };
 
 const NAV: Array<{ key: PageKey; label: string; icon: string }> = [
   { key: "dashboard", label: "หน้าหลัก", icon: "⌂" },
@@ -183,6 +189,8 @@ const NAV: Array<{ key: PageKey; label: string; icon: string }> = [
   { key: "settings", label: "ตั้งค่า", icon: "⚙" },
   { key: "users", label: "ผู้ใช้งาน", icon: "♙" },
 ];
+
+const DUE_DATA_PAGES: PageKey[] = ["dashboard", "plan", "arrange", "dispatch", "exports", "reports", "history"];
 
 const PAGE_KEYS = new Set<PageKey>([...NAV.map((item) => item.key), "verify"]);
 
@@ -425,10 +433,14 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     window.location.href = "/login";
   }
 
-  const [page, setPage] = useState<PageKey>("dashboard");
+  const initialPage = user.role === "admin"
+    ? "dashboard"
+    : NAV.find((item) => user.permissions.includes(item.key))?.key || "dashboard";
+  const hasDueDataPermission = user.role === "admin" || DUE_DATA_PAGES.some((key) => user.permissions.includes(key));
+  const [page, setPage] = useState<PageKey>(initialPage);
   const [menuOpen, setMenuOpen] = useState(false);
   const [payload, setPayload] = useState<DuePayload>({ dues: [], imports: [], scans: [], receipts: [] });
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(hasDueDataPermission);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
   useEffect(() => {
@@ -551,32 +563,28 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const verifyInput = useRef<HTMLInputElement>(null);
   const verifyResultRef = useRef<HTMLElement>(null);
   const canPrintTags = user.role === "admin" || user.permissions?.includes("tags");
-  const allowedPages = useMemo(() => {
-    const keys: PageKey[] = user.role === "admin" ? NAV.map((item) => item.key) : (user.permissions?.length ? user.permissions : ["dashboard"]);
-    const set = new Set<PageKey>(["dashboard", ...keys]);
-    // ย้ายการปิด Job ไปหน้า Tags โดยยังให้ผู้มีสิทธิ์ Stock เดิมเข้าถึงได้
-    // แต่ canPrintTags ยังคุมส่วนสร้าง/พิมพ์ Tag แยกกัน ไม่ได้ขยายสิทธิ์ API
-    if (set.has("stock")) set.add("tags");
-    // บัญชีทีมจัดงาน/Stock และ QC เดิมต้องเห็นขั้นตอนงานทดแทนได้ทันที
-    // แม้บัญชีจะถูกสร้างก่อนมี permission "replacement"
-    if (set.has("arrange") || set.has("stock") || set.has("dispatch")) set.add("replacement");
-    return set;
-  }, [user.permissions, user.role]);
+  const allowedPages = useMemo(() => new Set<PageKey>(
+    user.role === "admin" ? NAV.map((item) => item.key) : user.permissions,
+  ), [user.permissions, user.role]);
+  const firstAllowedPage = NAV.find((item) => allowedPages.has(item.key))?.key || "dashboard";
+  const workflowPage: PageKey | null = allowedPages.has("dispatch")
+    ? "dispatch"
+    : allowedPages.has("arrange") ? "arrange" : null;
 
   const restoredPageRef = useRef(false);
   useEffect(() => {
     if (restoredPageRef.current) return;
     restoredPageRef.current = true;
     const savedPage = pageFromLocation();
-    const nextPage = savedPage && allowedPages.has(savedPage) ? savedPage : "dashboard";
+    const nextPage = savedPage && allowedPages.has(savedPage) ? savedPage : firstAllowedPage;
     setPage(nextPage);
     updatePageLocation(nextPage, "replace");
-  }, [allowedPages]);
+  }, [allowedPages, firstAllowedPage]);
 
   useEffect(() => {
     const onHistoryChange = () => {
       const requestedPage = pageFromUrl();
-      const nextPage = requestedPage && allowedPages.has(requestedPage) ? requestedPage : "dashboard";
+      const nextPage = requestedPage && allowedPages.has(requestedPage) ? requestedPage : firstAllowedPage;
       window.localStorage.setItem("kit-current-page", nextPage);
       setPage(nextPage);
       if (nextPage === "users") void loadUsers();
@@ -586,7 +594,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     };
     window.addEventListener("popstate", onHistoryChange);
     return () => window.removeEventListener("popstate", onHistoryChange);
-  }, [allowedPages]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [allowedPages, firstAllowedPage]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadDue() {
     setLoading(true);
@@ -648,9 +656,10 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }
 
   useEffect(() => {
+    if (!hasDueDataPermission) return;
     const timer = window.setTimeout(() => void loadDue(), 0);
     return () => window.clearTimeout(timer);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [hasDueDataPermission]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!["stock", "parts", "tags", "arrange", "replacement", "dispatch", "reports", "history"].includes(page)) return;
@@ -675,7 +684,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }, []);
 
   async function loadUsers() {
-    if (!allowedPages.has("users")) return;
+    if (user.role !== "admin" || !allowedPages.has("users")) return;
     setUsersLoading(true);
     try {
       const response = await fetch("/api/users", { cache: "no-store" });
@@ -800,6 +809,10 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
 
   async function saveUser(event: FormEvent) {
     event.preventDefault();
+    if (!userForm.permissions.length) {
+      setNotice({ type: "error", text: "กรุณาเลือกสิทธิ์เข้าใช้งานอย่างน้อย 1 หน้า" });
+      return;
+    }
     setUserSaving(true);
     setNotice(null);
     try {
@@ -824,8 +837,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   function editUser(target: SystemUser) {
     setUserForm({
       id: target.id, employeeCode: target.employeeCode, displayName: target.displayName,
-      email: target.email, role: target.role as "dispatcher" | "inspector", pin: "",
-      active: target.active, permissions: target.permissions?.length ? [...target.permissions] : [...ROLE_PERMISSIONS[target.role as UserForm["role"]]],
+      email: target.email, role: target.role as UserRole, pin: "",
+      active: target.active, permissions: [...(target.permissions || [])],
     });
     setUserEditorOpen(true);
   }
@@ -2073,10 +2086,10 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
             <td data-label="ส่งแล้ว" className="num sent"><b>{fmt(due.scannedQty)}</b></td>
             <td data-label="คงเหลือ" className={`num ${stateOf(due) === "over" ? "danger" : "warning"}`}><b>{fmt(Math.max(due.reqQty - due.scannedQty, 0))}</b></td>
             <td data-label="สถานะ"><span className={`status ${Number(due.arrangedQty) > 0 && stateOf(due) === "pending" ? "partial" : stateOf(due)}`}>{stateLabel(due)}</span></td>
-            <td data-label="จัดการ"><button className="tiny-button" onClick={() => {
+            <td data-label="จัดการ">{workflowPage && <button className="tiny-button" onClick={() => {
               setArrangeDueId(String(due.id));
-              go(user.role === "inspector" ? "dispatch" : "arrange");
-            }}>{Number(due.scannedQty) < due.reqQty ? (user.role === "inspector" ? "ขายออก" : "จัดงาน") : "ดู"}</button></td>
+              go(workflowPage);
+            }}>{Number(due.scannedQty) < due.reqQty ? (workflowPage === "dispatch" ? "ขายออก" : "จัดงาน") : "ดู"}</button>}</td>
           </tr>)}</tbody>
         </table>
       </div>
@@ -2250,7 +2263,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <span>DELIVERY DUE CONTROL</span>
           <h2>แผนส่งงานและตัดยอด<br />ด้วย <em>QR Tag</em></h2>
           <p>นำเข้า Excel ของลูกค้า ตรวจ Due และสแกน Tag เพื่อตัดยอดแบบทันที</p>
-          <button className="button white" onClick={() => go("plan")}>⇧ นำเข้าแผนส่งงาน Excel</button>
+          {allowedPages.has("plan") && <button className="button white" onClick={() => go("plan")}>⇧ นำเข้าแผนส่งงาน Excel</button>}
         </div>
         <div className="hero-art" role="img" aria-label="รถขนส่งสินค้าในเส้นทางโรงงาน"><img src="/dashboard-delivery-hero.png" alt="" /></div>
       </section>
@@ -2292,7 +2305,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           </> : <Empty title="ยังไม่มีข้อมูล Due" text="นำเข้าแผนส่งงานเพื่อเริ่มดูภาพรวม" />}
         </Card>
 
-        <Card title="Due ที่ค้างตัดยอด (รายการล่าสุด)" action={<button className="text-button" onClick={() => go("plan")}>ดูทั้งหมด →</button>}>
+        <Card title="Due ที่ค้างตัดยอด (รายการล่าสุด)" action={allowedPages.has("plan") ? <button className="text-button" onClick={() => go("plan")}>ดูทั้งหมด →</button> : undefined}>
           {pendingDues.length ? <div className="pending-list">{pendingDues.map((due) => <button key={due.id} className="pending-row" onClick={() => go("plan")}>
             <span className={`date-pill ${urgency(due.deliveryDate)}`}>{formatDate(due.deliveryDate)}</span>
             <span className="pending-main"><b>{due.materialCode}</b><small>{due.materialDescription || `${due.fact}${due.line ? ` / ${due.line}` : ""}`}</small></span>
@@ -2303,10 +2316,10 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         <div className="home-side">
           <Card title="เมนูด่วน">
             <div className="quick-tiles">
-              <button className="qt blue" onClick={() => go("plan")}><span>⇧</span>นำเข้าแผนงาน</button>
-              <button className="qt purple" onClick={() => go("tags")}><span>▤</span>สร้างและพิมพ์ Tag</button>
-              <button className="qt green" onClick={() => go("stock")}><span>▦</span>รับเข้า Stock</button>
-              <button className="qt orange" onClick={() => go(user.role === "inspector" ? "dispatch" : "arrange")}><span>⌗</span>{user.role === "inspector" ? "ตรวจและขายออก" : "จัดงาน"}</button>
+              {allowedPages.has("plan") && <button className="qt blue" onClick={() => go("plan")}><span>⇧</span>นำเข้าแผนงาน</button>}
+              {allowedPages.has("tags") && <button className="qt purple" onClick={() => go("tags")}><span>▤</span>สร้างและพิมพ์ Tag</button>}
+              {allowedPages.has("stock") && <button className="qt green" onClick={() => go("stock")}><span>▦</span>รับเข้า Stock</button>}
+              {workflowPage && <button className="qt orange" onClick={() => go(workflowPage)}><span>⌗</span>{workflowPage === "dispatch" ? "ตรวจและขายออก" : "จัดงาน"}</button>}
             </div>
           </Card>
           <Card title="อัปเดตล่าสุด" action={<button className="text-button" onClick={() => go("history")}>ดูทั้งหมด →</button>}>
@@ -2452,7 +2465,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
               <span className="part-code-cell"><PartImage materialCode={part.materialCode} compact version={image?.updatedAt} /><span><b>{part.materialCode}</b><small>{image ? "มีรูปชิ้นงาน" : "ยังไม่มีรูป"}</small></span></span>
               <span>{part.partName}</span><span>{part.customer || "—"}</span><span><b>{part.location || "—"}</b></span><span>{part.standardQty > 0 ? fmt(part.standardQty) + " ชิ้น" : "ยังไม่กำหนด"}</span>
               <span><em className={"part-active " + (part.active ? "on" : "off")}>{part.active ? "ใช้งาน" : "ยกเลิก"}</em></span>
-              <span className="part-row-actions"><button className="tiny-button" onClick={() => editPart(part)}>✎ แก้ไข</button>{hasTag ? <small>มีประวัติ Stock</small> : <button className="tiny-button danger-outline" disabled={Boolean(deletingPartCode)} onClick={() => void deleteStockPart(part)}>♲ {deletingPartCode === part.materialCode ? "กำลังลบ…" : "ลบ"}</button>}</span>
+              <span className="part-row-actions">{user.role === "admin" ? <><button className="tiny-button" onClick={() => editPart(part)}>✎ แก้ไข</button>{hasTag ? <small>มีประวัติ Stock</small> : <button className="tiny-button danger-outline" disabled={Boolean(deletingPartCode)} onClick={() => void deleteStockPart(part)}>♲ {deletingPartCode === part.materialCode ? "กำลังลบ…" : "ลบ"}</button>}</> : <small>ดูข้อมูลเท่านั้น</small>}</span>
             </div>;
           })}</div>
           <footer>
@@ -2988,7 +3001,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const totalIssued = replacement.issues.reduce((sum, item) => sum + Number(item.qty), 0);
     const reasonLabel = (value: string) => value === "defect" ? "งานเสีย" : value === "shortage" ? "งานขาด" : "อื่น ๆ";
     const statusLabel = (value: string) => value === "completed" ? "เบิกครบแล้ว" : value === "partial" ? "เบิกบางส่วน" : value === "cancelled" ? "ยกเลิก" : "รอจัดงาน";
-    const canCreate = user.role === "admin" || user.role === "inspector";
+    const canCreate = allowedPages.has("replacement");
 
     return <div className="replacement-page">
       <div className="metrics four compact replacement-metrics">
@@ -3177,15 +3190,19 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
 
   function renderUsers() {
     const active = systemUsers.filter((item) => item.active).length;
-    const dispatchers = systemUsers.filter((item) => item.role === "dispatcher").length;
-    const inspectors = systemUsers.filter((item) => item.role === "inspector").length;
+    const productionUsers = systemUsers.filter((item) => item.role === "production").length;
+    const stockUsers = systemUsers.filter((item) => item.role === "stock").length;
+    const qcUsers = systemUsers.filter((item) => item.role === "qc").length;
+    const deliveryUsers = systemUsers.filter((item) => item.role === "delivery").length;
     return <>
       <Card title="ภาพรวมผู้ใช้งาน" action={<button className="button primary" onClick={() => { setUserForm({ ...EMPTY_USER, permissions: [...EMPTY_USER.permissions] }); setUserEditorOpen(true); }}>＋ เพิ่มผู้ใช้งาน</button>}>
         <div className="metrics four compact">
           <MetricCard tone="blue" icon="♙" label="ผู้ใช้งานทั้งหมด" value={fmt(systemUsers.length)} suffix="คน" />
           <MetricCard tone="green" icon="✓" label="ใช้งานปกติ" value={fmt(active)} suffix="คน" />
-          <MetricCard tone="orange" icon="⇥" label="ผู้จัดงาน" value={fmt(dispatchers)} suffix="คน" />
-          <MetricCard tone="purple" icon="⌗" label="ผู้ตรวจงาน" value={fmt(inspectors)} suffix="คน" />
+          <MetricCard tone="purple" icon="▤" label="Production" value={fmt(productionUsers)} suffix="คน" />
+          <MetricCard tone="blue" icon="▦" label="Stock" value={fmt(stockUsers)} suffix="คน" />
+          <MetricCard tone="orange" icon="◇" label="QC" value={fmt(qcUsers)} suffix="คน" />
+          <MetricCard tone="green" icon="⌗" label="Delivery" value={fmt(deliveryUsers)} suffix="คน" />
         </div>
       </Card>
       <Card title="ผู้ใช้งานระบบ" action={<button className="button secondary" onClick={() => void loadUsers()}>↻ รีเฟรช</button>}>
@@ -3194,7 +3211,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
             <tbody>{systemUsers.map((item) => <tr key={item.id}>
               <td data-label="ผู้ใช้งาน"><div className="user-cell"><span>{item.displayName.slice(0, 1).toUpperCase()}</span><div><b>{item.displayName}</b><small>{item.employeeCode}</small></div></div></td>
               <td data-label="อีเมล">{item.email || "—"}</td>
-              <td data-label="บทบาท"><span className="role-pill">{item.role === "admin" ? "ผู้ดูแลระบบ" : item.role === "dispatcher" ? "ผู้จัดงาน (รับเข้า)" : "ผู้ตรวจงาน (ส่งออก)"}</span></td>
+              <td data-label="บทบาท"><span className="role-pill">{ROLE_LABELS[item.role] || item.role}</span></td>
               <td data-label="สิทธิ์หน้า"><div className="permission-summary">{(item.role === "admin" ? NAV.map((nav) => nav.key) : item.permissions || []).map((key) => <span key={key}>{NAV.find((nav) => nav.key === key)?.label || key}</span>)}</div></td>
               <td data-label="สถานะ"><span className={`status ${item.active ? "completed" : "over"}`}>{item.active ? "ใช้งานปกติ" : "ระงับ"}</span></td>
               <td data-label="จัดการ">{item.role === "admin" ? <span className="muted">บัญชีหลัก</span> : <div className="user-actions"><button className="tiny-button" onClick={() => editUser(item)}>แก้ไข / สิทธิ์ / PIN</button><button className={`tiny-button ${item.active ? "danger-outline" : ""}`} onClick={() => void toggleUser(item)}>{item.active ? "ระงับ" : "เปิดใช้"}</button></div>}</td>
@@ -3203,14 +3220,14 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         </div>}
       </Card>
       <div className="split-grid">
-        <Card title="สิทธิ์รายบุคคล"><div className="permission-note"><span>◆</span><div><b>Admin เลือกได้ทีละคน</b><p>บทบาทจะใส่สิทธิ์เริ่มต้นให้ก่อน จากนั้นเปิดหรือปิดแต่ละหน้าได้อิสระ โดยหน้าหลักเปิดไว้เสมอ</p></div></div></Card>
+        <Card title="สิทธิ์รายบุคคล"><div className="permission-note"><span>◆</span><div><b>Admin กำหนดสิทธิ์ทุกหน้า</b><p>บทบาทใช้ระบุทีมงาน ส่วนสิทธิ์เข้าแต่ละหน้ารวมถึงหน้าหลักต้องเลือกให้ผู้ใช้แต่ละคนอย่างน้อย 1 หน้า</p></div></div></Card>
         <Card title="ความปลอดภัย"><div className="permission-note"><span>◆</span><div><b>ป้องกันทั้งเมนูและ API</b><p>หน้าที่ไม่ได้รับสิทธิ์จะไม่แสดงในเมนู และระบบจะปฏิเสธการเปิดหรือเรียกใช้งานโดยตรง</p></div></div></Card>
       </div>
     </>;
   }
 
   const pageContent: Record<PageKey, () => ReactNode> = { dashboard: renderDashboard, stock: renderStock, parts: renderParts, tags: renderTags, plan: renderPlan, arrange: () => renderScan("arrange"), replacement: renderReplacement, verify: renderVerify, dispatch: () => renderScan("dispatch"), exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
-  const activeNav = NAV.find((item) => item.key === page)!;
+  const activeNav = NAV.find((item) => item.key === page) || NAV.find((item) => item.key === firstAllowedPage) || NAV[0];
 
   return <div className="control-shell">
     <aside className={`control-sidebar ${menuOpen ? "open" : ""}`}>
@@ -3221,7 +3238,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
-      <header className="control-topbar"><button className="menu-button" onClick={() => setMenuOpen(true)}>☰</button><div><h1>{activeNav.label}</h1><p>หน้าหลัก <span>›</span> {PAGE_SUBTITLE[page]}</p></div><div className="top-user"><button className="notification">♧<i>{notice ? "1" : "0"}</i></button><span className="user-avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div><b>{user.displayName}</b><small>{user.role === "admin" ? "ผู้ดูแลระบบ" : user.role === "dispatcher" ? "ผู้จัดงาน" : "ผู้ตรวจงาน"}</small></div><a href={signOutPath} onClick={signOut}>ออกจากระบบ</a></div></header>
+      <header className="control-topbar"><button className="menu-button" onClick={() => setMenuOpen(true)}>☰</button><div><h1>{activeNav.label}</h1><p>หน้าหลัก <span>›</span> {PAGE_SUBTITLE[page]}</p></div><div className="top-user"><button className="notification">♧<i>{notice ? "1" : "0"}</i></button><span className="user-avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div><b>{user.displayName}</b><small>{ROLE_LABELS[user.role] || user.role}</small></div><a href={signOutPath} onClick={signOut}>ออกจากระบบ</a></div></header>
       <div className="control-content">
         {notice && <div className={`toast ${notice.type} auto-dismiss`}><span>{notice.type === "success" ? "✓" : "!"}</span><p>{notice.text}</p><button onClick={() => setNotice(null)}>×</button></div>}
         {error && <div className="toast error"><span>!</span><p>{error}</p><button onClick={() => void loadDue()}>ลองใหม่</button></div>}
@@ -3298,15 +3315,15 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <div className="user-form-grid">
         <label><span>รหัสพนักงาน *</span><input value={userForm.employeeCode} onChange={(e) => setUserForm((current) => ({ ...current, employeeCode: e.target.value.toUpperCase() }))} placeholder="เช่น DISP001" required /></label>
         <label><span>ชื่อผู้ใช้งาน *</span><input value={userForm.displayName} onChange={(e) => setUserForm((current) => ({ ...current, displayName: e.target.value }))} placeholder="ชื่อ-นามสกุล" required /></label>
-        <label><span>บทบาท *</span><select value={userForm.role} onChange={(e) => { const role = e.target.value as UserForm["role"]; setUserForm((current) => ({ ...current, role, permissions: [...ROLE_PERMISSIONS[role]] })); }}><option value="dispatcher">ผู้จัดงาน — สแกนรับเข้า</option><option value="inspector">ผู้ตรวจงาน — สแกนส่งออก/ตัด Due</option></select></label>
+        <label><span>บทบาท *</span><select value={userForm.role} onChange={(e) => { const role = e.target.value as UserRole; setUserForm((current) => ({ ...current, role })); }}><option value="production">Production</option><option value="stock">Stock</option><option value="qc">QC</option><option value="delivery">Delivery</option>{(userForm.role === "dispatcher" || userForm.role === "inspector") && <option value={userForm.role}>{ROLE_LABELS[userForm.role]}</option>}</select></label>
         <label><span>{userForm.id ? "ตั้ง PIN ใหม่ (เว้นว่างหากไม่เปลี่ยน)" : "PIN 6 หลัก *"}</span><input type="password" inputMode="numeric" maxLength={6} pattern="[0-9]{6}" value={userForm.pin} onChange={(e) => setUserForm((current) => ({ ...current, pin: e.target.value.replace(/\D/g, "") }))} required={!userForm.id} placeholder="••••••" /></label>
         <label className="wide"><span>อีเมล (ไม่บังคับ)</span><input type="email" value={userForm.email} onChange={(e) => setUserForm((current) => ({ ...current, email: e.target.value }))} /></label>
       </div>
-      <section className="individual-permissions"><div className="permission-title"><div><b>สิทธิ์เข้าใช้งานรายบุคคล</b><p>เลือกหน้าได้อิสระ หน้าหลักจะเปิดไว้เสมอ</p></div><button type="button" className="tiny-button" onClick={() => setUserForm((current) => ({ ...current, permissions: [...ROLE_PERMISSIONS[current.role]] }))}>คืนค่าตามบทบาท</button></div>
-        <div className="permission-grid">{NAV.filter((item) => item.key !== "verify").map((item) => {
+      <section className="individual-permissions"><div className="permission-title"><div><b>สิทธิ์เข้าใช้งานรายบุคคล</b><p>Admin เลือกหน้าที่ผู้ใช้เปิดได้เองทุกหน้า รวมถึงหน้าหลัก และต้องเลือกอย่างน้อย 1 หน้า</p></div></div>
+        <div className="permission-grid">{NAV.map((item) => {
           const checked = userForm.permissions.includes(item.key);
           return <label key={item.key} className={`permission-option ${checked ? "checked" : ""}`}>
-            <input type="checkbox" checked={checked} disabled={item.key === "dashboard"} onChange={(event) => setUserForm((current) => ({
+            <input type="checkbox" checked={checked} onChange={(event) => setUserForm((current) => ({
               ...current,
               permissions: event.target.checked
                 ? [...new Set([...current.permissions, item.key])]
@@ -3316,7 +3333,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           </label>;
         })}</div>
       </section>
-      <footer><button type="button" className="button secondary" onClick={() => setUserEditorOpen(false)}>ยกเลิก</button><button className="button primary" disabled={userSaving}>{userSaving ? "กำลังบันทึก…" : "บันทึกผู้ใช้งานและสิทธิ์"}</button></footer>
+      <footer><button type="button" className="button secondary" onClick={() => setUserEditorOpen(false)}>ยกเลิก</button><button className="button primary" disabled={userSaving || !userForm.permissions.length}>{userSaving ? "กำลังบันทึก…" : "บันทึกผู้ใช้งานและสิทธิ์"}</button></footer>
     </form></div>}
   </div>;
 }

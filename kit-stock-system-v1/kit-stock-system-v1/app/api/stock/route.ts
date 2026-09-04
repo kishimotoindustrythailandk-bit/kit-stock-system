@@ -8,10 +8,6 @@ function clean(value: unknown, max = 160) {
   return String(value ?? "").trim().slice(0, max);
 }
 
-function requireStockRole(role: string) {
-  return role === "admin" || role === "dispatcher";
-}
-
 function parseInternalTag(raw: string) {
   const value = raw.trim();
   const fields = value.split("|");
@@ -81,7 +77,10 @@ export async function GET() {
   try {
     const user = await getCurrentUser();
     if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
-    if (!["stock", "tags", "arrange", "dispatch", "reports", "history"].some((key) => hasPermission(user, key as "stock" | "tags" | "arrange" | "dispatch" | "reports" | "history"))) {
+    const fullStockPermissions = ["stock", "tags", "arrange", "dispatch", "reports", "history"] as const;
+    const canReadFullStock = fullStockPermissions.some((key) => hasPermission(user, key));
+    const canReadPartsOnly = hasPermission(user, "parts") || hasPermission(user, "replacement");
+    if (!canReadFullStock && !canReadPartsOnly) {
       return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ดูข้อมูล Stock" }, { status: 403 });
     }
     const { DB } = getRuntimeEnv();
@@ -92,6 +91,14 @@ export async function GET() {
       FROM stock_parts ORDER BY material_code ASC
     `).all();
     const parts = partsResult.results;
+    // หน้า Parts และ Replacement ใช้เฉพาะทะเบียน Part สำหรับแสดง/เลือกสินค้า
+    // ไม่ส่ง Tag, allocation, traceability หรือข้อมูลตรวจนับ Stock หากไม่มีสิทธิ์งาน Stock ที่เกี่ยวข้อง
+    if (!canReadFullStock) {
+      return Response.json({
+        parts, tags: [], allocations: [], picks: [], dispatchLinks: [], jobClosures: [],
+        manualReceipts: [], countAdjustments: [], countAdjustmentLines: [],
+      });
+    }
     const db = getDb();
     const tags = await db.select({
       id: stockTags.id,
@@ -381,8 +388,6 @@ export async function POST(request: Request) {
       return Response.json({ success: true, deleted: 1, tagId: tag.tagId });
     }
 
-    if (!requireStockRole(user.role)) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์จัดการ Stock" }, { status: 403 });
-
     if (action === "create_tag") {
       if (!hasPermission(user, "tags")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์สร้างและพิมพ์ Tag" }, { status: 403 });
       const materialCode = clean(body.materialCode, 100).toUpperCase();
@@ -435,7 +440,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "close_job") {
-      if (!hasPermission(user, "stock") || !requireStockRole(user.role)) {
+      if (!hasPermission(user, "stock")) {
         return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ปิดรับเข้า Job" }, { status: 403 });
       }
       const jobNo = clean(body.jobNo, 160);
@@ -538,7 +543,7 @@ export async function POST(request: Request) {
 
 
     if (action === "manual_receive") {
-      if (!hasPermission(user, "stock") || !requireStockRole(user.role)) {
+      if (!hasPermission(user, "stock")) {
         return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์คีย์รับงานเข้า Stock" }, { status: 403 });
       }
       const materialCode = clean(body.materialCode, 100).toUpperCase();

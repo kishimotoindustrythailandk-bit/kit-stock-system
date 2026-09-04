@@ -4,6 +4,8 @@ import { getDb } from "../../../db";
 import { deliveryDueLines, deliveryImports, deliveryTagReceipts, deliveryTagScans } from "../../../db/schema";
 import { getRuntimeEnv } from "../../../runtime/env";
 
+const DUE_READ_PERMISSIONS = ["dashboard", "plan", "arrange", "dispatch", "exports", "reports", "history"] as const;
+
 function qrDate(value: string) {
   if (!/^\d{8}$/.test(value)) return "";
   return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
@@ -209,7 +211,7 @@ export async function GET() {
   try {
     const user = await getCurrentUser();
     if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
-    if (!hasPermission(user, "dashboard")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ดูข้อมูล Due" }, { status: 403 });
+    if (!DUE_READ_PERMISSIONS.some((permission) => hasPermission(user, permission))) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ดูข้อมูล Due" }, { status: 403 });
     const db = getDb();
     const dues = await db.select({
       id: deliveryDueLines.id,
@@ -275,9 +277,6 @@ export async function POST(request: Request) {
     const user = await getCurrentUser();
     if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
     if (!hasPermission(user, "dispatch")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ตรวจและขายออก" }, { status: 403 });
-    if (user.role !== "admin" && user.role !== "inspector") {
-      return Response.json({ error: "เฉพาะผู้ตรวจงานหรือ Admin เท่านั้นที่สแกน Tag ลูกค้าเพื่อขายออกได้" }, { status: 403 });
-    }
     const payload = await request.json() as { rawPayload?: string; mode?: string };
     if (payload.mode === "verify") return await verifyCustomerTag(payload.rawPayload ?? "");
     const tag = parseCustomerTag(payload.rawPayload ?? "");
