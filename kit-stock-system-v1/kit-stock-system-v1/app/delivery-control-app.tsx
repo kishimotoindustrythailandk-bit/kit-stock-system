@@ -404,6 +404,37 @@ function stateLabel(due: DueLine, now = new Date()) {
   return "ยังไม่ส่ง";
 }
 
+async function playOverdueAlertTone(audioContextRef: { current: AudioContext | null }) {
+  try {
+    const audioWindow = window as typeof window & { webkitAudioContext?: typeof AudioContext };
+    const AudioContextClass = audioWindow.AudioContext || audioWindow.webkitAudioContext;
+    if (!AudioContextClass) return false;
+    const context = audioContextRef.current?.state !== "closed" ? audioContextRef.current : new AudioContextClass();
+    if (!context) return false;
+    audioContextRef.current = context;
+    if (context.state !== "running") await context.resume();
+
+    const startAt = context.currentTime + 0.02;
+    [{ frequency: 880, offset: 0 }, { frequency: 660, offset: 0.2 }].forEach(({ frequency, offset }) => {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      const toneStart = startAt + offset;
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(frequency, toneStart);
+      gain.gain.setValueAtTime(0.0001, toneStart);
+      gain.gain.exponentialRampToValueAtTime(0.12, toneStart + 0.025);
+      gain.gain.exponentialRampToValueAtTime(0.0001, toneStart + 0.16);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(toneStart);
+      oscillator.stop(toneStart + 0.18);
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function MetricCard({ tone, icon, label, value, suffix, note }: { tone: string; icon: string; label: string; value: string; suffix?: string; note?: string }) {
   return (
     <article className={`metric-card tone-${tone}`}>
@@ -475,6 +506,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [notice, setNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [dueLoadedAt, setDueLoadedAt] = useState<string | null>(null);
   const [deadlineClock, setDeadlineClock] = useState(() => Date.now());
+  const [overdueSoundEnabled, setOverdueSoundEnabled] = useState(false);
+  const overdueAudioContextRef = useRef<AudioContext | null>(null);
+  const previousOverdueIdsRef = useRef<Set<number> | null>(null);
   useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(null), 4000);
@@ -1981,6 +2015,31 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     );
   }, [payload.dues, deadlineClock]);
 
+  useEffect(() => {
+    if (!dueLoadedAt) return;
+    const currentIds = new Set(overdueDues.map((due) => due.id));
+    const previousIds = previousOverdueIdsRef.current;
+    if (!overdueSoundEnabled || previousIds === null) {
+      previousOverdueIdsRef.current = currentIds;
+      return;
+    }
+    if (!overdueDues.some((due) => !previousIds.has(due.id))) {
+      previousOverdueIdsRef.current = currentIds;
+      return;
+    }
+
+    let cancelled = false;
+    void playOverdueAlertTone(overdueAudioContextRef).then((played) => {
+      if (cancelled) return;
+      previousOverdueIdsRef.current = currentIds;
+      if (!played) {
+        setOverdueSoundEnabled(false);
+        setNotice({ type: "error", text: "เสียงแจ้งเตือนถูกระงับ กรุณากดเปิดเสียงอีกครั้ง" });
+      }
+    });
+    return () => { cancelled = true; };
+  }, [overdueDues, overdueSoundEnabled, dueLoadedAt]);
+
   const summary = useMemo(() => {
     const now = new Date(deadlineClock);
     return filtered.reduce((total, due) => {
@@ -2049,6 +2108,28 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     setQuery("");
     setPlanPage(1);
     go("plan");
+  }
+
+  async function toggleOverdueSound() {
+    if (overdueSoundEnabled) {
+      setOverdueSoundEnabled(false);
+      setNotice({ type: "success", text: "ปิดเสียงแจ้งเตือนงานเกิน Due แล้ว" });
+      return;
+    }
+    const played = await playOverdueAlertTone(overdueAudioContextRef);
+    if (!played) {
+      setNotice({ type: "error", text: "เบราว์เซอร์นี้ไม่สามารถเปิดเสียงแจ้งเตือนได้" });
+      return;
+    }
+    previousOverdueIdsRef.current = dueLoadedAt ? new Set(overdueDues.map((due) => due.id)) : null;
+    setOverdueSoundEnabled(true);
+    setNotice({ type: "success", text: "เปิดเสียงแจ้งเตือนแล้ว ระบบจะดังเมื่อมีงานเกิน Due ใหม่" });
+  }
+
+  function renderOverdueSoundControl() {
+    return <button type="button" className={`overdue-sound-toggle ${overdueSoundEnabled ? "enabled" : ""}`} onClick={() => void toggleOverdueSound()} aria-pressed={overdueSoundEnabled}>
+      <span>{overdueSoundEnabled ? "🔔" : "🔕"}</span><b>{overdueSoundEnabled ? "เปิดเสียงแล้ว" : "เปิดเสียงแจ้งเตือน"}</b><small>{overdueSoundEnabled ? "กดเพื่อปิดเสียง" : "กดหนึ่งครั้งต่อการเปิดหน้านี้"}</small>
+    </button>;
   }
 
   function exportCsv() {
@@ -2350,11 +2431,14 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const plannedPieces = payload.dues.reduce((sum, due) => sum + Number(due.reqQty || 0), 0);
 
     return <div className="home">
-      {overdueDues.length > 0 && (allowedPages.has("plan") ? <button className="overdue-alert" onClick={showOverduePlan}>
-        <span>!</span><div><b>แจ้งเตือน: มีงานเกินดิวจัดส่ง {fmt(overdueDues.length)} รายการ</b><small>เลยวันและเวลาจัดส่งแล้ว แต่ยอดส่งยังไม่ครบ กดเพื่อดูรายการทั้งหมด</small></div><strong>ดูรายการ →</strong>
-      </button> : <div className="overdue-alert" role="status">
-        <span>!</span><div><b>แจ้งเตือน: มีงานเกินดิวจัดส่ง {fmt(overdueDues.length)} รายการ</b><small>เลยวันและเวลาจัดส่งแล้ว แต่ยอดส่งยังไม่ครบ</small></div>
-      </div>)}
+      {overdueDues.length > 0 && <div className="overdue-alert-group">
+        {allowedPages.has("plan") ? <button className="overdue-alert" onClick={showOverduePlan}>
+          <span>!</span><div><b>แจ้งเตือน: มีงานเกินดิวจัดส่ง {fmt(overdueDues.length)} รายการ</b><small>เลยวันและเวลาจัดส่งแล้ว แต่ยอดส่งยังไม่ครบ กดเพื่อดูรายการทั้งหมด</small></div><strong>ดูรายการ →</strong>
+        </button> : <div className="overdue-alert" role="status">
+          <span>!</span><div><b>แจ้งเตือน: มีงานเกินดิวจัดส่ง {fmt(overdueDues.length)} รายการ</b><small>เลยวันและเวลาจัดส่งแล้ว แต่ยอดส่งยังไม่ครบ</small></div>
+        </div>}
+        {renderOverdueSoundControl()}
+      </div>}
       <div className="stat-row">
         <article className="stat-tile blue"><span className="stat-icon">▤</span><div><small>Due ทั้งหมด</small><b>{fmt(summary.items)}</b><em>รายการ</em></div></article>
         <article className="stat-tile green"><span className="stat-icon">✓</span><div><small>ส่งออกแล้ว</small><b>{fmt(summary.completed)}</b><em>รายการ · {share(summary.completed)}%</em></div></article>
@@ -2821,9 +2905,12 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
 
     return <div className="plan-home">
       <input ref={fileInput} type="file" accept=".xlsx,.xls" hidden onChange={parseExcel} />
-      {overdueDues.length > 0 && <button className="overdue-alert plan-overdue-alert" onClick={showOverduePlan}>
-        <span>!</span><div><b>แจ้งเตือนงานเกินดิวจัดส่ง {fmt(overdueDues.length)} รายการ</b><small>ระบบเรียงรายการที่เกินวันและเวลาจัดส่งไว้ด้านบน กดเพื่อล้างตัวกรองและดูทั้งหมด</small></div><strong>แสดงทั้งหมด →</strong>
-      </button>}
+      {overdueDues.length > 0 && <div className="overdue-alert-group">
+        <button className="overdue-alert plan-overdue-alert" onClick={showOverduePlan}>
+          <span>!</span><div><b>แจ้งเตือนงานเกินดิวจัดส่ง {fmt(overdueDues.length)} รายการ</b><small>ระบบเรียงรายการที่เกินวันและเวลาจัดส่งไว้ด้านบน กดเพื่อล้างตัวกรองและดูทั้งหมด</small></div><strong>แสดงทั้งหมด →</strong>
+        </button>
+        {renderOverdueSoundControl()}
+      </div>}
       <div className="plan-top-row">
         <article className="plan-stat blue"><span>▤</span><div><small>แผนทั้งหมด</small><b>{fmt(summary.items)}</b><em>รายการ</em></div></article>
         <article className="plan-stat green"><span>✓</span><div><small>ครบตามแผน</small><b>{fmt(summary.completed)}</b><em>รายการ</em></div></article>
@@ -3341,7 +3428,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
-      <header className="control-topbar"><button className="menu-button" onClick={() => setMenuOpen(true)}>☰</button><div><h1>{activeNav.label}</h1><p>หน้าหลัก <span>›</span> {PAGE_SUBTITLE[page]}</p></div><div className="top-user"><button className="notification" onClick={showOverduePlan} disabled={!overdueDues.length || !allowedPages.has("plan")} aria-label={`งานเกินดิวจัดส่ง ${overdueDues.length} รายการ`}>♧<i>{fmt(overdueDues.length)}</i></button><span className="user-avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div><b>{user.displayName}</b><small>{ROLE_LABELS[user.role] || user.role}</small></div><a href={signOutPath} onClick={signOut}>ออกจากระบบ</a></div></header>
+      <header className="control-topbar"><button className="menu-button" onClick={() => setMenuOpen(true)}>☰</button><div><h1>{activeNav.label}</h1><p>หน้าหลัก <span>›</span> {PAGE_SUBTITLE[page]}</p></div><div className="top-user"><button type="button" className={`notification overdue-sound-shortcut ${overdueSoundEnabled ? "enabled" : ""}`} onClick={() => void toggleOverdueSound()} aria-label={overdueSoundEnabled ? "ปิดเสียงแจ้งเตือนงานเกิน Due" : "เปิดเสียงแจ้งเตือนงานเกิน Due"} aria-pressed={overdueSoundEnabled}>{overdueSoundEnabled ? "🔔" : "🔕"}</button><button className="notification" onClick={showOverduePlan} disabled={!overdueDues.length || !allowedPages.has("plan")} aria-label={`งานเกินดิวจัดส่ง ${overdueDues.length} รายการ`}>♧<i>{fmt(overdueDues.length)}</i></button><span className="user-avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div><b>{user.displayName}</b><small>{ROLE_LABELS[user.role] || user.role}</small></div><a href={signOutPath} onClick={signOut}>ออกจากระบบ</a></div></header>
       <div className="control-content">
         {notice && <div className={`toast ${notice.type} auto-dismiss`}><span>{notice.type === "success" ? "✓" : "!"}</span><p>{notice.text}</p><button onClick={() => setNotice(null)}>×</button></div>}
         {error && <div className="toast error"><span>!</span><p>{error}</p><button onClick={() => void loadDue()}>ลองใหม่</button></div>}

@@ -1822,14 +1822,30 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .overdue-alert small { margin-top: 3px; color: #a54a59; font-size: 10px; }
 .overdue-alert strong { color: #b2223a; white-space: nowrap; }
 .overdue-alert:hover { border-color: #e65770; filter: brightness(.99); transform: translateY(-1px); }
+.overdue-alert-group { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px; align-items: stretch; }
+.overdue-sound-toggle { min-width: 158px; display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; align-content: center; column-gap: 8px; padding: 10px 14px; color: #6c3140; text-align: left; border: 1px solid #efb3bd; border-radius: 15px; background: #fff; box-shadow: 0 8px 18px rgba(126,40,57,.08); }
+.overdue-sound-toggle > span { grid-row: 1 / 3; align-self: center; font-size: 22px; }
+.overdue-sound-toggle b,.overdue-sound-toggle small { display: block; }
+.overdue-sound-toggle b { font-size: 11px; }
+.overdue-sound-toggle small { margin-top: 2px; color: #9a6570; font-size: 8px; }
+.overdue-sound-toggle:hover { border-color: #df6478; background: #fff8f9; }
+.overdue-sound-toggle.enabled { color: #0f6c3d; border-color: #85cda8; background: #eefbf4; }
+.overdue-sound-toggle.enabled small { color: #4b8b6b; }
+.overdue-sound-shortcut { font-size: 15px; line-height: 1; }
+.overdue-sound-shortcut.enabled { color: #087441; border-color: #86cfaa; background: #eaf9f1; }
 .plan-modern-row.overdue { background: #fff1f3; box-shadow: inset 4px 0 #df354f; }
 .plan-modern-row.overdue:hover,.pending-row.overdue:hover { background: #ffe8ec; }
 .pending-row.overdue { margin: 2px 0; padding-right: 8px; padding-left: 8px; border-radius: 9px; background: #fff3f5; }
 .notification:disabled { cursor: default; opacity: .55; }
+@media(max-width:960px){
+  .top-user .overdue-sound-shortcut { display: grid; place-items: center; }
+}
 @media(max-width:720px){
+  .overdue-alert-group { grid-template-columns: 1fr; }
   .overdue-alert { align-items: flex-start; min-height: 0; padding: 12px; }
   .overdue-alert > span { width: 38px; height: 38px; font-size: 20px; }
   .overdue-alert strong { display: none; }
   .overdue-alert b { font-size: 12px; }
   .overdue-alert small { font-size: 9px; line-height: 1.45; }
+  .overdue-sound-toggle { width: 100%; min-width: 0; min-height: 52px; }
 }
