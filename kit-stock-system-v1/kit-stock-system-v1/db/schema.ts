@@ -219,3 +219,37 @@ export const appUserPermissions = sqliteTable("app_user_permissions", {
 }, (table) => [
   uniqueIndex("app_user_permissions_user_key_unique").on(table.userId, table.permissionKey),
 ]);
+
+
+export const replacementRequests = sqliteTable("replacement_requests", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  requestNo: text("request_no").notNull().unique(),
+  materialCode: text("material_code").notNull(),
+  partName: text("part_name").notNull().default(""),
+  customer: text("customer").notNull().default(""),
+  requestedQty: integer("requested_qty").notNull(),
+  issuedQty: integer("issued_qty").notNull().default(0),
+  reasonType: text("reason_type").notNull().default("shortage"),
+  reasonDetail: text("reason_detail").notNull().default(""),
+  neededDate: text("needed_date").notNull().default(""),
+  status: text("status").notNull().default("pending"),
+  requestedByName: text("requested_by_name").notNull(),
+  requestedByCode: text("requested_by_code").notNull(),
+  requestedAt: text("requested_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  completedAt: text("completed_at"),
+});
+
+export const replacementIssues = sqliteTable("replacement_issues", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  requestId: integer("request_id").notNull().references(() => replacementRequests.id, { onDelete: "restrict" }),
+  stockTagId: integer("stock_tag_id").notNull().references(() => stockTags.id, { onDelete: "restrict" }),
+  stockTagCode: text("stock_tag_code").notNull(),
+  qty: integer("qty").notNull(),
+  noticeNo: text("notice_no").notNull(),
+  issuedByName: text("issued_by_name").notNull(),
+  issuedByCode: text("issued_by_code").notNull(),
+  issuedAt: text("issued_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  printedByName: text("printed_by_name").notNull().default(""),
+  printedByCode: text("printed_by_code").notNull().default(""),
+  printedAt: text("printed_at"),
+});
