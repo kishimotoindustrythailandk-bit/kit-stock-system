@@ -1808,3 +1808,28 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
   .stock-count-compare article:last-child { grid-column: 1 / -1; }
   .stock-count-modal > footer { grid-template-columns: 1fr; padding: 0 16px 16px; }
 }
+
+/* v2.22.1 — persistent overdue delivery alerts */
+.overdue-alert {
+  width: 100%; min-height: 76px; display: flex; align-items: center; gap: 14px; padding: 14px 18px;
+  color: #8d1e31; text-align: left; border: 1px solid #f29eac; border-radius: 15px;
+  background: linear-gradient(135deg,#fff5f6 0%,#ffdce2 100%); box-shadow: 0 10px 24px rgba(195,38,64,.13);
+}
+.overdue-alert > span { width: 44px; height: 44px; display: grid; place-items: center; flex: none; color: #fff; border-radius: 50%; background: linear-gradient(135deg,#ff6379,#cf2743); font-size: 24px; font-weight: 900; }
+.overdue-alert > div { flex: 1; min-width: 0; }
+.overdue-alert b,.overdue-alert small { display: block; }
+.overdue-alert b { font-size: 14px; }
+.overdue-alert small { margin-top: 3px; color: #a54a59; font-size: 10px; }
+.overdue-alert strong { color: #b2223a; white-space: nowrap; }
+.overdue-alert:hover { border-color: #e65770; filter: brightness(.99); transform: translateY(-1px); }
+.plan-modern-row.overdue { background: #fff1f3; box-shadow: inset 4px 0 #df354f; }
+.plan-modern-row.overdue:hover,.pending-row.overdue:hover { background: #ffe8ec; }
+.pending-row.overdue { margin: 2px 0; padding-right: 8px; padding-left: 8px; border-radius: 9px; background: #fff3f5; }
+.notification:disabled { cursor: default; opacity: .55; }
+@media(max-width:720px){
+  .overdue-alert { align-items: flex-start; min-height: 0; padding: 12px; }
+  .overdue-alert > span { width: 38px; height: 38px; font-size: 20px; }
+  .overdue-alert strong { display: none; }
+  .overdue-alert b { font-size: 12px; }
+  .overdue-alert small { font-size: 9px; line-height: 1.45; }
+}

@@ -51,6 +51,13 @@ test("includes the mobile navigation and card layouts", async () => {
   assert.match(appSource, /mobile-bottom-nav/);
   assert.match(appSource, /mobile-filter-toggle/);
   assert.match(appSource, /mobile-card-table/);
+  assert.match(appSource, /function isDeliveryOverdue/);
+  assert.match(appSource, /timeZone: "Asia\/Bangkok"/);
+  assert.match(appSource, /เกินดิวจัดส่งงาน/);
+  assert.match(appSource, /const overdueDues = useMemo/);
+  assert.match(appSource, /showOverduePlan/);
+  assert.match(css, /\.overdue-alert/);
+  assert.match(css, /\.plan-modern-row\.overdue/);
   assert.match(css, /@media\s*\(max-width:\s*720px\)/);
   assert.match(css, /safe-area-inset-bottom/);
 });
