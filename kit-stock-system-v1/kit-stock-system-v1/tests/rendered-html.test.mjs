@@ -56,7 +56,13 @@ test("includes the mobile navigation and card layouts", async () => {
   assert.match(appSource, /เกินดิวจัดส่งงาน/);
   assert.match(appSource, /const overdueDues = useMemo/);
   assert.match(appSource, /showOverduePlan/);
+  assert.match(appSource, /playOverdueAlertTone/);
+  assert.match(appSource, /previousOverdueIdsRef/);
+  assert.match(appSource, /aria-pressed=\{overdueSoundEnabled\}/);
+  assert.match(appSource, /overdue-sound-shortcut/);
   assert.match(css, /\.overdue-alert/);
+  assert.match(css, /\.overdue-sound-toggle/);
+  assert.match(css, /\.top-user \.overdue-sound-shortcut/);
   assert.match(css, /\.plan-modern-row\.overdue/);
   assert.match(css, /@media\s*\(max-width:\s*720px\)/);
   assert.match(css, /safe-area-inset-bottom/);
