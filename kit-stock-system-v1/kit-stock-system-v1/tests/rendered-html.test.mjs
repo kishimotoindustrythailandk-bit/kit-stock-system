@@ -199,7 +199,7 @@ test("imports Parts from Excel and prints complete Stock Tag data", async () => 
     source("../app/delivery-control-app.tsx"),
     source("../app/api/stock/route.ts"),
   ]);
-  assert.match(appSource, /นำเข้า Part Excel/);
+  assert.match(appSource, /นำเข้าทะเบียน Part จาก Excel/);
   assert.match(appSource, /Max Qty per Box/);
   assert.match(appSource, /QR \/ BARCODE/);
   assert.match(appSource, /DELIVERY QTY \/ จำนวนงานรวม/);
