@@ -2258,16 +2258,6 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const plannedPieces = payload.dues.reduce((sum, due) => sum + Number(due.reqQty || 0), 0);
 
     return <div className="home">
-      <section className="hero">
-        <div className="hero-copy">
-          <span>DELIVERY DUE CONTROL</span>
-          <h2>แผนส่งงานและตัดยอด<br />ด้วย <em>QR Tag</em></h2>
-          <p>นำเข้า Excel ของลูกค้า ตรวจ Due และสแกน Tag เพื่อตัดยอดแบบทันที</p>
-          {allowedPages.has("plan") && <button className="button white" onClick={() => go("plan")}>⇧ นำเข้าแผนส่งงาน Excel</button>}
-        </div>
-        <div className="hero-art" role="img" aria-label="รถขนส่งสินค้าในเส้นทางโรงงาน"><img src="/dashboard-delivery-hero.png" alt="" /></div>
-      </section>
-
       <div className="stat-row">
         <article className="stat-tile blue"><span className="stat-icon">▤</span><div><small>Due ทั้งหมด</small><b>{fmt(summary.items)}</b><em>รายการ</em></div></article>
         <article className="stat-tile green"><span className="stat-icon">✓</span><div><small>ส่งออกแล้ว</small><b>{fmt(summary.completed)}</b><em>รายการ · {share(summary.completed)}%</em></div></article>
