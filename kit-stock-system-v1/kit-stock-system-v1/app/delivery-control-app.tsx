@@ -1581,19 +1581,24 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     setPartBundleRunning(true);
     setPartBundleFailed([]);
     setNotice(null);
-    const uploads = partBundlePreview.rows.flatMap((row) => [
+    const candidateUploads = partBundlePreview.rows.flatMap((row) => [
       ...(row.masterFile ? [{ materialCode: row.part.materialCode, file: row.masterFile, slot: "master" as const }] : []),
       ...(row.actualFile ? [{ materialCode: row.part.materialCode, file: row.actualFile, slot: "actual" as const }] : []),
     ]);
-    setPartBundleProgress({ done: 0, total: uploads.length + 1 });
+    setPartBundleProgress({ done: 0, total: candidateUploads.length + 1 });
     try {
       const response = await fetch("/api/stock", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "import_parts", parts: partBundlePreview.rows.map((row) => row.part) }),
+        body: JSON.stringify({ importContract: "preserve_existing_v1", action: "import_parts", parts: partBundlePreview.rows.map((row) => row.part) }),
       });
-      const data = await response.json() as { imported?: number; error?: string };
+      const data = await response.json() as { importContract?: string; imported?: number; skipped?: number; skippedMaterialCodes?: string[]; error?: string };
       if (!response.ok) throw new Error(data.error || "นำเข้าทะเบียน Part ไม่สำเร็จ");
+      if (data.importContract !== "preserve_existing_v1" || !Array.isArray(data.skippedMaterialCodes)) {
+        throw new Error("ระบบนำเข้า Part ยังไม่รองรับการคงข้อมูลเดิม กรุณารีเฟรชหน้าแล้วลองใหม่");
+      }
+      const skippedCodes = new Set(data.skippedMaterialCodes);
+      const uploads = candidateUploads.filter((upload) => !skippedCodes.has(upload.materialCode));
       setPartBundleProgress({ done: 1, total: uploads.length + 1 });
       const failed: Array<{ name: string; reason: string }> = [];
       for (const [index, upload] of uploads.entries()) {
@@ -1612,10 +1617,12 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       }
       setPartBundleFailed(failed);
       await Promise.all([loadStock(), loadPartImages()]);
+      const importedCount = data.imported || 0;
+      const skippedCount = data.skipped || 0;
       if (failed.length) {
-        setNotice({ type: "error", text: `บันทึก Part สำเร็จ ${fmt(data.imported || 0)} รายการ แต่อัปโหลดรูปไม่สำเร็จ ${fmt(failed.length)} รูป` });
+        setNotice({ type: "error", text: `เพิ่ม Part ใหม่ ${fmt(importedCount)} รายการ ข้าม Part ซ้ำ ${fmt(skippedCount)} รายการ แต่อัปโหลดรูปไม่สำเร็จ ${fmt(failed.length)} รูป` });
       } else {
-        setNotice({ type: "success", text: `นำเข้า Part ${fmt(data.imported || 0)} รายการ พร้อมรูป ${fmt(uploads.length)} รูปเรียบร้อย` });
+        setNotice({ type: "success", text: `เพิ่ม Part ใหม่ ${fmt(importedCount)} รายการ ข้าม Part ซ้ำ ${fmt(skippedCount)} รายการ พร้อมรูป ${fmt(uploads.length)} รูปเรียบร้อย` });
         resetPartBundle();
       }
     } catch (caught) {
@@ -2401,7 +2408,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           </label>
           <button className="button primary part-bundle-check" disabled={partBundleRunning || !partBundleExcel}>⌕ ตรวจสอบข้อมูลและจับคู่รูป</button>
         </form>
-        <p className="part-bundle-help">ชื่อรูปต้องตรงกับ Part No. ใน Excel เช่น <code>BA04U385G05-F.jpg</code> · รองรับ JPG, PNG, WebP ไม่เกิน 5MB ต่อรูป</p>
+        <p className="part-bundle-help">Part No. ที่มีอยู่ในระบบแล้วจะถูกข้ามและคงข้อมูลกับรูปเดิมไว้ · ชื่อรูปต้องตรงกับ Part No. ใน Excel เช่น <code>BA04U385G05-F.jpg</code> · รองรับ JPG, PNG, WebP ไม่เกิน 5MB ต่อรูป</p>
 
         {partBundlePreview && <div className="part-bundle-preview">
           <div className="part-bundle-summary">

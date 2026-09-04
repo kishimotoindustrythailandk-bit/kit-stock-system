@@ -243,6 +243,9 @@ export async function POST(request: Request) {
 
     if (action === "import_parts") {
       if (user.role !== "admin" || !hasPermission(user, "tags")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์นำเข้า Part" }, { status: 403 });
+      if (body.importContract !== "preserve_existing_v1") {
+        return Response.json({ error: "หน้าจอนำเข้า Part เป็นเวอร์ชันเก่า กรุณารีเฟรชหน้าแล้วลองใหม่" }, { status: 409 });
+      }
       if (!Array.isArray(body.parts) || !body.parts.length || body.parts.length > 2000) {
         return Response.json({ error: "ไฟล์ต้องมีข้อมูล Part 1–2,000 รายการ" }, { status: 400 });
       }
@@ -266,18 +269,27 @@ export async function POST(request: Request) {
       const statements = parts.map((part) => DB.prepare(`
         INSERT INTO stock_parts (material_code, part_name, customer, location, standard_qty, active, created_at, updated_at)
         VALUES (?1, ?2, ?3, ?4, ?5, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        ON CONFLICT(material_code) DO UPDATE SET
-          part_name = excluded.part_name,
-          customer = excluded.customer,
-          location = excluded.location,
-          standard_qty = excluded.standard_qty,
-          active = 1,
-          updated_at = CURRENT_TIMESTAMP
+        ON CONFLICT(material_code) DO NOTHING
       `).bind(part.materialCode, part.partName, part.customer, part.location, part.standardQty));
+      const insertedMaterialCodes: string[] = [];
+      const skippedMaterialCodes: string[] = [];
       for (let index = 0; index < statements.length; index += 100) {
-        await DB.batch(statements.slice(index, index + 100));
+        const batchParts = parts.slice(index, index + 100);
+        const results = await DB.batch(statements.slice(index, index + 100));
+        results.forEach((result, batchIndex) => {
+          const materialCode = batchParts[batchIndex]?.materialCode;
+          if (!materialCode) return;
+          if (Number(result.meta.changes || 0) > 0) insertedMaterialCodes.push(materialCode);
+          else skippedMaterialCodes.push(materialCode);
+        });
       }
-      return Response.json({ success: true, imported: parts.length });
+      return Response.json({
+        success: true,
+        importContract: "preserve_existing_v1",
+        imported: insertedMaterialCodes.length,
+        skipped: skippedMaterialCodes.length,
+        skippedMaterialCodes,
+      });
     }
 
     if (action === "sync_due_parts") {
