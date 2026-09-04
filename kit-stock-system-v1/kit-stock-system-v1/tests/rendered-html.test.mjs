@@ -221,10 +221,14 @@ test("previews and imports a Part register with matched Master and box images", 
   assert.match(bundleFlow, /matchBundleImages/);
   assert.match(bundleFlow, /action: "import_parts"/);
   assert.match(bundleFlow, /form\.set\("slot", upload\.slot\)/);
-  assert.match(partsPage, /นำเข้าทะเบียน Part พร้อมรูป/);
+  assert.match(partsPage, /นำเข้าทะเบียน Part จาก Excel/);
+  assert.match(partsPage, /ดาวน์โหลด Template/);
+  assert.match(partsPage, /ดาวน์โหลดข้อมูล Part/);
+  assert.match(partsPage, /รูปตัวอย่าง \(Master\) · ชื่อไฟล์ต้องตรงกับ Part No\./);
+  assert.match(partsPage, /รูปชิ้นงานในกล่อง · ชื่อไฟล์ต้องตรงกับ Part No\./);
   assert.match(partsPage, /รูปตัวอย่าง \(Master\)/);
   assert.match(partsPage, /รูปชิ้นงานในกล่อง/);
-  assert.match(partsPage, /ตรวจสอบและจับคู่/);
+  assert.match(partsPage, /ตรวจสอบข้อมูลและจับคู่รูป/);
   assert.match(css, /\.part-bundle-form/);
   assert.match(css, /@media\(max-width:760px\).*\.part-bundle-form\{grid-template-columns:1fr\}/s);
 });
