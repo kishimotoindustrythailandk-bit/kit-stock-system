@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const parts = sqliteTable("parts", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -253,3 +253,50 @@ export const replacementIssues = sqliteTable("replacement_issues", {
   printedByCode: text("printed_by_code").notNull().default(""),
   printedAt: text("printed_at"),
 });
+
+
+export const stockManualReceipts = sqliteTable("stock_manual_receipts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  stockTagId: integer("stock_tag_id").notNull().references(() => stockTags.id, { onDelete: "restrict" }),
+  tagId: text("tag_id").notNull(),
+  materialCode: text("material_code").notNull().references(() => stockParts.materialCode, { onDelete: "restrict" }),
+  qty: integer("qty").notNull(),
+  jobNo: text("job_no").notNull(),
+  productionDate: text("production_date").notNull(),
+  referenceNo: text("reference_no").notNull().default(""),
+  note: text("note").notNull().default(""),
+  receivedByName: text("received_by_name").notNull(),
+  receivedByCode: text("received_by_code").notNull(),
+  receivedAt: text("received_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  index("idx_stock_manual_receipts_material_date").on(table.materialCode, table.receivedAt),
+]);
+
+export const stockCountAdjustments = sqliteTable("stock_count_adjustments", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  adjustmentNo: text("adjustment_no").notNull().unique(),
+  countDate: text("count_date").notNull(),
+  materialCode: text("material_code").notNull().references(() => stockParts.materialCode, { onDelete: "restrict" }),
+  systemQty: integer("system_qty").notNull(),
+  countedQty: integer("counted_qty").notNull(),
+  difference: integer("difference").notNull(),
+  reason: text("reason").notNull(),
+  adjustedByName: text("adjusted_by_name").notNull(),
+  adjustedByCode: text("adjusted_by_code").notNull(),
+  adjustedAt: text("adjusted_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  index("idx_stock_count_adjustments_material_date").on(table.materialCode, table.countDate, table.id),
+]);
+
+export const stockCountAdjustmentLines = sqliteTable("stock_count_adjustment_lines", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  adjustmentId: integer("adjustment_id").notNull().references(() => stockCountAdjustments.id, { onDelete: "cascade" }),
+  stockTagId: integer("stock_tag_id").notNull().references(() => stockTags.id, { onDelete: "restrict" }),
+  stockTagCode: text("stock_tag_code").notNull(),
+  qtyChange: integer("qty_change").notNull(),
+  beforeQty: integer("before_qty").notNull(),
+  afterQty: integer("after_qty").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  index("idx_stock_count_adjustment_lines_adjustment").on(table.adjustmentId, table.id),
+]);

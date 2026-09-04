@@ -31,6 +31,92 @@ function createTagId(batchCode: string, boxNo: number, boxCount: number) {
   return `${batchCode}-B${String(boxNo).padStart(width, "0")}OF${String(boxCount).padStart(width, "0")}`;
 }
 
+async function ensureStockManagementTables(DB: D1Database) {
+  const statements = [
+    DB.prepare(`
+      CREATE TABLE IF NOT EXISTS stock_manual_receipts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        stock_tag_id INTEGER NOT NULL,
+        tag_id TEXT NOT NULL,
+        material_code TEXT NOT NULL,
+        qty INTEGER NOT NULL,
+        job_no TEXT NOT NULL,
+        production_date TEXT NOT NULL,
+        reference_no TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT '',
+        received_by_name TEXT NOT NULL,
+        received_by_code TEXT NOT NULL,
+        received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `),
+    DB.prepare("CREATE INDEX IF NOT EXISTS idx_stock_manual_receipts_material_date ON stock_manual_receipts(material_code, received_at)"),
+    DB.prepare(`
+      CREATE TABLE IF NOT EXISTS stock_count_adjustments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        adjustment_no TEXT NOT NULL UNIQUE,
+        count_date TEXT NOT NULL,
+        material_code TEXT NOT NULL,
+        system_qty INTEGER NOT NULL,
+        counted_qty INTEGER NOT NULL,
+        difference INTEGER NOT NULL,
+        reason TEXT NOT NULL,
+        adjusted_by_name TEXT NOT NULL,
+        adjusted_by_code TEXT NOT NULL,
+        adjusted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `),
+    DB.prepare("CREATE INDEX IF NOT EXISTS idx_stock_count_adjustments_material_date ON stock_count_adjustments(material_code, count_date, id)"),
+    DB.prepare(`
+      CREATE TABLE IF NOT EXISTS stock_count_adjustment_lines (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        adjustment_id INTEGER NOT NULL,
+        stock_tag_id INTEGER NOT NULL,
+        stock_tag_code TEXT NOT NULL,
+        qty_change INTEGER NOT NULL,
+        before_qty INTEGER NOT NULL,
+        after_qty INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (adjustment_id) REFERENCES stock_count_adjustments(id) ON DELETE CASCADE
+      )
+    `),
+    DB.prepare("CREATE INDEX IF NOT EXISTS idx_stock_count_adjustment_lines_adjustment ON stock_count_adjustment_lines(adjustment_id, id)")
+  ];
+  await DB.batch(statements);
+}
+
+function createAdjustmentNo(prefix = "ADJ") {
+  const now = new Date();
+  const stamp = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, "0")}${String(now.getUTCDate()).padStart(2, "0")}`;
+  return `${prefix}-${stamp}-${crypto.randomUUID().replaceAll("-", "").slice(0, 6).toUpperCase()}`;
+}
+
+async function getMaterialStockSnapshot(DB: D1Database, materialCode: string) {
+  const result = await DB.prepare(`
+    SELECT t.id, t.tag_id AS tagId, t.remaining_qty AS remainingQty,
+      t.received_at AS receivedAt,
+      coalesce((SELECT sum(p.picked_qty - p.dispatched_qty) FROM stock_picks p
+        WHERE p.stock_tag_id = t.id AND p.status IN ('staged', 'partial')), 0) AS stagedQty,
+      coalesce((SELECT sum(a.qty) FROM stock_allocations a
+        WHERE a.stock_tag_id = t.id AND a.status = 'reserved'), 0) AS legacyReservedQty
+    FROM stock_tags t
+    WHERE t.material_code = ?1 AND t.status IN ('in_stock', 'depleted')
+    ORDER BY coalesce(t.received_at, t.created_at) ASC, t.id ASC
+  `).bind(materialCode).all<{
+    id: number; tagId: string; remainingQty: number; receivedAt: string | null;
+    stagedQty: number; legacyReservedQty: number;
+  }>();
+  const tags = (result.results || []).map((tag) => ({
+    ...tag,
+    remainingQty: Number(tag.remainingQty || 0),
+    stagedQty: Number(tag.stagedQty || 0),
+    legacyReservedQty: Number(tag.legacyReservedQty || 0),
+  }));
+  const systemQty = tags.reduce((sum, tag) => sum + tag.remainingQty, 0);
+  const reservedQty = tags.reduce((sum, tag) => sum + tag.stagedQty + tag.legacyReservedQty, 0);
+  const reducibleQty = tags.reduce((sum, tag) => sum + Math.max(tag.remainingQty - tag.stagedQty - tag.legacyReservedQty, 0), 0);
+  return { tags, systemQty, reservedQty, reducibleQty };
+}
+
 export async function GET() {
   try {
     const user = await getCurrentUser();
@@ -40,6 +126,7 @@ export async function GET() {
     }
     const { DB } = getRuntimeEnv();
     if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
+    await ensureStockManagementTables(DB);
     await DB.prepare(`
       CREATE TABLE IF NOT EXISTS stock_receipt_adjustments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -159,7 +246,39 @@ export async function GET() {
         closed_at AS closedAt
       FROM stock_job_closures ORDER BY id DESC LIMIT 50
     `).all();
-    return Response.json({ parts, tags, allocations, picks: picks.results, dispatchLinks: dispatchLinks.results, jobClosures: jobClosures.results });
+    const manualReceipts = await DB.prepare(`
+      SELECT r.id, r.stock_tag_id AS stockTagId, r.tag_id AS tagId,
+        r.material_code AS materialCode, coalesce(p.part_name, '') AS partName,
+        r.qty, r.job_no AS jobNo, r.production_date AS productionDate,
+        r.reference_no AS referenceNo, r.note,
+        r.received_by_name AS receivedByName, r.received_by_code AS receivedByCode,
+        r.received_at AS receivedAt
+      FROM stock_manual_receipts r
+      LEFT JOIN stock_parts p ON p.material_code = r.material_code
+      ORDER BY r.id DESC LIMIT 100
+    `).all();
+    const countAdjustments = await DB.prepare(`
+      SELECT a.id, a.adjustment_no AS adjustmentNo, a.count_date AS countDate,
+        a.material_code AS materialCode, coalesce(p.part_name, '') AS partName,
+        a.system_qty AS systemQty, a.counted_qty AS countedQty, a.difference,
+        a.reason, a.adjusted_by_name AS adjustedByName,
+        a.adjusted_by_code AS adjustedByCode, a.adjusted_at AS adjustedAt,
+        coalesce((SELECT count(*) FROM stock_count_adjustment_lines l WHERE l.adjustment_id = a.id), 0) AS affectedTagCount
+      FROM stock_count_adjustments a
+      LEFT JOIN stock_parts p ON p.material_code = a.material_code
+      ORDER BY a.id DESC LIMIT 100
+    `).all();
+    const countAdjustmentLines = await DB.prepare(`
+      SELECT id, adjustment_id AS adjustmentId, stock_tag_id AS stockTagId,
+        stock_tag_code AS stockTagCode, qty_change AS qtyChange,
+        before_qty AS beforeQty, after_qty AS afterQty, created_at AS createdAt
+      FROM stock_count_adjustment_lines ORDER BY id DESC LIMIT 400
+    `).all();
+    return Response.json({
+      parts, tags, allocations, picks: picks.results, dispatchLinks: dispatchLinks.results,
+      jobClosures: jobClosures.results, manualReceipts: manualReceipts.results,
+      countAdjustments: countAdjustments.results, countAdjustmentLines: countAdjustmentLines.results,
+    });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "โหลดข้อมูล Stock ไม่สำเร็จ" }, { status: 500 });
   }
@@ -174,6 +293,7 @@ export async function POST(request: Request) {
     const db = getDb();
     const { DB: runtimeDb } = getRuntimeEnv();
     if (!runtimeDb) throw new Error("ไม่พบการเชื่อมต่อ D1");
+    await ensureStockManagementTables(runtimeDb);
     await runtimeDb.prepare(`
       CREATE TABLE IF NOT EXISTS stock_receipt_adjustments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -312,6 +432,9 @@ export async function POST(request: Request) {
       const { DB } = getRuntimeEnv();
       if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
       const results = await DB.batch([
+        DB.prepare("DELETE FROM stock_count_adjustment_lines"),
+        DB.prepare("DELETE FROM stock_count_adjustments"),
+        DB.prepare("DELETE FROM stock_manual_receipts"),
         DB.prepare("DELETE FROM stock_dispatch_links"),
         DB.prepare("DELETE FROM stock_allocations"),
         DB.prepare("DELETE FROM stock_picks"),
@@ -320,10 +443,13 @@ export async function POST(request: Request) {
       return Response.json({
         success: true,
         deleted: {
-          dispatchLinks: results[0].meta.changes,
-          allocations: results[1].meta.changes,
-          picks: results[2].meta.changes,
-          tags: results[3].meta.changes,
+          countAdjustmentLines: results[0].meta.changes,
+          countAdjustments: results[1].meta.changes,
+          manualReceipts: results[2].meta.changes,
+          dispatchLinks: results[3].meta.changes,
+          allocations: results[4].meta.changes,
+          picks: results[5].meta.changes,
+          tags: results[6].meta.changes,
         },
       });
     }
@@ -527,6 +653,165 @@ export async function POST(request: Request) {
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)
       `).bind(tag.id, tag.tagId, tag.qty, receivedQty, ngQty, user.displayName, user.employeeCode).run();
       return Response.json({ action: "received", tag: { ...updated, partName: part?.partName || "", customer: part?.customer || "", receivedQty, ngQty }, receivedQty, ngQty }, { status: 201 });
+    }
+
+
+    if (action === "manual_receive") {
+      if (!hasPermission(user, "stock") || !requireStockRole(user.role)) {
+        return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์คีย์รับงานเข้า Stock" }, { status: 403 });
+      }
+      const materialCode = clean(body.materialCode, 100).toUpperCase();
+      const qty = Number(body.qty || 0);
+      const jobNo = clean(body.jobNo, 160);
+      const productionDate = clean(body.productionDate, 10);
+      const referenceNo = clean(body.referenceNo, 160);
+      const note = clean(body.note, 500);
+      if (!materialCode || !Number.isInteger(qty) || qty <= 0 || !jobNo || !/^\d{4}-\d{2}-\d{2}$/.test(productionDate)) {
+        return Response.json({ error: "กรุณาเลือก Part ระบุจำนวน Job/เอกสารอ้างอิง และวันที่ผลิตให้ครบ" }, { status: 400 });
+      }
+      const part = await runtimeDb.prepare(`
+        SELECT material_code AS materialCode, part_name AS partName, customer
+        FROM stock_parts WHERE material_code = ?1 AND active = 1 LIMIT 1
+      `).bind(materialCode).first<{ materialCode: string; partName: string; customer: string }>();
+      if (!part) return Response.json({ error: "ไม่พบ Part นี้ในทะเบียน หรือ Part ถูกยกเลิก" }, { status: 404 });
+      const tagId = createTagId(createTagBatchCode(), 1, 1);
+      const inserted = await runtimeDb.prepare(`
+        INSERT INTO stock_tags
+          (tag_id, material_code, qty, remaining_qty, job_no, production_date, status,
+           printed_by_name, received_by_name, received_by_code, received_at, created_at)
+        VALUES (?1, ?2, ?3, ?3, ?4, ?5, 'in_stock', ?6, ?6, ?7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `).bind(tagId, materialCode, qty, jobNo, productionDate, user.displayName, user.employeeCode).run();
+      const stockTagId = Number(inserted.meta.last_row_id || 0);
+      await runtimeDb.batch([
+        runtimeDb.prepare(`
+          INSERT INTO stock_manual_receipts
+            (stock_tag_id, tag_id, material_code, qty, job_no, production_date,
+             reference_no, note, received_by_name, received_by_code, received_at)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, CURRENT_TIMESTAMP)
+        `).bind(stockTagId, tagId, materialCode, qty, jobNo, productionDate, referenceNo, note, user.displayName, user.employeeCode),
+        runtimeDb.prepare(`
+          INSERT INTO stock_receipt_adjustments
+            (stock_tag_id, tag_id, original_qty, received_qty, ng_qty,
+             received_by_name, received_by_code, received_at)
+          VALUES (?1, ?2, ?3, ?3, 0, ?4, ?5, CURRENT_TIMESTAMP)
+        `).bind(stockTagId, tagId, qty, user.displayName, user.employeeCode),
+      ]);
+      return Response.json({
+        success: true,
+        tag: { id: stockTagId, tagId, materialCode, partName: part.partName, customer: part.customer,
+          qty, remainingQty: qty, reservedQty: 0, jobNo, productionDate, status: "in_stock",
+          printedByName: user.displayName, receivedByName: user.displayName, receivedQty: qty, ngQty: 0 },
+      }, { status: 201 });
+    }
+
+    if (action === "preview_stock_count" || action === "confirm_stock_count") {
+      if (user.role !== "admin" || !hasPermission(user, "stock")) {
+        return Response.json({ error: "เฉพาะผู้ดูแลระบบที่มีสิทธิ์ Stock เท่านั้นที่ปรับยอดตรวจนับได้" }, { status: 403 });
+      }
+      const materialCode = clean(body.materialCode, 100).toUpperCase();
+      const countDate = clean(body.countDate, 10);
+      const countedQty = Number(body.countedQty);
+      const reason = clean(body.reason, 500);
+      if (!materialCode || !/^\d{4}-\d{2}-\d{2}$/.test(countDate) || !Number.isInteger(countedQty) || countedQty < 0) {
+        return Response.json({ error: "กรุณาเลือก Part วันที่ตรวจนับ และระบุยอดนับจริงเป็นจำนวนเต็มตั้งแต่ 0 ขึ้นไป" }, { status: 400 });
+      }
+      if (action === "confirm_stock_count" && !reason) {
+        return Response.json({ error: "กรุณาระบุสาเหตุการปรับยอดเพื่อใช้ตรวจสอบย้อนหลัง" }, { status: 400 });
+      }
+      const part = await runtimeDb.prepare(`
+        SELECT material_code AS materialCode, part_name AS partName
+        FROM stock_parts WHERE material_code = ?1 AND active = 1 LIMIT 1
+      `).bind(materialCode).first<{ materialCode: string; partName: string }>();
+      if (!part) return Response.json({ error: "ไม่พบ Part นี้ในทะเบียน หรือ Part ถูกยกเลิก" }, { status: 404 });
+      const snapshot = await getMaterialStockSnapshot(runtimeDb, materialCode);
+      const difference = countedQty - snapshot.systemQty;
+      if (difference < 0 && Math.abs(difference) > snapshot.reducibleQty) {
+        return Response.json({
+          error: `ไม่สามารถปรับเหลือ ${countedQty} ชิ้นได้ เพราะมีงานจัดรอขาย/จองอยู่ ${snapshot.reservedQty} ชิ้น กรุณายกเลิกหรือขายงานที่จัดไว้ก่อน`,
+          systemQty: snapshot.systemQty, countedQty, difference,
+          reservedQty: snapshot.reservedQty, reducibleQty: snapshot.reducibleQty,
+        }, { status: 409 });
+      }
+      let remainingReduction = Math.max(-difference, 0);
+      const deductionLines: Array<{ id: number; tagId: string; beforeQty: number; afterQty: number; qtyChange: number }> = [];
+      for (const tag of snapshot.tags) {
+        if (!remainingReduction) break;
+        const canReduce = Math.max(tag.remainingQty - tag.stagedQty - tag.legacyReservedQty, 0);
+        const reduceBy = Math.min(canReduce, remainingReduction);
+        if (!reduceBy) continue;
+        deductionLines.push({ id: tag.id, tagId: tag.tagId, beforeQty: tag.remainingQty, afterQty: tag.remainingQty - reduceBy, qtyChange: -reduceBy });
+        remainingReduction -= reduceBy;
+      }
+      if (action === "preview_stock_count") {
+        return Response.json({
+          action: "preview_stock_count", materialCode, partName: part.partName,
+          countDate, systemQty: snapshot.systemQty, countedQty, difference,
+          reservedQty: snapshot.reservedQty, reducibleQty: snapshot.reducibleQty,
+          affectedTagCount: difference > 0 ? 1 : deductionLines.length,
+          affectedTags: deductionLines.slice(0, 20).map((line) => ({ stockTagCode: line.tagId, qtyChange: line.qtyChange, beforeQty: line.beforeQty, afterQty: line.afterQty })),
+        });
+      }
+      const adjustmentNo = createAdjustmentNo();
+      const statements: D1PreparedStatement[] = [
+        runtimeDb.prepare(`
+          INSERT INTO stock_count_adjustments
+            (adjustment_no, count_date, material_code, system_qty, counted_qty,
+             difference, reason, adjusted_by_name, adjusted_by_code, adjusted_at)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, CURRENT_TIMESTAMP)
+        `).bind(adjustmentNo, countDate, materialCode, snapshot.systemQty, countedQty, difference, reason, user.displayName, user.employeeCode),
+      ];
+      let createdTagId = "";
+      if (difference < 0) {
+        for (const line of deductionLines) {
+          statements.push(
+            runtimeDb.prepare(`
+              UPDATE stock_tags
+              SET remaining_qty = ?1, status = CASE WHEN ?1 = 0 THEN 'depleted' ELSE 'in_stock' END
+              WHERE id = ?2 AND remaining_qty = ?3
+            `).bind(line.afterQty, line.id, line.beforeQty),
+            runtimeDb.prepare(`
+              INSERT INTO stock_count_adjustment_lines
+                (adjustment_id, stock_tag_id, stock_tag_code, qty_change, before_qty, after_qty, created_at)
+              SELECT id, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP
+              FROM stock_count_adjustments WHERE adjustment_no = ?1
+            `).bind(adjustmentNo, line.id, line.tagId, line.qtyChange, line.beforeQty, line.afterQty),
+          );
+        }
+      } else if (difference > 0) {
+        createdTagId = createTagId(createTagBatchCode(), 1, 1);
+        statements.push(
+          runtimeDb.prepare(`
+            INSERT INTO stock_tags
+              (tag_id, material_code, qty, remaining_qty, job_no, production_date, status,
+               printed_by_name, received_by_name, received_by_code, received_at, created_at)
+            VALUES (?1, ?2, ?3, ?3, ?4, ?5, 'in_stock', ?6, ?6, ?7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          `).bind(createdTagId, materialCode, difference, `STOCK-ADJUST-${countDate}`, countDate, user.displayName, user.employeeCode),
+          runtimeDb.prepare(`
+            INSERT INTO stock_count_adjustment_lines
+              (adjustment_id, stock_tag_id, stock_tag_code, qty_change, before_qty, after_qty, created_at)
+            SELECT a.id, t.id, t.tag_id, ?3, 0, ?3, CURRENT_TIMESTAMP
+            FROM stock_count_adjustments a, stock_tags t
+            WHERE a.adjustment_no = ?1 AND t.tag_id = ?2
+          `).bind(adjustmentNo, createdTagId, difference),
+          runtimeDb.prepare(`
+            INSERT INTO stock_receipt_adjustments
+              (stock_tag_id, tag_id, original_qty, received_qty, ng_qty,
+               received_by_name, received_by_code, received_at)
+            SELECT id, tag_id, ?2, ?2, 0, ?3, ?4, CURRENT_TIMESTAMP
+            FROM stock_tags WHERE tag_id = ?1
+          `).bind(createdTagId, difference, user.displayName, user.employeeCode),
+        );
+      }
+      await runtimeDb.batch(statements);
+      return Response.json({
+        success: true, action: "stock_count_adjusted", adjustmentNo,
+        materialCode, partName: part.partName, countDate,
+        systemQty: snapshot.systemQty, countedQty, difference,
+        affectedTagCount: difference > 0 ? 1 : deductionLines.length,
+        affectedTags: difference > 0
+          ? [{ stockTagCode: createdTagId, qtyChange: difference, beforeQty: 0, afterQty: difference }]
+          : deductionLines.map((line) => ({ stockTagCode: line.tagId, qtyChange: line.qtyChange, beforeQty: line.beforeQty, afterQty: line.afterQty })),
+      }, { status: 201 });
     }
 
     if (action === "stage") {
