@@ -137,6 +137,9 @@ export const stockParts = sqliteTable("stock_parts", {
   active: integer("active", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  // เพิ่มด้วย migration 0018 เดิมคอลัมน์นี้เกิดจาก ALTER TABLE ใน route handler
+  // จึงไม่มีอยู่ใน schema นี้เลย ทั้งที่โค้ดอ่านและเขียนมันอยู่ตลอด
+  location: text("location").notNull().default(""),
 });
 
 export const stockTags = sqliteTable("stock_tags", {
@@ -192,6 +195,52 @@ export const stockDispatchLinks = sqliteTable("stock_dispatch_links", {
   dispatchedByCode: text("dispatched_by_code").notNull(),
   dispatchedAt: text("dispatched_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
+
+/**
+ * ยอดที่รับเข้าจริงและยอด NG ของแต่ละ Tag ตอนสแกนรับเข้า Stock
+ *
+ * เดิมตารางนี้ไม่มีทั้งใน schema และใน migrations ถูกสร้างจาก CREATE TABLE
+ * ที่ฝังใน app/api/stock/route.ts เท่านั้น ตอนนี้ย้ายมาเป็น migration 0017
+ *
+ * ยังไม่ประกาศ references() ไป stockTags เพราะฐาน production ไม่มี FK ตัวนี้
+ * (ตารางถูกสร้างโดยโค้ดที่ไม่ได้ใส่ FK ไว้) ถ้าประกาศที่นี่จะทำให้ schema
+ * ในรีโปไม่ตรงกับฐานจริง
+ */
+export const stockReceiptAdjustments = sqliteTable("stock_receipt_adjustments", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  stockTagId: integer("stock_tag_id").notNull(),
+  tagId: text("tag_id").notNull(),
+  originalQty: integer("original_qty").notNull(),
+  receivedQty: integer("received_qty").notNull(),
+  ngQty: integer("ng_qty").notNull(),
+  receivedByName: text("received_by_name").notNull(),
+  receivedByCode: text("received_by_code").notNull(),
+  receivedAt: text("received_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  index("idx_stock_receipt_adjustments_tag").on(table.stockTagId, table.id),
+]);
+
+/**
+ * บันทึกการปิดรับเข้า Job แล้วตัด Tag ที่ยังค้างเป็น NG
+ *
+ * เดิมสร้างจาก CREATE TABLE ที่ฝังใน route handler เช่นเดียวกัน
+ * ย้ายมาเป็น migration 0017 พร้อม index ที่ฐาน production ยังไม่มี
+ */
+export const stockJobClosures = sqliteTable("stock_job_closures", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  jobNo: text("job_no").notNull(),
+  materialCode: text("material_code").notNull(),
+  totalQty: integer("total_qty").notNull(),
+  receivedQty: integer("received_qty").notNull(),
+  ngQty: integer("ng_qty").notNull(),
+  ngTagCount: integer("ng_tag_count").notNull(),
+  reason: text("reason").notNull().default(""),
+  closedByName: text("closed_by_name").notNull(),
+  closedByCode: text("closed_by_code").notNull(),
+  closedAt: text("closed_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  index("idx_stock_job_closures_job_material").on(table.jobNo, table.materialCode, table.id),
+]);
 
 export const appUsers = sqliteTable("app_users", {
   id: integer("id").primaryKey({ autoIncrement: true }),

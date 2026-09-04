@@ -1,25 +1,93 @@
-# KIT Delivery Due Control v2.9.0 — ซ่อมการติดตั้ง ฐานข้อมูล และความปลอดภัยบัญชี
+# KIT Delivery Due Control v2.9.1 — schema มีแหล่งอ้างอิงเดียว
 
-รุ่นนี้ไม่ได้เพิ่มฟีเจอร์ใหม่ แต่ซ่อมสิ่งที่ทำให้ติดตั้งใหม่ไม่สำเร็จมาตลอด
+รุ่นนี้ไม่ได้เพิ่มฟีเจอร์ใหม่ แต่ทำให้ "โครงสร้างฐานข้อมูลที่รีโปบอก" ตรงกับ
+"โครงสร้างที่ฐานจริงมี" และเลิกสร้างตารางตอน runtime
 
 ## ติดตั้งหรืออัปเกรด
 
-**ฐานข้อมูลที่ใช้งานอยู่แล้ว** (เคยรัน `database-upgrade-*.sql` ด้วยมือ) — รัน baseline ครั้งเดียวก่อน:
+**ฐานที่รันโค้ด v2.9.0 อยู่แล้ว** (รวมถึง Worker `kit-stock-system` ตัวจริง):
 
 ```
 npm install
-npm run db:baseline      # ครั้งเดียวเท่านั้น บอก wrangler ว่า migration เก่ามีอยู่แล้ว
-npm run db:migrate       # รันเฉพาะ 0010, 0011, 0013
-npm run check            # typecheck + lint + test ต้องผ่านทั้งหมด
+npm run db:baseline:runtime-ddl   # ครั้งเดียว บอก wrangler ว่าคอลัมน์ location มีอยู่แล้ว
+npm run db:migrate                # รัน 0014–0017 (idempotent ทั้งชุด)
+npm run check                     # typecheck + lint + test ต้องผ่านทั้งหมด
 npm run deploy
 ```
 
-**ฐานข้อมูลใหม่ที่ยังว่าง** — ข้าม `db:baseline` แล้วรัน `npm run db:migrate` ได้เลย
+**ฐานที่ยังไม่เคยผ่าน v2.9** (เคยรัน `database-upgrade-*.sql` ด้วยมือ):
 
-หรือใช้ `INSTALL-MAC-LINUX.sh` / `INSTALL-WINDOWS.bat` ซึ่งทำตามลำดับนี้ให้อัตโนมัติ
+```
+npm install
+npm run db:baseline      # ครั้งเดียว บอก wrangler ว่า 0000–0009 กับ 0012 มีอยู่แล้ว
+npm run db:migrate       # รัน 0010, 0011, 0013–0018
+npm run check
+npm run deploy
+```
 
-> **สำคัญ:** ต้องรัน migration ก่อน deploy เสมอ โค้ดรุ่นนี้ต้องการตาราง
-> `app_login_attempts` และคอลัมน์ `app_users.must_change_pin`
+**ฐานข้อมูลใหม่ที่ยังว่าง** — ข้าม baseline ทั้งสองตัว แล้วรัน `npm run db:migrate` ได้เลย
+
+ไม่แน่ใจว่าฐานอยู่สถานะไหน ตรวจได้จาก:
+
+```bash
+npx wrangler d1 execute DB --remote --command "SELECT name FROM d1_migrations ORDER BY id"
+npx wrangler d1 execute DB --remote --command "PRAGMA table_info(stock_parts)"
+```
+
+ถ้า `stock_parts` มีคอลัมน์ `location` แล้ว ให้ใช้ชุดคำสั่งแรก
+
+> **สำคัญ:** ต้องรัน migration ให้ครบก่อน deploy เสมอ v2.9.1 ถอด CREATE TABLE
+> และ ALTER TABLE ออกจาก route handler แล้ว จึงไม่มีอะไรสร้างตารางให้ตอน runtime อีก
+
+## สิ่งที่แก้ใน v2.9.1
+
+**schema มีแหล่งอ้างอิงเดียว**
+
+- `app/api/stock/route.ts` เดิมยิง `CREATE TABLE` / `CREATE INDEX` 6 คำสั่งผ่าน
+  `DB.batch()` บวก `CREATE TABLE` ของ `stock_receipt_adjustments`,
+  `stock_job_closures` และ `PRAGMA table_info` + `ALTER TABLE` ของ
+  `stock_parts.location` **ทุกครั้งที่มี request เข้ามา** ทั้งใน GET และ POST
+  `app/api/replacements/route.ts` และ `app/api/part-images/route.ts` ก็ทำแบบเดียวกัน
+  ตอนนี้ถอดออกหมดแล้ว ทุก request ไม่ต้องจ่ายค่า DDL อีก
+- `stock_receipt_adjustments` กับ `stock_job_closures` เดิมไม่มีอยู่ทั้งใน
+  `migrations/` และ `db/schema.ts` เลย มีแต่ใน route handler จึงไม่มีทางรู้จากรีโป
+  ได้ว่าฐานจริงมีตารางอะไร ตอนนี้อยู่ใน `migrations/0017` และ `db/schema.ts`
+- คอลัมน์ `stock_parts.location` ย้ายไปอยู่ใน `migrations/0018` และประกาศใน
+  `db/schema.ts` แล้ว
+- เพิ่ม index `idx_stock_job_closures_job_material` ที่ฐาน production ไม่มี
+  เพราะโค้ดที่สร้างตารางไม่ได้สร้าง index ให้ ทั้งที่ `close_job` อ่านด้วย
+  `job_no` + `material_code` ทุกครั้ง
+
+**ชื่อ Worker ใน wrangler.jsonc**
+
+- เดิมเป็น `kit-stock` ซึ่งไม่มี Worker ชื่อนี้อยู่บน account เลย Worker ที่ให้บริการ
+  จริงชื่อ `kit-stock-system` ใครเช็คเอาต์รีโปแล้วสั่ง `npm run deploy` จะได้ Worker
+  ตัวใหม่ที่ผูก D1 production ตัวเดียวกัน กลายเป็นสองระบบเขียนฐานเดียว
+
+**โครงสร้างรีโป**
+
+- ไฟล์เดิมซ้อนอยู่ใต้ `kit-stock-system-v1/kit-stock-system-v1/` สองชั้น ซึ่งเป็น
+  สิ่งที่ README ของตัวเองเตือนห้ามทำ ย้ายขึ้นมาที่รากรีโปแล้ว
+
+## ยังไม่ได้แก้ในรุ่นนี้
+
+- ตาราง `stock_manual_receipts`, `stock_count_adjustments`, `replacement_*` และ
+  `part_actual_images` บนฐาน production **ไม่มี FOREIGN KEY และ CHECK** ตามที่
+  migration 0014–0016 เขียนไว้ เพราะถูกสร้างจาก route handler รุ่นเก่าที่ไม่ได้ใส่
+  เอาไว้ก่อน แล้ว `CREATE TABLE IF NOT EXISTS` ก็ไม่แก้ตารางที่มีอยู่แล้ว
+  การเพิ่ม FK ต้อง rebuild ตารางบน production ซึ่งเป็นงานแยกอีกชุด
+  migration 0017 จึงคัดลอก DDL ให้ตรงกับฐานจริงโดยเจตนา เพื่อไม่ให้ฐาน production
+  กับฐานที่ติดตั้งใหม่มี schema ต่างกัน
+- race condition ตอนจัดงาน (`stage`) ที่ทำให้จัดเกินของจริงได้
+- `DB.batch` ตอนตัดยอดไม่ได้ตรวจ `meta.changes` จึงเงียบเมื่อ guard ไม่ผ่าน
+- `xlsx@0.18.5` ยังมีช่องโหว่ ต้องย้ายไป SheetJS CDN
+- โค้ดตายใน `app/employees/` และตารางรุ่นเก่าใน `db/schema.ts`
+
+---
+
+# v2.9.0 — ซ่อมการติดตั้ง ฐานข้อมูล และความปลอดภัยบัญชี
+
+รุ่นนี้ไม่ได้เพิ่มฟีเจอร์ใหม่ แต่ซ่อมสิ่งที่ทำให้ติดตั้งใหม่ไม่สำเร็จมาตลอด
 
 ## สิ่งที่แก้ใน v2.9.0
 

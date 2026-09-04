@@ -10,7 +10,14 @@
 --
 -- ไฟล์นี้บอก wrangler ว่า 0000–0009 กับ 0012 มีอยู่ในฐานแล้ว (0012 สร้างตาราง
 -- delivery_tag_receipts ซึ่งฐานเดิมได้มาจาก database-upgrade-v2.2-users-scan.sql)
--- เหลือแค่ 0010, 0011 และ 0013 ที่ต้องรันจริง
+-- ที่เหลือ (0010, 0011, 0013–0018) ปล่อยให้ `npm run db:migrate` รันจริง
+-- ทุกไฟล์เขียนแบบ CREATE TABLE / CREATE INDEX IF NOT EXISTS จึงรันซ้ำได้
+--
+-- ข้อยกเว้นเดียวคือ 0018 (ALTER TABLE stock_parts ADD COLUMN location) ซึ่ง
+-- ไม่มี IF NOT EXISTS ให้ใช้ ถ้าฐานเคยรันโค้ด v2.9.0 มาแล้วจะมีคอลัมน์นี้อยู่
+-- เพราะ route handler รุ่นนั้นสร้างให้เอง กรณีนั้นต้องรัน
+-- `npm run db:baseline:runtime-ddl` เพิ่มอีกหนึ่งครั้ง ดูรายละเอียดใน
+-- scripts/baseline-runtime-ddl.sql
 --
 -- ฐานข้อมูลใหม่ที่ยังว่าง: ห้ามรันไฟล์นี้ ให้รัน `npm run db:migrate` ตรงๆ ได้เลย
 

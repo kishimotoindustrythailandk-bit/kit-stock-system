@@ -1,0 +1,16 @@
+-- v2.9.1: คอลัมน์ stock_parts.location
+--
+-- เดิมคอลัมน์นี้ถูกเพิ่มด้วย ALTER TABLE ที่ฝังอยู่ใน app/api/stock/route.ts
+-- ทั้งใน GET และ POST โดยเช็คด้วย PRAGMA table_info ก่อนทุก request
+--
+-- แยกเป็นไฟล์ของตัวเองเพราะ ALTER TABLE ADD COLUMN ของ SQLite ไม่มี
+-- IF NOT EXISTS ให้ใช้ ถ้าเอาไปรวมกับ 0017 แล้วรันบนฐานที่มีคอลัมน์อยู่แล้ว
+-- migration ทั้งไฟล์จะพังด้วย "duplicate column name: location"
+--
+-- ฐานที่เคยรันโค้ด v2.9.0 มาแล้วจะมีคอลัมน์นี้อยู่ (โค้ดสร้างให้เอง) ให้ลงทะเบียน
+-- ว่า migration นี้ผ่านแล้วโดยไม่ต้องรันจริง:
+--
+--   npm run db:baseline:runtime-ddl
+--
+-- ฐานที่ยังไม่มีคอลัมน์: ปล่อยให้ npm run db:migrate รันไฟล์นี้ตามปกติ
+ALTER TABLE stock_parts ADD COLUMN location TEXT NOT NULL DEFAULT '';

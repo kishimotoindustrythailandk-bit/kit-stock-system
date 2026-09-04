@@ -25,50 +25,11 @@ function canIssue(user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>)
   return user.role === "admin" || hasPermission(user, "replacement") || hasPermission(user, "arrange") || hasPermission(user, "stock");
 }
 
-async function ensureTables() {
-  const { DB } = getRuntimeEnv();
-  if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
-  await DB.prepare(`
-    CREATE TABLE IF NOT EXISTS replacement_requests (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      request_no TEXT NOT NULL UNIQUE,
-      material_code TEXT NOT NULL,
-      part_name TEXT NOT NULL DEFAULT '',
-      customer TEXT NOT NULL DEFAULT '',
-      requested_qty INTEGER NOT NULL,
-      issued_qty INTEGER NOT NULL DEFAULT 0,
-      reason_type TEXT NOT NULL DEFAULT 'shortage',
-      reason_detail TEXT NOT NULL DEFAULT '',
-      needed_date TEXT NOT NULL DEFAULT '',
-      status TEXT NOT NULL DEFAULT 'pending',
-      requested_by_name TEXT NOT NULL,
-      requested_by_code TEXT NOT NULL,
-      requested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      completed_at TEXT
-    )
-  `).run();
-  await DB.prepare(`
-    CREATE TABLE IF NOT EXISTS replacement_issues (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      request_id INTEGER NOT NULL,
-      stock_tag_id INTEGER NOT NULL,
-      stock_tag_code TEXT NOT NULL,
-      qty INTEGER NOT NULL,
-      notice_no TEXT NOT NULL,
-      issued_by_name TEXT NOT NULL,
-      issued_by_code TEXT NOT NULL,
-      issued_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      printed_by_name TEXT NOT NULL DEFAULT '',
-      printed_by_code TEXT NOT NULL DEFAULT '',
-      printed_at TEXT
-    )
-  `).run();
-  await DB.prepare("CREATE INDEX IF NOT EXISTS idx_replacement_requests_status_date ON replacement_requests(status, requested_at)").run();
-  await DB.prepare("CREATE INDEX IF NOT EXISTS idx_replacement_requests_material ON replacement_requests(material_code, status)").run();
-  await DB.prepare("CREATE INDEX IF NOT EXISTS idx_replacement_issues_request ON replacement_issues(request_id, issued_at)").run();
-  await DB.prepare("CREATE INDEX IF NOT EXISTS idx_replacement_issues_stock_tag ON replacement_issues(stock_tag_id)").run();
-}
-
+/**
+ * เดิมไฟล์นี้มี ensureTables() ที่ยิง CREATE TABLE 2 คำสั่งกับ CREATE INDEX
+ * 4 คำสั่งทุกครั้งที่ GET หรือ POST เข้ามา ตาราง replacement_requests และ
+ * replacement_issues อยู่ใน migrations/0015 อยู่แล้ว จึงไม่ต้องสร้างซ้ำตอน runtime
+ */
 async function requestRow(id: number) {
   const { DB } = getRuntimeEnv();
   if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
@@ -89,7 +50,6 @@ export async function GET() {
     const user = await getCurrentUser();
     if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
     if (!canAccess(user)) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ดูงานทดแทน" }, { status: 403 });
-    await ensureTables();
     const { DB } = getRuntimeEnv();
     if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
     const [requests, issues] = await Promise.all([
@@ -126,7 +86,6 @@ export async function POST(request: Request) {
     const user = await getCurrentUser();
     if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
     if (!canAccess(user)) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ใช้งานทดแทน" }, { status: 403 });
-    await ensureTables();
     const { DB } = getRuntimeEnv();
     if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
     const body = await request.json() as Record<string, unknown>;
