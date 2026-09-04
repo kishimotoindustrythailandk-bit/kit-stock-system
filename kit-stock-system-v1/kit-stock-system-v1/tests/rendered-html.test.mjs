@@ -2,12 +2,28 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+const source = (relativePath) => readFile(new URL(relativePath, import.meta.url), "utf8");
+
+function sourceSection(text, startMarker, endMarker) {
+  const start = text.indexOf(startMarker);
+  assert.notEqual(start, -1, `Missing source marker: ${startMarker}`);
+  const end = text.indexOf(endMarker, start + startMarker.length);
+  assert.notEqual(end, -1, `Missing source marker after ${startMarker}: ${endMarker}`);
+  return text.slice(start, end);
+}
+
+function assertBefore(text, firstPattern, secondPattern) {
+  const first = text.search(firstPattern);
+  const second = text.search(secondPattern);
+  assert.notEqual(first, -1, `Missing earlier pattern: ${firstPattern}`);
+  assert.notEqual(second, -1, `Missing later pattern: ${secondPattern}`);
+  assert.ok(first < second, `${firstPattern} must appear before ${secondPattern}`);
+}
+
 test("renders the standalone employee login page", async () => {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
-  // dist/server/index.js export default เป็น object { fetch } ไม่ใช่ function
-  // เดิมเรียก worker(...) ตรงๆ จึงพังด้วย "worker is not a function" มาตลอด
   const response = await worker.fetch(
     new Request("http://localhost/login", { headers: { accept: "text/html" } }),
     { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
@@ -20,10 +36,17 @@ test("renders the standalone employee login page", async () => {
   assert.match(html, /DELIVERY DUE CONTROL/);
 });
 
+test("uses DeliveryControlApp as the production UI entry", async () => {
+  const pageSource = await source("../app/page.tsx");
+  assert.match(pageSource, /import DeliveryControlApp from "\.\/delivery-control-app"/);
+  assert.match(pageSource, /<DeliveryControlApp/);
+  assert.doesNotMatch(pageSource, /stock-app|employee-manager/i);
+});
+
 test("includes the mobile navigation and card layouts", async () => {
   const [appSource, css] = await Promise.all([
-    readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    source("../app/delivery-control-app.tsx"),
+    source("../app/globals.css"),
   ]);
   assert.match(appSource, /mobile-bottom-nav/);
   assert.match(appSource, /mobile-filter-toggle/);
@@ -32,17 +55,19 @@ test("includes the mobile navigation and card layouts", async () => {
   assert.match(css, /safe-area-inset-bottom/);
 });
 
-test("includes v2.8 Stock Job traceability workflow", async () => {
+test("includes the active Stock Job traceability workflow", async () => {
   const [appSource, dueApi, stockApi, migration] = await Promise.all([
-    readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/api/due/route.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/api/stock/route.ts", import.meta.url), "utf8"),
-    readFile(new URL("../database-upgrade-v2.8-traceability.sql", import.meta.url), "utf8"),
+    source("../app/delivery-control-app.tsx"),
+    source("../app/api/due/route.ts"),
+    source("../app/api/stock/route.ts"),
+    source("../migrations/0009_stock_traceability.sql"),
   ]);
-  assert.match(appSource, /ผู้จัดงาน: เลือก Due แล้วยิง KIT Stock Tag/);
-  assert.match(appSource, /Traceability: Tag ลูกค้า ↔ KIT Tag ↔ Job/);
-  assert.match(appSource, /arrangedQty/);
+  assert.match(appSource, /จัดงานด้วย KIT Tag/);
+  assert.match(appSource, /arrange-summary-grid/);
+  assert.match(appSource, /stageStockTag/);
+  assert.match(appSource, /Traceability: Tag ลูกค้า ↔ KIT Tag \/ Job/);
   assert.match(stockApi, /action === "stage"/);
+  assert.match(stockApi, /hasPermission\(user, "arrange"\)/);
   assert.match(dueApi, /stock_dispatch_links/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS `stock_picks`/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS `stock_dispatch_links`/);
@@ -50,29 +75,33 @@ test("includes v2.8 Stock Job traceability workflow", async () => {
 
 test("includes Admin-safe Part deletion", async () => {
   const [appSource, stockApi] = await Promise.all([
-    readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/api/stock/route.ts", import.meta.url), "utf8"),
+    source("../app/delivery-control-app.tsx"),
+    source("../app/api/stock/route.ts"),
   ]);
-  assert.match(appSource, /ลบ Part ที่ยังไม่ใช้งานทั้งหมด/);
+  assert.match(appSource, /function deleteStockPart/);
+  assert.match(appSource, /มีประวัติ Stock/);
   assert.match(stockApi, /action === "delete_part"/);
   assert.match(stockApi, /action === "delete_unused_parts"/);
+  assert.match(stockApi, /Part นี้มี Tag หรือประวัติ Stockแล้ว|Part นี้มี Tag หรือประวัติ Stock แล้ว/);
   assert.match(stockApi, /เพื่อรักษาข้อมูลย้อนหลัง/);
 });
 
-test("prints the v2.8.2 Stock receiving Tag with the part image", async () => {
-  const appSource = await readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8");
+test("prints the Stock receiving Tag with the part image", async () => {
+  const appSource = await source("../app/delivery-control-app.tsx");
   assert.match(appSource, /STOCK RECEIVING TAG/);
-  assert.match(appSource, /imageResponse\.blob/);
+  assert.match(appSource, /const imageBlob = await imageResponse\.blob\(\)/);
+  assert.match(appSource, /reader\.readAsDataURL\(imageBlob\)/);
+  assert.match(appSource, /<img class="photo"/);
   assert.match(appSource, /PART NO\. \/ MATERIAL/);
-  assert.match(appSource, /PRODUCTION DATE \/ วันที่ผลิต/);
+  assert.match(appSource, /TAG ISSUE DATE \/ วันที่ออก TAG/);
   assert.match(appSource, /ยิง QR เพื่อรับงานเข้า Stock/);
   assert.match(appSource, /KITSTOCK\|/);
 });
 
 test("prints up to eight unique Stock Tags per A4 page and safely deletes unused Tags", async () => {
   const [appSource, stockApi] = await Promise.all([
-    readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/api/stock/route.ts", import.meta.url), "utf8"),
+    source("../app/delivery-control-app.tsx"),
+    source("../app/api/stock/route.ts"),
   ]);
   assert.match(appSource, /const tagsPerPage = 8/);
   assert.match(appSource, /Math\.ceil\(tagMarkups\.length \/ tagsPerPage\)/);
@@ -84,8 +113,8 @@ test("prints up to eight unique Stock Tags per A4 page and safely deletes unused
   assert.match(stockApi, /Tag นี้มีประวัติรับเข้า จัดงาน หรือขายออกแล้ว/);
 });
 
-test("v2.8.11 prints eight high-contrast Tags with larger readable text", async () => {
-  const appSource = await readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8");
+test("prints eight high-contrast Tags with larger readable text", async () => {
+  const appSource = await source("../app/delivery-control-app.tsx");
   assert.match(appSource, /grid-template-rows:repeat\(4,1fr\)/);
   assert.match(appSource, /border:1\.6px solid #003f98/);
   assert.match(appSource, /\.main b\{[^}]*font-size:9px/);
@@ -94,9 +123,11 @@ test("v2.8.11 prints eight high-contrast Tags with larger readable text", async 
   assert.match(appSource, /print-color-adjust:exact/);
 });
 
-test("v2.8.12 labels full and remainder boxes on every printed Tag", async () => {
-  const appSource = await readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8");
-  assert.match(appSource, /const packQty = Number\(stock\.parts\.find/);
+test("labels full and remainder boxes on every printed Tag", async () => {
+  const appSource = await source("../app/delivery-control-app.tsx");
+  assert.match(appSource, /const tagPart = stock\.parts\.find/);
+  assert.match(appSource, /const packQty = Number\(tagPart\?\.standardQty/);
+  assert.match(appSource, /const isFullBox/);
   assert.match(appSource, /FULL BOX \/ กล่องเต็ม/);
   assert.match(appSource, /REMAINDER BOX \/ กล่องเศษ/);
   assert.match(appSource, /\.box-type\.full/);
@@ -104,52 +135,49 @@ test("v2.8.12 labels full and remainder boxes on every printed Tag", async () =>
   assert.match(appSource, /const tagsPerPage = 8/);
 });
 
-test("v2.8.13 searches previously created Tags and reprints the original Tag ID", async () => {
-  const appSource = await readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8");
-  assert.match(appSource, /ค้นหา Tag ที่เคยสร้าง/);
-  assert.match(appSource, /ค้นหา Tag ID, Part No\., Job, ลูกค้า หรือวันที่ผลิต/);
+test("searches created Tags and reprints the original Tag ID without creating Stock", async () => {
+  const appSource = await source("../app/delivery-control-app.tsx");
+  assert.match(appSource, /Tag ที่สร้างแล้ว/);
+  assert.match(appSource, /ค้นหา Tag ID, Part No\., Job, ลูกค้า หรือวันที่ออก Tag/);
   assert.match(appSource, /const visibleTags = stock\.tags\.filter/);
-  assert.match(appSource, /item\.tagId/);
-  assert.match(appSource, /item\.materialCode/);
-  assert.match(appSource, /item\.partName/);
-  assert.match(appSource, /item\.customer/);
-  assert.match(appSource, /item\.jobNo/);
-  assert.match(appSource, /item\.productionDate/);
+  for (const field of ["tagId", "materialCode", "partName", "customer", "jobNo", "productionDate", "createdAt"]) {
+    assert.match(appSource, new RegExp(`item\\.${field}`));
+  }
   assert.match(appSource, /printStockTags\(item\)/);
-  assert.match(appSource, /ไม่สร้าง Tag ใหม่และไม่เพิ่มยอด Stock/);
+  assert.match(appSource, /การพิมพ์ซ้ำใช้ Tag ID เดิมและไม่เพิ่มยอด Stock/);
 });
 
-test("v2.8.14 summarizes cumulative printed Tag quantity by Job", async () => {
-  const appSource = await readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8");
-  assert.match(appSource, /const tagJobSummaries = Array\.from/);
-  assert.match(appSource, /summary\.tagCount \+= 1/);
-  assert.match(appSource, /summary\.totalQty \+= Number\(item\.qty/);
-  assert.match(appSource, /ยอด Tag สะสม/);
+test("summarizes cumulative Stock quantity by Job and Part", async () => {
+  const appSource = await source("../app/delivery-control-app.tsx");
+  assert.match(appSource, /const jobGroupMap = new Map/);
+  assert.match(appSource, /current\.totalQty \+= Number\(tag\.qty/);
+  assert.match(appSource, /current\.tagCount \+= 1/);
+  assert.match(appSource, /const stockJobGroups = \[\.\.\.jobGroupMap\.values\(\)\]/);
+  assert.match(appSource, /ปิดรับเข้า Job \/ จัดการงาน NG/);
   assert.match(appSource, /รอรับเข้า/);
   assert.match(appSource, /รับเข้าแล้ว/);
-  assert.match(appSource, /ดู Tag ของ Job นี้/);
-  assert.match(appSource, /ไม่รวมจำนวนครั้งที่กดพิมพ์ซ้ำ/);
 });
 
-test("v2.8.4 splits a Job into full and remainder boxes", async () => {
+test("splits a Job into full and remainder boxes in the authoritative API", async () => {
   const [appSource, stockApi] = await Promise.all([
-    readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/api/stock/route.ts", import.meta.url), "utf8"),
+    source("../app/delivery-control-app.tsx"),
+    source("../app/api/stock/route.ts"),
   ]);
   assert.match(appSource, /จำนวนสูงสุดต่อกล่อง/);
   assert.match(appSource, /Math\.ceil\(plannedTotalQty \/ selectedStockPart\.standardQty\)/);
   assert.match(appSource, /BOX \/ กล่อง/);
-  assert.match(appSource, /กล่องสุดท้าย/);
   assert.doesNotMatch(appSource, /<small>STATUS<\/small>/);
+  assert.match(stockApi, /function createTagId\(batchCode: string, boxNo: number, boxCount: number\)/);
   assert.match(stockApi, /const boxCount = Math\.ceil\(totalQty \/ packQty\)/);
-  assert.match(stockApi, /boxNo < boxCount \? packQty/);
-  assert.match(stockApi, /-B\$\{String\(boxNo\)/);
+  assert.match(stockApi, /const boxQty = boxNo < boxCount \? packQty/);
+  assert.match(stockApi, /createTagId\(batchCode, boxNo, boxCount\)/);
+  assert.match(stockApi, /deliveryQty: totalQty/);
 });
 
-test("v2.8.5 imports Parts from Excel and prints complete Stock Tag data", async () => {
+test("imports Parts from Excel and prints complete Stock Tag data", async () => {
   const [appSource, stockApi] = await Promise.all([
-    readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/api/stock/route.ts", import.meta.url), "utf8"),
+    source("../app/delivery-control-app.tsx"),
+    source("../app/api/stock/route.ts"),
   ]);
   assert.match(appSource, /นำเข้า Part Excel/);
   assert.match(appSource, /Max Qty per Box/);
@@ -161,8 +189,8 @@ test("v2.8.5 imports Parts from Excel and prints complete Stock Tag data", async
   assert.match(stockApi, /deliveryQty: totalQty/);
 });
 
-test("v2.8.6 separates Stock operations from Tag printing", async () => {
-  const appSource = await readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8");
+test("separates Stock operations from Tag printing", async () => {
+  const appSource = await source("../app/delivery-control-app.tsx");
   assert.match(appSource, /key: "stock", label: "Stock"/);
   assert.match(appSource, /key: "tags", label: "พิมพ์ Tag"/);
   assert.match(appSource, /function renderTags\(\)/);
@@ -171,22 +199,57 @@ test("v2.8.6 separates Stock operations from Tag printing", async () => {
   assert.match(appSource, /ยิง Tag รับงานเข้า Stock/);
 });
 
-test("v2.8.7 opens the camera from Stock receiving and receives immediately", async () => {
-  const appSource = await readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8");
-  assert.match(appSource, /cameraPurpose/);
-  assert.match(appSource, /เปิดกล้องยิง Tag/);
-  assert.match(appSource, /cameraPurpose === "stock"/);
-  assert.match(appSource, /receiveStockTag\(value\)/);
-  assert.match(appSource, /สแกน Tag รับงานเข้า Stock/);
+test("connects camera Stock receipt preview to explicit confirmation", async () => {
+  const [appSource, stockApi] = await Promise.all([
+    source("../app/delivery-control-app.tsx"),
+    source("../app/api/stock/route.ts"),
+  ]);
+  const scannerFlow = sourceSection(
+    appSource,
+    "function updateStockScannerValue",
+    "async function receiveStockTag",
+  );
+  const previewFlow = sourceSection(
+    appSource,
+    "async function receiveStockTag",
+    "async function confirmReceiveStockTag",
+  );
+  const confirmFlow = sourceSection(
+    appSource,
+    "async function confirmReceiveStockTag",
+    "async function closeStockJob",
+  );
+  const receiveModal = sourceSection(
+    appSource,
+    "{stockReceivePreview &&",
+    "{dispatchConfirmation &&",
+  );
+  const receiveAction = sourceSection(
+    stockApi,
+    'if (action === "receive")',
+    'if (action === "manual_receive")',
+  );
+
+  assert.match(scannerFlow, /receiveStockTag\(value\)/);
+  assert.match(previewFlow, /JSON\.stringify\(\{ action: "receive", mode: "preview", rawPayload \}\)/);
+  assert.match(previewFlow, /setStockReceivePreview\(data\)/);
+  assert.match(confirmFlow, /JSON\.stringify\(\{ action: "receive", rawPayload: stockReceivePreview\.rawPayload, receivedQty \}\)/);
+  assert.doesNotMatch(confirmFlow, /mode: "preview"/);
+  assert.match(receiveModal, /onClick=\{\(\) => void confirmReceiveStockTag\(\)\}/);
+
+  assertBefore(receiveAction, /hasPermission\(user, "stock"\)/, /db\.update\(stockTags\)/);
+  assert.match(receiveAction, /clean\(body\.mode, 20\) === "preview"/);
+  assert.match(receiveAction, /action: "receive_preview"/);
+  assert.match(receiveAction, /INSERT INTO stock_receipt_adjustments/);
 });
 
-test("v2.8.8 supports per-user page permissions and server-side checks", async () => {
+test("supports per-user page permissions and authoritative schema", async () => {
   const [appSource, authSource, usersApi, schema, migration] = await Promise.all([
-    readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/cloudflare-auth.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/api/users/route.ts", import.meta.url), "utf8"),
-    readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
-    readFile(new URL("../database-upgrade-v2.8.8-user-permissions.sql", import.meta.url), "utf8"),
+    source("../app/delivery-control-app.tsx"),
+    source("../app/cloudflare-auth.ts"),
+    source("../app/api/users/route.ts"),
+    source("../db/schema.ts"),
+    source("../migrations/0005_user_permissions.sql"),
   ]);
   assert.match(appSource, /สิทธิ์เข้าใช้งานรายบุคคล/);
   assert.match(appSource, /allowedPages\.has/);
@@ -198,24 +261,45 @@ test("v2.8.8 supports per-user page permissions and server-side checks", async (
   assert.match(migration, /CREATE TABLE IF NOT EXISTS app_user_permissions/);
 });
 
-test("v2.8.9 separates arranging and dispatching and shows mobile logout", async () => {
+test("separates arranging and dispatching with guards before mutations", async () => {
   const [appSource, authSource, dueApi, stockApi, css, migration] = await Promise.all([
-    readFile(new URL("../app/delivery-control-app.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/cloudflare-auth.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/api/due/route.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/api/stock/route.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
-    readFile(new URL("../database-upgrade-v2.8.9-split-workflow-permissions.sql", import.meta.url), "utf8"),
+    source("../app/delivery-control-app.tsx"),
+    source("../app/cloudflare-auth.ts"),
+    source("../app/api/due/route.ts"),
+    source("../app/api/stock/route.ts"),
+    source("../app/globals.css"),
+    source("../migrations/0006_split_workflow_permissions.sql"),
   ]);
+  const stageAction = sourceSection(
+    stockApi,
+    'if (action === "stage")',
+    'return Response.json({ error: "ไม่รู้จักคำสั่ง Stock"',
+  );
+  const duePost = sourceSection(
+    dueApi,
+    "export async function POST",
+    "} catch (error)",
+  );
+
   assert.match(appSource, /key: "arrange", label: "จัดงาน"/);
   assert.match(appSource, /key: "dispatch", label: "ตรวจและขายออก"/);
   assert.match(appSource, /renderScan\("arrange"\)/);
   assert.match(appSource, /renderScan\("dispatch"\)/);
+  assert.match(appSource, /fetch\(signOutPath, \{ method: "POST" \}\)/);
   assert.match(appSource, /bottom-logout/);
   assert.doesNotMatch(appSource, /key: "scan", label: "สแกนและตัดยอด"/);
-  assert.match(authSource, /"arrange", "dispatch"/);
-  assert.match(stockApi, /hasPermission\(user, "arrange"\)/);
-  assert.match(dueApi, /hasPermission\(user, "dispatch"\)/);
+  assert.match(authSource, /PERMISSION_KEYS/);
+  assert.match(authSource, /"arrange"/);
+  assert.match(authSource, /"dispatch"/);
+
+  assertBefore(stageAction, /hasPermission\(user, "arrange"\)/, /INSERT INTO stock_picks/);
+  assert.match(stageAction, /status: 403/);
+  assert.match(duePost, /if \(!user\).*status: 401/);
+  assertBefore(duePost, /hasPermission\(user, "dispatch"\)/, /const payload = await request\.json/);
+  assertBefore(duePost, /hasPermission\(user, "dispatch"\)/, /DB\.batch/);
+  assert.match(duePost, /user\.role !== "admin" && user\.role !== "inspector"/);
+  assert.match(duePost, /status: 403/);
+
   assert.match(css, /\.mobile-bottom-nav \.bottom-logout/);
   assert.match(migration, /permission_key = 'scan'/);
 });
