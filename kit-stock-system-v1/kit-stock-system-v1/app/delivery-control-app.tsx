@@ -4,7 +4,7 @@
 
 import { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
-type PageKey = "dashboard" | "stock" | "parts" | "tags" | "plan" | "arrange" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
+type PageKey = "dashboard" | "stock" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
 
 type DueLine = {
   id: number;
@@ -112,11 +112,28 @@ type ArrangementPreview = {
   tag: StockTag;
   due: DueLine & { remainingToArrange: number; remainingQty: number };
 };
+type ReplacementRequest = {
+  id: number; requestNo: string; materialCode: string; partName: string; customer: string;
+  requestedQty: number; issuedQty: number; remainingQty: number; reasonType: "defect" | "shortage" | "other";
+  reasonDetail: string; neededDate: string; status: "pending" | "partial" | "completed" | "cancelled";
+  requestedByName: string; requestedByCode: string; requestedAt: string; completedAt?: string;
+};
+type ReplacementIssue = {
+  id: number; requestId: number; stockTagId: number; stockTagCode: string; qty: number;
+  noticeNo: string; issuedByName: string; issuedByCode: string; issuedAt: string;
+  printedByName?: string; printedByCode?: string; printedAt?: string; jobNo?: string; productionDate?: string;
+};
+type ReplacementPayload = { requests: ReplacementRequest[]; issues: ReplacementIssue[] };
+type ReplacementIssuePreview = {
+  action: "preview"; request: ReplacementRequest;
+  tag: StockTag & { availableQty: number; stagedQty?: number; legacyReservedQty?: number; location?: string };
+  suggestedQty: number;
+};
 type UserForm = { id?: number; employeeCode: string; displayName: string; email: string; role: "dispatcher" | "inspector"; pin: string; active: boolean; permissions: PageKey[] };
 
 const ROLE_PERMISSIONS: Record<UserForm["role"], PageKey[]> = {
-  dispatcher: ["dashboard", "stock", "parts", "tags", "arrange", "history"],
-  inspector: ["dashboard", "dispatch", "history"],
+  dispatcher: ["dashboard", "stock", "parts", "tags", "arrange", "replacement", "history"],
+  inspector: ["dashboard", "replacement", "dispatch", "history"],
 };
 const EMPTY_USER: UserForm = { employeeCode: "", displayName: "", email: "", role: "dispatcher", pin: "", active: true, permissions: [...ROLE_PERMISSIONS.dispatcher] };
 
@@ -127,6 +144,7 @@ const NAV: Array<{ key: PageKey; label: string; icon: string }> = [
   { key: "tags", label: "พิมพ์ Tag", icon: "▤" },
   { key: "plan", label: "แผนส่งงาน (Due)", icon: "▤" },
   { key: "arrange", label: "จัดงาน", icon: "⇥" },
+  { key: "replacement", label: "เบิกงานทดแทน", icon: "↺" },
   { key: "dispatch", label: "ตรวจและขายออก", icon: "⌗" },
   { key: "exports", label: "รายการส่งออก", icon: "▱" },
   { key: "reports", label: "รายงาน", icon: "▥" },
@@ -166,6 +184,7 @@ const PERMISSION_HELP: Record<PageKey, string> = {
   tags: "ทะเบียน Part สร้างและพิมพ์ Tag",
   plan: "นำเข้า ตรวจสอบ และลบแผน Due",
   arrange: "เลือก Due และยิง KIT Tag เพื่อจัดงานรอขาย",
+  replacement: "QC ขอเบิกงานเสีย/งานขาด และทีมจัดงานยิง KIT Tag เพื่อตัด Stock",
   verify: "สแกนเทียบรูป master ก่อนขายออก (ไม่ตัด Stock/Due)",
   dispatch: "ยิง Tag ลูกค้าเพื่อตัด Stock และ Due",
   exports: "ดูรายการที่ส่งออกแล้ว",
@@ -182,6 +201,7 @@ const PAGE_SUBTITLE: Record<PageKey, string> = {
   tags: "ทะเบียน Part สร้าง Tag และพิมพ์ Tag รับงานเข้า Stock",
   plan: "ตรวจสอบแผนส่งงานจากไฟล์ Excel",
   arrange: "ผู้จัดงานเลือก Due แล้วยิง KIT Stock Tag เพื่อบันทึกงานรอขาย",
+  replacement: "QC แจ้งขอเบิกงานทดแทน ทีมจัดงานยิง KIT Tag และพิมพ์ใบแจ้งออก",
   verify: "สแกนชิ้นงานในกล่องเพื่อเทียบรูป master และงานที่ต้องส่งออก ก่อนยืนยันขายออก",
   dispatch: "ผู้ตรวจยิง Tag ลูกค้าเพื่อขายออก ตัด Stock และ Due",
   exports: "รายการที่ตัดยอดและส่งออกแล้ว",
@@ -435,6 +455,18 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [partImageNeedle, setPartImageNeedle] = useState("");
   const [deletingImportId, setDeletingImportId] = useState<number | null>(null);
   const [stock, setStock] = useState<StockPayload>({ parts: [], tags: [], allocations: [], picks: [], dispatchLinks: [], jobClosures: [] });
+  const [replacement, setReplacement] = useState<ReplacementPayload>({ requests: [], issues: [] });
+  const [replacementLoading, setReplacementLoading] = useState(false);
+  const [replacementSaving, setReplacementSaving] = useState(false);
+  const [replacementSearch, setReplacementSearch] = useState("");
+  const [replacementSelectedId, setReplacementSelectedId] = useState("");
+  const [replacementTag, setReplacementTag] = useState("");
+  const [replacementQty, setReplacementQty] = useState("");
+  const [replacementPreview, setReplacementPreview] = useState<ReplacementIssuePreview | null>(null);
+  const [replacementForm, setReplacementForm] = useState({
+    materialCode: "", customer: "", requestedQty: "", reasonType: "shortage", reasonDetail: "", neededDate: "",
+  });
+  const replacementInputRef = useRef<HTMLInputElement>(null);
   const [jobClosingKey, setJobClosingKey] = useState("");
   const [jobCloseSearch, setJobCloseSearch] = useState("");
   const [jobClosePage, setJobClosePage] = useState(1);
@@ -544,14 +576,39 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     }
   }
 
+  async function loadReplacements() {
+    setReplacementLoading(true);
+    try {
+      const response = await fetch("/api/replacements", { cache: "no-store" });
+      const data = await response.json() as ReplacementPayload & { error?: string };
+      if (!response.ok) throw new Error(data.error || "โหลดใบขอเบิกงานทดแทนไม่สำเร็จ");
+      setReplacement({ requests: data.requests || [], issues: data.issues || [] });
+      setReplacementSelectedId((current) => {
+        if (current && (data.requests || []).some((item) => String(item.id) === current && !["completed", "cancelled"].includes(item.status))) return current;
+        const firstOpen = (data.requests || []).find((item) => item.status === "pending" || item.status === "partial");
+        return firstOpen ? String(firstOpen.id) : "";
+      });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "โหลดใบขอเบิกงานทดแทนไม่สำเร็จ" });
+    } finally {
+      setReplacementLoading(false);
+    }
+  }
+
   useEffect(() => {
     const timer = window.setTimeout(() => void loadDue(), 0);
     return () => window.clearTimeout(timer);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!["stock", "parts", "tags", "arrange", "dispatch", "reports", "history"].includes(page)) return;
+    if (!["stock", "parts", "tags", "arrange", "replacement", "dispatch", "reports", "history"].includes(page)) return;
     const timer = window.setTimeout(() => void loadStock(), 0);
+    return () => window.clearTimeout(timer);
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== "replacement") return;
+    const timer = window.setTimeout(() => void loadReplacements(), 0);
     return () => window.clearTimeout(timer);
   }, [page]);
 
@@ -792,9 +849,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }, [cameraOpen, cameraPurpose, page]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const scannerPage = page === "stock" || page === "dispatch";
-    if (!scannerPage || stockReceivePreview || dispatchConfirmation || cameraOpen) return;
-    const activeInput = page === "stock" ? stockScanInputRef.current : tagInput.current;
+    const scannerPage = page === "stock" || page === "dispatch" || page === "replacement";
+    if (!scannerPage || stockReceivePreview || dispatchConfirmation || replacementPreview || cameraOpen) return;
+    const activeInput = page === "stock" ? stockScanInputRef.current : page === "replacement" ? replacementInputRef.current : tagInput.current;
     const focusTimer = window.setTimeout(() => activeInput?.focus(), 80);
     const submitBuffer = () => {
       const value = hardwareScanBufferRef.current.trim();
@@ -805,6 +862,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       if (page === "stock") {
         setStockScan(value);
         void receiveStockTag(value);
+      } else if (page === "replacement") {
+        setReplacementTag(value);
+        void previewReplacementIssue(value);
       } else {
         setRawTag(value);
         setTagPreview(null);
@@ -837,7 +897,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       hardwareScanBufferRef.current = "";
       document.removeEventListener("keydown", onScannerKey);
     };
-  }, [page, stockReceivePreview, dispatchConfirmation, cameraOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [page, stockReceivePreview, dispatchConfirmation, replacementPreview, cameraOpen, replacementSelectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function parseExcel(event: ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0] ?? null;
@@ -1644,6 +1704,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     updatePageLocation(next);
     if (next === "users") void loadUsers();
     if (next === "parts" || next === "settings") void loadPartImages();
+    if (next === "replacement") void loadReplacements();
     setMenuOpen(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -1790,6 +1851,117 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       </div>
     );
   };
+
+  async function createReplacementRequest(event: FormEvent) {
+    event.preventDefault();
+    setReplacementSaving(true);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/replacements", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "create", ...replacementForm }),
+      });
+      const data = await response.json() as { request?: ReplacementRequest; error?: string };
+      if (!response.ok) throw new Error(data.error || "สร้างใบขอเบิกไม่สำเร็จ");
+      setReplacementForm({ materialCode: "", customer: "", requestedQty: "", reasonType: "shortage", reasonDetail: "", neededDate: "" });
+      if (data.request) setReplacementSelectedId(String(data.request.id));
+      setNotice({ type: "success", text: `สร้างใบขอเบิก ${data.request?.requestNo || ""} แล้ว ทีมจัดงานสามารถสแกน KIT Tag ได้ทันที` });
+      await Promise.all([loadReplacements(), loadStock()]);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "สร้างใบขอเบิกไม่สำเร็จ" });
+    } finally {
+      setReplacementSaving(false);
+    }
+  }
+
+  async function previewReplacementIssue(rawValue?: string) {
+    const rawPayload = (rawValue || replacementTag).trim();
+    if (!replacementSelectedId) return setNotice({ type: "error", text: "กรุณาเลือกใบขอเบิกก่อนสแกน KIT Tag" });
+    if (!rawPayload || replacementSaving) return;
+    setReplacementSaving(true);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/replacements", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "preview_issue", requestId: Number(replacementSelectedId), rawPayload }),
+      });
+      const data = await response.json() as ReplacementIssuePreview & { error?: string };
+      if (!response.ok) throw new Error(data.error || "ตรวจ KIT Tag ไม่สำเร็จ");
+      setReplacementTag(rawPayload);
+      setReplacementPreview(data);
+      setReplacementQty(String(data.suggestedQty || ""));
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจ KIT Tag ไม่สำเร็จ" });
+      setReplacementTag("");
+      window.setTimeout(() => replacementInputRef.current?.focus(), 80);
+    } finally {
+      setReplacementSaving(false);
+    }
+  }
+
+  async function confirmReplacementIssue() {
+    if (!replacementPreview) return;
+    const qty = Number(replacementQty || 0);
+    setReplacementSaving(true);
+    try {
+      const response = await fetch("/api/replacements", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "confirm_issue", requestId: replacementPreview.request.id,
+          rawPayload: replacementTag, qty,
+        }),
+      });
+      const data = await response.json() as { request?: ReplacementRequest; issue?: ReplacementIssue; error?: string };
+      if (!response.ok) throw new Error(data.error || "เบิกงานทดแทนไม่สำเร็จ");
+      setReplacementPreview(null);
+      setReplacementTag("");
+      setReplacementQty("");
+      setNotice({ type: "success", text: `เบิกงานทดแทน ${fmt(qty)} ชิ้นแล้ว และตัดยอด Stock/ใบขอเรียบร้อย` });
+      await Promise.all([loadReplacements(), loadStock()]);
+      window.setTimeout(() => replacementInputRef.current?.focus(), 100);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "เบิกงานทดแทนไม่สำเร็จ" });
+    } finally {
+      setReplacementSaving(false);
+    }
+  }
+
+  async function cancelReplacementRequest(item: ReplacementRequest) {
+    if (!window.confirm(`ยกเลิกใบขอเบิก ${item.requestNo} ใช่หรือไม่?`)) return;
+    const response = await fetch("/api/replacements", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "cancel", requestId: item.id }),
+    });
+    const data = await response.json() as { error?: string };
+    if (!response.ok) return setNotice({ type: "error", text: data.error || "ยกเลิกใบขอไม่สำเร็จ" });
+    setNotice({ type: "success", text: `ยกเลิกใบขอเบิก ${item.requestNo} แล้ว` });
+    await loadReplacements();
+  }
+
+  async function printReplacementIssue(issue: ReplacementIssue) {
+    const item = replacement.requests.find((request) => request.id === issue.requestId);
+    if (!item) return setNotice({ type: "error", text: "ไม่พบข้อมูลใบขอเบิกสำหรับพิมพ์" });
+    const popup = window.open("", "_blank", "width=900,height=900");
+    if (!popup) return setNotice({ type: "error", text: "เบราว์เซอร์บล็อกหน้าพิมพ์ กรุณาอนุญาต Pop-up" });
+    const safe = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;",
+    }[character] || character));
+    const reason = item.reasonType === "defect" ? "งานเสีย" : item.reasonType === "shortage" ? "งานขาด" : "อื่น ๆ";
+    popup.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${safe(issue.noticeNo)}</title><style>
+      @page{size:A4;margin:12mm}*{box-sizing:border-box}body{font-family:Arial,"Noto Sans Thai",sans-serif;color:#10234a;margin:0}.sheet{border:2px solid #1767df;border-radius:18px;overflow:hidden}.head{padding:24px 28px;color:#fff;background:linear-gradient(135deg,#096fe8,#753fe0);display:flex;justify-content:space-between;align-items:center}.head h1{margin:0 0 4px;font-size:28px}.head p,.head b{margin:0}.body{padding:28px}.part{background:#eef5ff;border-radius:14px;padding:22px;margin-bottom:20px}.part small{color:#65789d}.part h2{font-size:28px;margin:6px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.cell{border:1px solid #d9e4f6;border-radius:12px;padding:14px}.cell small{display:block;color:#6f7d99;margin-bottom:6px}.qty{margin:22px 0;display:grid;grid-template-columns:repeat(3,1fr);text-align:center;border:1px solid #d9e4f6;border-radius:14px;overflow:hidden}.qty div{padding:16px;border-right:1px solid #d9e4f6}.qty div:last-child{border:0}.qty b{display:block;font-size:24px;color:#0963da}.sign{display:grid;grid-template-columns:1fr 1fr;gap:50px;margin-top:70px;text-align:center}.sign span{display:block;border-top:1px solid #7786a5;padding-top:8px}.foot{padding:15px 28px;background:#f5f8fd;color:#6f7d99;font-size:12px}@media print{button{display:none}}</style></head><body>
+      <section class="sheet"><div class="head"><div><p>DELIVERY DUE CONTROL</p><h1>ใบแจ้งเบิกงานทดแทน</h1><b>REPLACEMENT ISSUE NOTE</b></div><div><b>${safe(issue.noticeNo)}</b><p>${safe(formatDateTime(issue.issuedAt))}</p></div></div>
+      <div class="body"><div class="part"><small>PART / MATERIAL</small><h2>${safe(item.materialCode)}</h2><p>${safe(item.partName || "—")}</p></div>
+      <div class="grid"><div class="cell"><small>เลขที่ใบขอ QC</small><b>${safe(item.requestNo)}</b></div><div class="cell"><small>ลูกค้า / Site</small><b>${safe(item.customer || "—")}</b></div><div class="cell"><small>สาเหตุ</small><b>${safe(reason)}</b><p>${safe(item.reasonDetail || "—")}</p></div><div class="cell"><small>KIT Stock Tag</small><b>${safe(issue.stockTagCode)}</b></div><div class="cell"><small>Job</small><b>${safe(issue.jobNo || "—")}</b></div><div class="cell"><small>ผู้เบิกงาน</small><b>${safe(issue.issuedByName)} (${safe(issue.issuedByCode)})</b></div></div>
+      <div class="qty"><div><small>QC ขอเบิก</small><b>${safe(fmt(item.requestedQty))}</b><span>ชิ้น</span></div><div><small>เบิกครั้งนี้</small><b>${safe(fmt(issue.qty))}</b><span>ชิ้น</span></div><div><small>คงเหลือในใบขอ</small><b>${safe(fmt(item.remainingQty))}</b><span>ชิ้น</span></div></div>
+      <div class="sign"><div><span>ผู้จัดงาน / ผู้เบิก</span></div><div><span>QC ผู้รับงานทดแทน</span></div></div></div>
+      <div class="foot">พิมพ์จากระบบ KiT Delivery Due Control · ไม่มี Customer Tag เนื่องจากเป็นงานทดแทน</div></section>
+      <script>window.onload=()=>{window.print()}<\/script></body></html>`);
+    popup.document.close();
+    void fetch("/api/replacements", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "mark_printed", issueId: issue.id }),
+    }).then(() => loadReplacements());
+  }
 
   function renderDashboard() {
     // renderDashboard() เป็นฟังก์ชันธรรมดาที่ถูกเรียกแบบมีเงื่อนไข ห้ามใช้ hook ในนี้
@@ -2494,6 +2666,100 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     </>;
   }
 
+  function renderReplacement() {
+    const openRequests = replacement.requests.filter((item) => item.status === "pending" || item.status === "partial");
+    const completedRequests = replacement.requests.filter((item) => item.status === "completed");
+    const selected = replacement.requests.find((item) => String(item.id) === replacementSelectedId) || openRequests[0];
+    const needle = replacementSearch.trim().toLowerCase();
+    const requestRows = replacement.requests.filter((item) => !needle || [
+      item.requestNo, item.materialCode, item.partName, item.customer, item.reasonDetail,
+      item.requestedByName, item.neededDate,
+    ].join(" ").toLowerCase().includes(needle));
+    const issueRows = replacement.issues.filter((issue) => {
+      const item = replacement.requests.find((request) => request.id === issue.requestId);
+      return !needle || [issue.noticeNo, issue.stockTagCode, issue.jobNo, issue.issuedByName,
+        item?.requestNo, item?.materialCode, item?.customer].join(" ").toLowerCase().includes(needle);
+    });
+    const totalRequested = replacement.requests.filter((item) => item.status !== "cancelled").reduce((sum, item) => sum + Number(item.requestedQty), 0);
+    const totalIssued = replacement.issues.reduce((sum, item) => sum + Number(item.qty), 0);
+    const reasonLabel = (value: string) => value === "defect" ? "งานเสีย" : value === "shortage" ? "งานขาด" : "อื่น ๆ";
+    const statusLabel = (value: string) => value === "completed" ? "เบิกครบแล้ว" : value === "partial" ? "เบิกบางส่วน" : value === "cancelled" ? "ยกเลิก" : "รอจัดงาน";
+    const canCreate = user.role === "admin" || user.role === "inspector";
+
+    return <div className="replacement-page">
+      <div className="metrics four compact replacement-metrics">
+        <MetricCard tone="blue" icon="↺" label="ใบขอทั้งหมด" value={fmt(replacement.requests.length)} suffix="ใบ" />
+        <MetricCard tone="orange" icon="◷" label="รอจัดงาน" value={fmt(openRequests.length)} suffix="ใบ" />
+        <MetricCard tone="green" icon="✓" label="จัดครบแล้ว" value={fmt(completedRequests.length)} suffix="ใบ" />
+        <MetricCard tone="purple" icon="▦" label="เบิกออกสะสม" value={fmt(totalIssued)} suffix="ชิ้น" />
+      </div>
+
+      <div className="replacement-work-grid">
+        <Card className="replacement-request-card" title={<><span className="replacement-step">1</span> QC แจ้งขอเบิกงานทดแทน</>}>
+          {canCreate ? <form className="replacement-form" onSubmit={createReplacementRequest}>
+            <label className="wide"><span>Part / Material No. *</span><input list="replacement-parts" value={replacementForm.materialCode} onChange={(event) => {
+              const value = event.target.value.toUpperCase();
+              const part = stock.parts.find((item) => item.materialCode === value);
+              setReplacementForm((current) => ({ ...current, materialCode: value, customer: part?.customer || current.customer }));
+            }} placeholder="เลือกหรือค้นหา Part No." required /><datalist id="replacement-parts">{stock.parts.filter((part) => part.active).map((part) => <option key={part.materialCode} value={part.materialCode}>{part.partName}</option>)}</datalist></label>
+            <label><span>ลูกค้า / Site</span><input value={replacementForm.customer} onChange={(event) => setReplacementForm((current) => ({ ...current, customer: event.target.value }))} placeholder="เช่น MCP / STE1" /></label>
+            <label><span>จำนวนที่ขอเบิก *</span><input type="number" inputMode="numeric" min={1} step={1} value={replacementForm.requestedQty} onChange={(event) => setReplacementForm((current) => ({ ...current, requestedQty: event.target.value }))} placeholder="0" required /></label>
+            <label><span>สาเหตุ *</span><select value={replacementForm.reasonType} onChange={(event) => setReplacementForm((current) => ({ ...current, reasonType: event.target.value }))}><option value="shortage">งานขาดของลูกค้า</option><option value="defect">ทดแทนงานเสีย</option><option value="other">อื่น ๆ</option></select></label>
+            <label><span>วันที่ต้องการ</span><input type="date" value={replacementForm.neededDate} onChange={(event) => setReplacementForm((current) => ({ ...current, neededDate: event.target.value }))} /></label>
+            <label className="wide"><span>รายละเอียด / เลขที่เอกสารอ้างอิง</span><textarea rows={3} value={replacementForm.reasonDetail} onChange={(event) => setReplacementForm((current) => ({ ...current, reasonDetail: event.target.value }))} placeholder="ระบุอาการเสีย จำนวนขาด หรือข้อมูลที่ทีมจัดงานต้องทราบ" /></label>
+            <button className="button primary full" disabled={replacementSaving}>{replacementSaving ? "กำลังสร้างใบขอ…" : "＋ สร้างใบขอเบิกให้ทีมจัดงาน"}</button>
+          </form> : <div className="replacement-role-note"><span>QC</span><div><b>หน้านี้ใช้สำหรับ QC แจ้งขอเบิก</b><p>บัญชีทีมจัดงานจะเห็นใบขอและสแกนเบิกในขั้นตอนที่ 2</p></div></div>}
+        </Card>
+
+        <Card className="replacement-scan-card" title={<><span className="replacement-step green">2</span> ทีมจัดงานสแกน KIT Tag</>} action={selected ? <span className="replacement-selected">{selected.requestNo}</span> : undefined}>
+          {selected ? <>
+            <div className="replacement-selected-request">
+              <PartImage materialCode={selected.materialCode} compact />
+              <div><small>ใบขอที่เลือก</small><b>{selected.materialCode}</b><p>{selected.partName || "—"} · {selected.customer || "ไม่ระบุลูกค้า"}</p></div>
+              <dl><div><dt>QC ขอ</dt><dd>{fmt(selected.requestedQty)}</dd></div><div><dt>เบิกแล้ว</dt><dd>{fmt(selected.issuedQty)}</dd></div><div><dt>คงเหลือ</dt><dd>{fmt(selected.remainingQty)}</dd></div></dl>
+            </div>
+            <form className="replacement-scan-form" onSubmit={(event) => { event.preventDefault(); void previewReplacementIssue(); }}>
+              <button type="button" className="replacement-scan-zone" onClick={() => replacementInputRef.current?.focus()}><span>⌗</span><b>พร้อมสแกน KIT Stock Tag</b><small>ยิงบาร์โค้ดจากเครื่องสแกน แล้วตรวจจำนวนก่อนยืนยันเบิก</small></button>
+              <label><span>KIT Stock Tag *</span><input ref={replacementInputRef} value={replacementTag} onChange={(event) => setReplacementTag(event.target.value)} onKeyDown={(event) => {
+                if ((event.key === "Enter" || event.key === "Tab") && replacementTag.trim()) {
+                  event.preventDefault(); void previewReplacementIssue();
+                }
+              }} placeholder="ยิง Tag แล้วเครื่องส่ง Enter" autoComplete="off" autoFocus /></label>
+              <button className="button primary" disabled={!replacementTag.trim() || replacementSaving}>{replacementSaving ? "กำลังตรวจ Tag…" : "ตรวจ Tag และจำนวน"}</button>
+            </form>
+            <p className="replacement-help">ระบบจะตัด Stock และตัดยอดคงเหลือของใบขอเมื่อกด “ยืนยันเบิกงานทดแทน” เท่านั้น</p>
+          </> : <Empty title="ยังไม่มีใบขอรอจัดงาน" text="เมื่อ QC สร้างใบขอ รายการจะขึ้นให้เลือกและสแกน KIT Tag ที่นี่" />}
+        </Card>
+      </div>
+
+      <Card className="replacement-list-card" title={<><span className="replacement-list-icon">↺</span> ใบขอเบิกงานทดแทน <em>{fmt(requestRows.length)} ใบ</em></>} action={<div className="arranged-search"><span>⌕</span><input type="search" value={replacementSearch} onChange={(event) => setReplacementSearch(event.target.value)} placeholder="ค้นหาเลขที่ใบขอ, Part, ลูกค้า, ผู้ขอ" /></div>}>
+        {replacementLoading ? <div className="loading-state"><span /><p>กำลังโหลดใบขอเบิก…</p></div> : requestRows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table replacement-table"><thead><tr><th>เลขที่ / วันที่ขอ</th><th>Part / ลูกค้า</th><th>สาเหตุ</th><th className="num">ขอเบิก</th><th className="num">เบิกแล้ว</th><th className="num">คงเหลือ</th><th>ผู้ขอ</th><th>สถานะ</th><th>จัดการ</th></tr></thead><tbody>
+          {requestRows.map((item) => <tr key={item.id} className={String(item.id) === replacementSelectedId ? "selected-row" : ""}>
+            <td data-label="เลขที่ / วันที่ขอ"><b>{item.requestNo}</b><small>{formatDateTime(item.requestedAt)}{item.neededDate ? ` · ต้องการ ${formatDate(item.neededDate)}` : ""}</small></td>
+            <td data-label="Part / ลูกค้า"><b>{item.materialCode}</b><small>{item.partName || "—"} · {item.customer || "—"}</small></td>
+            <td data-label="สาเหตุ"><b>{reasonLabel(item.reasonType)}</b><small>{item.reasonDetail || "—"}</small></td>
+            <td data-label="ขอเบิก" className="num"><b>{fmt(item.requestedQty)}</b></td>
+            <td data-label="เบิกแล้ว" className="num"><b className="green-text">{fmt(item.issuedQty)}</b></td>
+            <td data-label="คงเหลือ" className="num"><b className={item.remainingQty ? "red-text" : "green-text"}>{fmt(item.remainingQty)}</b></td>
+            <td data-label="ผู้ขอ"><b>{item.requestedByName}</b><small>{item.requestedByCode}</small></td>
+            <td data-label="สถานะ"><span className={`status ${item.status === "completed" ? "completed" : item.status === "partial" ? "partial" : item.status === "cancelled" ? "over" : "pending"}`}>{statusLabel(item.status)}</span></td>
+            <td data-label="จัดการ"><div className="user-actions">{(item.status === "pending" || item.status === "partial") && <button className="tiny-button" onClick={() => { setReplacementSelectedId(String(item.id)); setReplacementPreview(null); setReplacementTag(""); window.setTimeout(() => replacementInputRef.current?.focus(), 100); }}>เลือกจัดงาน</button>}{canCreate && item.status === "pending" && item.issuedQty === 0 && <button className="tiny-button danger-outline" onClick={() => void cancelReplacementRequest(item)}>ยกเลิก</button>}</div></td>
+          </tr>)}
+        </tbody></table></div> : <Empty title="ยังไม่มีใบขอเบิก" text="QC สามารถสร้างใบขอสำหรับงานเสียหรืองานขาดได้จากแบบฟอร์มด้านบน" />}
+        <footer className="replacement-list-footer"><span>ยอดขอเบิกทั้งหมด {fmt(totalRequested)} ชิ้น</span><b>เบิกออกแล้ว {fmt(totalIssued)} ชิ้น</b></footer>
+      </Card>
+
+      <Card className="replacement-list-card" title={<><span className="replacement-list-icon green">▤</span> ประวัติเบิกและใบแจ้งออก <em>{fmt(issueRows.length)} รายการ</em></>} action={<button className="button secondary" onClick={() => void loadReplacements()}>↻ รีเฟรช</button>}>
+        {issueRows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table replacement-issue-table"><thead><tr><th>ใบแจ้งออก</th><th>ใบขอ QC</th><th>KIT Stock Tag / Job</th><th>Part / ลูกค้า</th><th className="num">จำนวน</th><th>ผู้จัดงาน</th><th>พิมพ์ใบ</th></tr></thead><tbody>
+          {issueRows.map((issue) => {
+            const item = replacement.requests.find((request) => request.id === issue.requestId);
+            return <tr key={issue.id}><td data-label="ใบแจ้งออก"><b>{issue.noticeNo}</b><small>{formatDateTime(issue.issuedAt)}</small></td><td data-label="ใบขอ QC">{item?.requestNo || "—"}</td><td data-label="KIT Tag / Job"><b>{issue.stockTagCode}</b><small>{issue.jobNo || "—"}</small></td><td data-label="Part / ลูกค้า"><b>{item?.materialCode || "—"}</b><small>{item?.customer || "—"}</small></td><td data-label="จำนวน" className="num"><b>{fmt(issue.qty)}</b></td><td data-label="ผู้จัดงาน"><b>{issue.issuedByName}</b><small>{issue.issuedByCode}</small></td><td data-label="พิมพ์ใบ"><button className="tiny-button print-replacement-button" onClick={() => void printReplacementIssue(issue)}>▤ พิมพ์ใบแจ้งออก</button>{issue.printedAt && <small>พิมพ์แล้ว {formatDateTime(issue.printedAt)}</small>}</td></tr>;
+          })}
+        </tbody></table></div> : <Empty title="ยังไม่มีประวัติการเบิก" text="ประวัติจะบันทึกเมื่อทีมจัดงานยืนยันเบิกจาก KIT Tag" />}
+      </Card>
+    </div>;
+  }
+
   function renderExports() {
     const exported = payload.dues.filter((due) => Number(due.scannedQty) > 0);
     const full = exported.filter((due) => stateOf(due) === "completed").length;
@@ -2639,7 +2905,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     </>;
   }
 
-  const pageContent: Record<PageKey, () => ReactNode> = { dashboard: renderDashboard, stock: renderStock, parts: renderParts, tags: renderTags, plan: renderPlan, arrange: () => renderScan("arrange"), verify: renderVerify, dispatch: () => renderScan("dispatch"), exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
+  const pageContent: Record<PageKey, () => ReactNode> = { dashboard: renderDashboard, stock: renderStock, parts: renderParts, tags: renderTags, plan: renderPlan, arrange: () => renderScan("arrange"), replacement: renderReplacement, verify: renderVerify, dispatch: () => renderScan("dispatch"), exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
   const activeNav = NAV.find((item) => item.key === page)!;
 
   return <div className="control-shell">
@@ -2663,6 +2929,19 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button onClick={() => setMenuOpen(true)}><span>☰</span><small>เมนู</small></button>
       <a className="bottom-logout" href={signOutPath} onClick={signOut}><span>↪</span><small>ออกระบบ</small></a>
     </nav>
+    {replacementPreview && <div className="modal-backdrop replacement-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="replacement-confirm-title"><div className="replacement-confirm-modal">
+      <header><div><span>↺</span><div><small>ตรวจพบ KIT Stock Tag</small><h3 id="replacement-confirm-title">ตรวจสอบก่อนเบิกงานทดแทน</h3></div></div><button type="button" onClick={() => { setReplacementPreview(null); setReplacementTag(""); setReplacementQty(""); }} aria-label="ปิด">×</button></header>
+      <div className="replacement-confirm-content">
+        <section className="replacement-confirm-photo"><PartImage materialCode={replacementPreview.request.materialCode} version={partImages.find((item) => item.materialCode === replacementPreview.request.materialCode)?.updatedAt} /></section>
+        <section className="replacement-confirm-info">
+          <div className="dispatch-confirm-part"><small>PART / MATERIAL</small><b>{replacementPreview.request.materialCode}</b><p>{replacementPreview.request.partName || replacementPreview.tag.partName || "ไม่ระบุชื่อชิ้นงาน"}</p></div>
+          <div className="replacement-confirm-details"><div><small>ใบขอ QC</small><b>{replacementPreview.request.requestNo}</b></div><div><small>ลูกค้า / Site</small><b>{replacementPreview.request.customer || "—"}</b></div><div><small>KIT Stock Tag</small><b>{replacementPreview.tag.tagId}</b></div><div><small>Job / Location</small><b>{replacementPreview.tag.jobNo || "—"} / {replacementPreview.tag.location || "—"}</b></div></div>
+          <div className="replacement-qty-compare"><div><small>QC ขอเบิก</small><b>{fmt(replacementPreview.request.requestedQty)}</b><em>ชิ้น</em></div><div><small>เบิกแล้ว</small><b>{fmt(replacementPreview.request.issuedQty)}</b><em>ชิ้น</em></div><label><small>เบิกครั้งนี้</small><input type="number" inputMode="numeric" min={1} max={Math.min(replacementPreview.request.remainingQty, replacementPreview.tag.availableQty)} value={replacementQty} onChange={(event) => setReplacementQty(event.target.value.replace(/[^0-9]/g, ""))} autoFocus /><em>แก้ไขจำนวนได้</em></label><div><small>คงเหลือหลังเบิก</small><b>{fmt(Math.max(replacementPreview.request.remainingQty - Number(replacementQty || 0), 0))}</b><em>ชิ้น</em></div></div>
+          <p className="replacement-stock-note">Stock Tag นี้พร้อมใช้ {fmt(replacementPreview.tag.availableQty)} ชิ้น · ระบบจะตัด Stock เมื่อยืนยัน</p>
+        </section>
+      </div>
+      <footer><button type="button" className="button secondary" onClick={() => { setReplacementPreview(null); setReplacementTag(""); setReplacementQty(""); }}>ยกเลิก / สแกนใหม่</button><button type="button" className="button confirm-replacement-button" disabled={replacementSaving || !Number(replacementQty) || Number(replacementQty) > replacementPreview.request.remainingQty || Number(replacementQty) > replacementPreview.tag.availableQty} onClick={() => void confirmReplacementIssue()}>{replacementSaving ? "กำลังเบิกงาน…" : "✓ ยืนยันเบิกและตัดยอด"}</button></footer>
+    </div></div>}
     {stockReceivePreview && <div className="modal-backdrop dispatch-confirm-backdrop stock-receive-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="stock-receive-confirm-title"><div className="dispatch-confirm-modal stock-receive-confirm-modal">
       <header><div><span>✓</span><div><small>ตรวจพบ KIT Stock Tag</small><h3 id="stock-receive-confirm-title">ตรวจสอบก่อนรับเข้า Stock</h3></div></div><button type="button" onClick={() => { setStockReceivePreview(null); setStockReceiveQty(""); setStockScan(""); }} aria-label="ปิด">×</button></header>
       <div className="dispatch-confirm-content">
