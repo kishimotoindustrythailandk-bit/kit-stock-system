@@ -64,6 +64,13 @@ npx wrangler d1 execute DB --remote --command "PRAGMA table_info(stock_parts)"
   เพราะโค้ดที่สร้างตารางไม่ได้สร้าง index ให้ ทั้งที่ `close_job` อ่านด้วย
   `job_no` + `material_code` ทุกครั้ง
 
+ตรวจแล้วด้วยการรัน `npm run db:migrate:local` บนฐานเปล่า: migration 0000–0018
+ผ่านทั้ง 19 ไฟล์ และได้ตารางตรงกับฐาน production ครบ 28 ตาราง เหลือต่างกันแค่
+`employees` กับ `employee_sessions` ที่มีบน production เท่านั้น (ตกทอดจาก
+`database-setup.sql` ของระบบ auth รุ่นก่อน ไม่มี migration ไหนสร้าง และโค้ด
+ปัจจุบันใช้ `app_users` / `app_sessions` แทนแล้ว) กับตารางภายในของ D1 เอง
+(`_cf_KV` บน production เทียบกับ `_cf_METADATA` ของ miniflare)
+
 **ชื่อ Worker ใน wrangler.jsonc**
 
 - เดิมเป็น `kit-stock` ซึ่งไม่มี Worker ชื่อนี้อยู่บน account เลย Worker ที่ให้บริการ
