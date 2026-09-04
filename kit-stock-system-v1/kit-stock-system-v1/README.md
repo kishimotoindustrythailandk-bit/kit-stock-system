@@ -1,3 +1,31 @@
+# KIT Delivery Due Control v2.9.2 — check suite ตรงกับ production
+
+รุ่นนี้ไม่เปลี่ยน workflow หรือข้อมูล production แต่ทำให้ quality gate ตรวจ source ที่ใช้งานจริงและกลับมาผ่านครบ
+
+## สิ่งที่แก้ใน v2.9.2
+
+- `npm run typecheck` ผ่าน 0 error: ลบ `app/stock-app.tsx` และ
+  `app/employees/employee-manager.tsx` ซึ่งไม่มี route หรือ import จาก production
+  และอ้าง API/auth รุ่นเก่า ตัวแรกยัง import `jsbarcode` ที่ไม่มี dependency ด้วย
+- ลบ arrange JSX ชุดเก่าที่อยู่หลัง early return ใน `renderScan()` ตรงนั้น
+  TypeScript พิสูจน์ได้ว่าเป็น dispatch mode เท่านั้นอยู่แล้ว จึงเลือก dispatch branch
+  เสมอ การลบ branch ที่ไม่มีทางรันไม่เปลี่ยน UI หรือ request ใดๆ
+- ปรับ tests ให้ชี้ไปยัง production entry, Stock/Due API, permission layer และ
+  migrations ที่ deploy จริง พร้อมตรวจลำดับ guard และ receive preview/confirm flow
+  ภายใน source contract ที่เกี่ยวข้อง
+- เพิ่ม test ยืนยันว่า `app/page.tsx` ใช้ `DeliveryControlApp` เป็น production entry
+- `npm run check` ผ่านครบ: typecheck 0 error, lint 0 error และ test 21/21
+
+รุ่นนี้ไม่มี migration เพิ่ม ขั้นตอนอัปเกรดคือ:
+
+```bash
+npm install
+npm run check
+npm run deploy
+```
+
+---
+
 # KIT Delivery Due Control v2.9.1 — schema มีแหล่งอ้างอิงเดียว
 
 รุ่นนี้ไม่ได้เพิ่มฟีเจอร์ใหม่ แต่ทำให้ "โครงสร้างฐานข้อมูลที่รีโปบอก" ตรงกับ
