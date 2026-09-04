@@ -508,8 +508,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const allowedPages = useMemo(() => {
     const keys: PageKey[] = user.role === "admin" ? NAV.map((item) => item.key) : (user.permissions?.length ? user.permissions : ["dashboard"]);
     const set = new Set<PageKey>(["dashboard", ...keys]);
-    // หน้า "ตรวจก่อนส่งออก" เป็นตัวช่วยอ่านอย่างเดียวของขั้นตอนขายออก
-    // จึงเปิดให้อัตโนมัติกับทุกคนที่มีสิทธิ์ขายออก (dispatch) โดยไม่ต้องตั้งสิทธิ์แยก
+    // บัญชีทีมจัดงาน/Stock และ QC เดิมต้องเห็นขั้นตอนงานทดแทนได้ทันที
+    // แม้บัญชีจะถูกสร้างก่อนมี permission "replacement"
+    if (set.has("arrange") || set.has("stock") || set.has("dispatch")) set.add("replacement");
     return set;
   }, [user.permissions, user.role]);
 
