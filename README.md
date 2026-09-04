@@ -11,7 +11,8 @@
 npm install
 npm run db:baseline:runtime-ddl   # ครั้งเดียว บอก wrangler ว่าคอลัมน์ location มีอยู่แล้ว
 npm run db:migrate                # รัน 0014–0017 (idempotent ทั้งชุด)
-npm run check                     # typecheck + lint + test ต้องผ่านทั้งหมด
+npm run build                     # ต้องผ่าน
+npm run lint                      # ต้องเป็น 0 error
 npm run deploy
 ```
 
@@ -21,9 +22,14 @@ npm run deploy
 npm install
 npm run db:baseline      # ครั้งเดียว บอก wrangler ว่า 0000–0009 กับ 0012 มีอยู่แล้ว
 npm run db:migrate       # รัน 0010, 0011, 0013–0018
-npm run check
+npm run build
+npm run lint
 npm run deploy
 ```
+
+> `npm run check` ยัง **ไม่ผ่าน** บน `main` ตั้งแต่ก่อนรุ่นนี้ (typecheck 13 error,
+> test fail 8/20) รายละเอียดอยู่ในหัวข้อ "ยังไม่ได้แก้ในรุ่นนี้" ด้านล่าง
+> จึงยังใช้ `npm run check` เป็นประตูก่อน deploy ไม่ได้ ให้ใช้ `build` + `lint` ไปก่อน
 
 **ฐานข้อมูลใหม่ที่ยังว่าง** — ข้าม baseline ทั้งสองตัว แล้วรัน `npm run db:migrate` ได้เลย
 
@@ -78,10 +84,34 @@ npx wrangler d1 execute DB --remote --command "PRAGMA table_info(stock_parts)"
   การเพิ่ม FK ต้อง rebuild ตารางบน production ซึ่งเป็นงานแยกอีกชุด
   migration 0017 จึงคัดลอก DDL ให้ตรงกับฐานจริงโดยเจตนา เพื่อไม่ให้ฐาน production
   กับฐานที่ติดตั้งใหม่มี schema ต่างกัน
+**`npm run check` ยังไม่ผ่าน — เกิดก่อนรุ่นนี้ ไม่ได้เกิดจาก v2.9.1**
+
+ตรวจแล้วว่าจำนวน error และรายชื่อ test ที่ fail เท่ากันทั้งบน `main` และบนรุ่นนี้
+
+- `npm run typecheck` — 13 error
+  - `app/stock-app.tsx` import `jsbarcode` แต่ `jsbarcode` ไม่มีใน `package.json`
+    เลย ไฟล์นี้ (869 บรรทัด) ไม่ถูก import จากที่ไหนทั้งสิ้น จึงไม่เข้า build
+    `npm run build` ผ่านได้เพราะ bundler ไม่แตะไฟล์นี้ แต่ `tsc` ตรวจทุกไฟล์
+    ต้องตัดสินใจว่าจะลบไฟล์ตายทิ้ง หรือเพิ่ม `jsbarcode` เป็น dependency จริง
+  - `app/delivery-control-app.tsx` 12 error `TS2367` ใน `renderScan()`
+    บล็อก `if (scanMode === "arrange")` ที่บรรทัด 2574 return ออกไปก่อนแล้ว
+    โค้ดหลังจากนั้น `scanMode` จึงเป็น `"dispatch"` แน่นอน แต่ยังมีเงื่อนไข
+    `scanMode === "arrange" ? ก : ข` เหลืออยู่อีก 12 จุด ซึ่งเลือกข้าง `ข` เสมอ
+    พฤติกรรมตอนรันถูกอยู่แล้ว เป็นเงื่อนไขตายที่ค้างจากการแยกโหมด
+- `npm test` — fail 8 จาก 20 (README v2.9.0 เขียนว่า "ผ่านครบ 16/16" ซึ่งไม่จริงแล้ว)
+  - `v2.8.9 separates arranging and dispatching` คาด `"arrange", "dispatch"` ติดกัน
+    ใน `PERMISSION_KEYS` แต่ commit "Add replacement withdrawal permission"
+    แทรก `"replacement"` เข้าไปกลางสองตัวนั้นโดยไม่แก้ test
+  - อีก 7 ตัวยืนยันเนื้อหาใน `app/stock-app.tsx` ซึ่งเป็นไฟล์ตายตัวเดียวกันข้างต้น
+    (พิมพ์ Tag, กล้อง, ลบ Part) test จึงตรวจโค้ดที่ไม่ได้ถูกใช้งานจริง
+
+**อื่นๆ**
+
 - race condition ตอนจัดงาน (`stage`) ที่ทำให้จัดเกินของจริงได้
 - `DB.batch` ตอนตัดยอดไม่ได้ตรวจ `meta.changes` จึงเงียบเมื่อ guard ไม่ผ่าน
 - `xlsx@0.18.5` ยังมีช่องโหว่ ต้องย้ายไป SheetJS CDN
 - โค้ดตายใน `app/employees/` และตารางรุ่นเก่าใน `db/schema.ts`
+- secret `SETUP_KEY` ยังอยู่บน Worker แต่ไม่มีโค้ดไหนอ่านค่านี้แล้ว
 
 ---
 
