@@ -554,7 +554,6 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [stockSaving, setStockSaving] = useState(false);
   const [createdStockTags, setCreatedStockTags] = useState<StockTag[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
-  const partFileInput = useRef<HTMLInputElement>(null);
   const partBundleExcelInput = useRef<HTMLInputElement>(null);
   const partBundleMasterInput = useRef<HTMLInputElement>(null);
   const partBundleActualInput = useRef<HTMLInputElement>(null);
@@ -1517,30 +1516,6 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     }
   }
 
-  async function importPartExcel(event: ChangeEvent<HTMLInputElement>) {
-    const selected = event.target.files?.[0];
-    if (!selected) return;
-    setStockSaving(true);
-    setNotice(null);
-    try {
-      const parts = await parsePartExcel(selected);
-      const response = await fetch("/api/stock", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "import_parts", parts }),
-      });
-      const data = await response.json() as { imported?: number; error?: string };
-      if (!response.ok) throw new Error(data.error || "นำเข้า Part ไม่สำเร็จ");
-      setNotice({ type: "success", text: `นำเข้า/อัปเดต Part จาก ${selected.name} สำเร็จ ${fmt(data.imported || 0)} รายการ` });
-      await loadStock();
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "นำเข้า Part ไม่สำเร็จ" });
-    } finally {
-      setStockSaving(false);
-      if (partFileInput.current) partFileInput.current.value = "";
-    }
-  }
-
   function matchBundleImages(files: File[], parts: PartImportItem[]) {
     const codes = parts.map((part) => part.materialCode).sort((a, b) => b.length - a.length);
     const matched = new Map<string, File>();
@@ -2454,7 +2429,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         </div>}
       </Card>}
 
-      {user.role === "admin" && <Card className="part-editor-card" title={stockPartForm.materialCode ? "แก้ไข Part" : "เพิ่ม / แก้ไข Part"} action={<div className="user-actions"><input ref={partFileInput} type="file" accept=".xlsx,.xls" hidden onChange={importPartExcel} /><button className="button secondary" disabled={stockSaving} onClick={() => partFileInput.current?.click()}>⇧ นำเข้า Part Excel (เฉพาะข้อมูล)</button><button className="button primary" form="part-editor-form" disabled={stockSaving}>▣ {stockSaving ? "กำลังบันทึก…" : "บันทึก Part"}</button></div>}>
+      {user.role === "admin" && <Card className="part-editor-card" title={stockPartForm.materialCode ? "แก้ไข Part" : "เพิ่ม / แก้ไข Part"} action={<button className="button primary" form="part-editor-form" disabled={stockSaving}>▣ {stockSaving ? "กำลังบันทึก…" : "บันทึก Part"}</button>}>
         <form id="part-editor-form" className="part-editor-grid" onSubmit={saveStockPart}>
           <label><span>Part / Material No. *</span><input value={stockPartForm.materialCode} onChange={(e) => { const code=e.target.value.toUpperCase(); setStockPartForm((current) => ({ ...current, materialCode: code })); setPartImageCode(code); }} required /></label>
           <label><span>ชื่อชิ้นงาน *</span><input value={stockPartForm.partName} onChange={(e) => setStockPartForm((current) => ({ ...current, partName: e.target.value }))} required /></label>
