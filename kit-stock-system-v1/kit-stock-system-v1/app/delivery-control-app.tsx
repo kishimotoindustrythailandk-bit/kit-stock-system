@@ -531,9 +531,13 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const tagResultRef = useRef<HTMLElement>(null);
   const verifyInput = useRef<HTMLInputElement>(null);
   const verifyResultRef = useRef<HTMLElement>(null);
+  const canPrintTags = user.role === "admin" || user.permissions?.includes("tags");
   const allowedPages = useMemo(() => {
     const keys: PageKey[] = user.role === "admin" ? NAV.map((item) => item.key) : (user.permissions?.length ? user.permissions : ["dashboard"]);
     const set = new Set<PageKey>(["dashboard", ...keys]);
+    // ย้ายการปิด Job ไปหน้า Tags โดยยังให้ผู้มีสิทธิ์ Stock เดิมเข้าถึงได้
+    // แต่ canPrintTags ยังคุมส่วนสร้าง/พิมพ์ Tag แยกกัน ไม่ได้ขยายสิทธิ์ API
+    if (set.has("stock")) set.add("tags");
     // บัญชีทีมจัดงาน/Stock และ QC เดิมต้องเห็นขั้นตอนงานทดแทนได้ทันที
     // แม้บัญชีจะถูกสร้างก่อนมี permission "replacement"
     if (set.has("arrange") || set.has("stock") || set.has("dispatch")) set.add("replacement");
@@ -2305,83 +2309,6 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       if (current === 1 || current === tagTotalPages || Math.abs(current - safeTagPage) <= 1) tagPageButtons.push(current);
       else if (tagPageButtons[tagPageButtons.length - 1] !== "…") tagPageButtons.push("…");
     }
-
-    return <div className="tag-print-home">
-      <div className="tag-stat-row">
-        <article className="tag-stat green"><span>▤</span><div><small>Tag ทั้งหมด</small><b>{fmt(stock.tags.length)}</b><em>ใบ</em></div></article>
-        <article className="tag-stat orange"><span>◷</span><div><small>รอรับเข้า Stock</small><b>{fmt(awaitingReceipt)}</b><em>ใบ</em></div></article>
-        <article className="tag-stat purple"><span>✓</span><div><small>รับเข้าแล้ว</small><b>{fmt(receivedTags)}</b><em>ใบ</em></div></article>
-        <article className="tag-stat blue"><span>▣</span><div><small>Job ที่สร้าง Tag</small><b>{fmt(jobCount)}</b><em>Job</em></div></article>
-      </div>
-
-      <Card className="tag-create-card" title="สร้างและพิมพ์ Tag ก่อนส่งเข้า Stock" action={<button className="button primary" form="tag-create-form" disabled={stockSaving || !selectedStockPart || selectedStockPart.standardQty <= 0}>▣ {stockSaving ? "กำลังสร้าง…" : "สร้าง Tag"}</button>}>
-        <form id="tag-create-form" className="tag-create-form" onSubmit={createStockTag}>
-          <label className="tag-part-select"><span>เลือก Part *</span><input list="stock-part-codes" value={stockTagForm.materialCode} onChange={(event) => setStockTagForm((current) => ({ ...current, materialCode: event.target.value.toUpperCase(), qty: "" }))} placeholder="พิมพ์ Part No. หรือเลือกรายการ" autoComplete="off" spellCheck={false} required /></label>
-          <datalist id="stock-part-codes">{activeStockParts.map((item) => <option key={item.materialCode} value={item.materialCode}>{item.partName}{item.customer ? ` · ${item.customer}` : ""}</option>)}</datalist>
-          <label><span>จำนวนสูงสุดต่อกล่อง</span><input value={selectedStockPart?.standardQty ? fmt(selectedStockPart.standardQty) : ""} placeholder="เลือก Part ก่อน" readOnly /></label>
-          <label><span>จำนวนงานรวม (Job) *</span><input type="number" min="1" value={stockTagForm.qty} onChange={(event) => setStockTagForm((current) => ({ ...current, qty: event.target.value }))} required /></label>
-          <label className="tag-job-field"><span>Job *</span><input value={stockTagForm.jobNo} onChange={(event) => setStockTagForm((current) => ({ ...current, jobNo: event.target.value.toUpperCase() }))} placeholder="กรอก Job" required /></label>
-          <div className="tag-auto-photo">{selectedStockPart ? <PartImage materialCode={selectedStockPart.materialCode} version={selectedPartImage?.updatedAt} /> : <div className="tag-auto-photo-empty"><span>▧</span><b>รูปชิ้นงาน</b><small>ดึงจากทะเบียน Part อัตโนมัติ</small></div>}</div>
-          <div className="tag-create-note">
-            <span>{selectedStockPart ? "✓" : "ⓘ"}</span>
-            <div>{selectedStockPart ? <><b>{selectedStockPart.materialCode} · {selectedStockPart.partName}</b><small>{plannedBoxCount > 0 ? `ระบบจะสร้าง ${fmt(plannedBoxCount)} Tag · กล่องละสูงสุด ${fmt(selectedStockPart.standardQty)} ชิ้น` : "กรอกจำนวนงานรวมเพื่อคำนวณจำนวน Tag"}</small></> : <><b>{stockTagForm.materialCode ? "ไม่พบ Part นี้ในทะเบียน" : "เลือกรายการ Part เพื่อเริ่มสร้าง Tag"}</b><small>รูปและจำนวนต่อกล่องจะดึงจากทะเบียน Part</small></>}</div>
-          </div>
-          <button className="button primary tag-create-submit" disabled={stockSaving || !selectedStockPart || selectedStockPart.standardQty <= 0}>▣ สร้าง Tag ตามจำนวนกล่อง</button>
-        </form>
-        {createdStockTags.length > 0 && <div className="tag-created-banner"><PartImage materialCode={createdStockTags[0].materialCode} compact /><div><small>สร้างสำเร็จ · A4 หนึ่งหน้าสูงสุด 8 Tag</small><b>{fmt(createdStockTags.length)} Tag / {fmt(createdStockTags.reduce((sum, item) => sum + item.qty, 0))} ชิ้น</b><p>{createdStockTags[0].materialCode} · Job {createdStockTags[0].jobNo}</p></div><button className="button primary" onClick={() => void printStockTags(createdStockTags)}>▤ พิมพ์ Tag</button></div>}
-      </Card>
-
-      <Card className="tag-list-card" title="Tag ที่สร้างแล้ว" action={<button className="button secondary" onClick={() => void loadStock()}>↻ รีเฟรช</button>}>
-        <div className="tag-list-toolbar"><input value={tagSearch} onChange={(event) => { setTagSearch(event.target.value); setTagPage(1); }} placeholder="⌕ ค้นหา Tag ID, Part No., Job, ลูกค้า หรือวันที่ออก Tag" />{tagSearch && <button type="button" className="button secondary" onClick={() => { setTagSearch(""); setTagPage(1); }}>ล้าง</button>}</div>
-        <p className="tag-list-help">พบ {fmt(visibleTags.length)} จาก {fmt(stock.tags.length)} Tag · Tag ที่สร้างแล้วแก้ไขไม่ได้ การพิมพ์ซ้ำใช้ Tag ID เดิมและไม่เพิ่มยอด Stock</p>
-        {stockLoading ? <div className="inline-loading">กำลังโหลด Tag…</div> : visibleTags.length ? <div className="tag-modern-table">
-          <div className="tag-modern-head"><span>Tag ID</span><span>Part / รูปชิ้นงาน</span><span>จำนวน/กล่อง</span><span>Job</span><span>วันที่ออก Tag / รับเข้า Stock</span><span>สถานะ</span><span>จัดการ</span></div>
-          <div className="tag-modern-body">{paginatedTags.map((item) => {
-            const image = partImages.find((entry) => entry.materialCode === item.materialCode);
-            const boxMatch = item.tagId.match(/-B(\d+)OF(\d+)$/);
-            const statusText = item.status === "ng" ? "NG / ปิดรับเข้า" : item.status === "depleted" ? "ขายออกหมด" : item.status === "printed" ? "รอรับเข้า" : item.reservedQty ? "รอขายออก" : "รับเข้าแล้ว";
-            const statusClass = item.status === "ng" || item.status === "depleted" ? "over" : item.status === "printed" || item.reservedQty ? "partial" : "completed";
-            return <div className="tag-modern-row" key={item.id}>
-              <span className="tag-id-cell"><b>{item.tagId}</b><small>{boxMatch ? `กล่อง ${Number(boxMatch[1])} / ${Number(boxMatch[2])}` : "Tag งาน"}</small></span>
-              <span className="tag-product-cell"><PartImage materialCode={item.materialCode} compact version={image?.updatedAt} /><span><b>{item.materialCode}</b><small>{item.partName}</small><small>{item.customer || "ไม่ระบุลูกค้า"}</small></span></span>
-              <span><b>{fmt(item.qty)} ชิ้น</b></span>
-              <span><b>{item.jobNo}</b></span>
-              <span><b>ออก Tag: {formatDateOnly(item.createdAt)}</b><small>{item.receivedAt ? `รับเข้า Stock: ${formatDateTime(item.receivedAt)}` : "วันที่ผลิต: รอรับเข้า Stock"}</small></span>
-              <span><em className={`status ${statusClass}`}>{statusText}</em></span>
-              <span className="tag-row-actions"><button className="tiny-button" onClick={() => void printStockTags(item)}>▤ พิมพ์</button>{user.role === "admin" && item.status === "printed" && <button type="button" className="tiny-button danger-outline" disabled={Boolean(deletingStockTagId)} onClick={() => void deleteStockTag(item)}>{deletingStockTagId === item.tagId ? "กำลังลบ…" : "♲ ลบ"}</button>}</span>
-            </div>;
-          })}</div>
-          <footer>
-            <span>แสดง {fmt(tagStartIndex + 1)} - {fmt(Math.min(tagStartIndex + tagPageSize, visibleTags.length))} จาก {fmt(visibleTags.length)} รายการ</span>
-            <nav className="part-pagination" aria-label="หน้ารายการ Tag"><button className="part-page-button" disabled={safeTagPage === 1} onClick={() => setTagPage(Math.max(1, safeTagPage - 1))}>‹</button>{tagPageButtons.map((item, index) => item === "…" ? <span className="part-page-dots" key={"tag-dots-" + index}>…</span> : <button className={"part-page-button " + (item === safeTagPage ? "active" : "")} key={item} onClick={() => setTagPage(item)}>{item}</button>)}<button className="part-page-button" disabled={safeTagPage === tagTotalPages} onClick={() => setTagPage(Math.min(tagTotalPages, safeTagPage + 1))}>›</button></nav>
-            <label className="part-page-size">แสดงต่อหน้า <select value={tagPageSize} onChange={(event) => { setTagPageSize(Number(event.target.value)); setTagPage(1); }}><option value={10}>10</option><option value={20}>20</option><option value={50}>50</option></select></label>
-          </footer>
-        </div> : <Empty title={tagNeedle ? "ไม่พบ Tag ที่ค้นหา" : "ยังไม่มี Tag"} text={tagNeedle ? "ลองเปลี่ยนคำค้นหา" : "เลือก Part และสร้าง Tag สำหรับนำงานเข้า Stock"} />}
-      </Card>
-    </div>;
-  }
-
-  function renderStock() {
-    const receivedStockTags = stock.tags.filter((item) => item.status === "in_stock" || item.status === "depleted");
-    const onHand = receivedStockTags.reduce((sum, item) => sum + Number(item.remainingQty), 0);
-    const reserved = receivedStockTags.reduce((sum, item) => sum + Number(item.reservedQty), 0);
-    const available = Math.max(onHand - reserved, 0);
-    const awaitingReceipt = stock.tags.filter((item) => item.status === "printed").length;
-    const todayKey = new Date().toISOString().slice(0, 10);
-    const receivedToday = receivedStockTags.filter((item) => (item.receivedAt || "").slice(0, 10) === todayKey).reduce((sum, item) => sum + Number(item.receivedQty ?? item.qty), 0);
-    const dispatchedToday = stock.dispatchLinks.filter((item) => (item.dispatchedAt || "").slice(0, 10) === todayKey).reduce((sum, item) => sum + Number(item.qty), 0);
-    const stockNeedle = tagSearch.trim().toLowerCase();
-    const recentStock = receivedStockTags.filter((item) => !stockNeedle || [item.tagId, item.materialCode, item.partName, item.jobNo].some((value) => String(value || "").toLowerCase().includes(stockNeedle))).slice(0, 6);
-    const totalForChart = Math.max(onHand, 1);
-    const readyPercent = Math.round((available / totalForChart) * 100);
-    const reservedPercent = Math.round((reserved / totalForChart) * 100);
-    const trendDays = Array.from({ length: 7 }, (_, offset) => {
-      const date = new Date();
-      date.setDate(date.getDate() - (6 - offset));
-      const key = date.toISOString().slice(0, 10);
-      return { key, label: String(date.getDate()) + "/" + String(date.getMonth() + 1), qty: receivedStockTags.filter((item) => (item.receivedAt || "").slice(0, 10) === key).reduce((sum, item) => sum + Number(item.receivedQty ?? item.qty), 0) };
-    });
-    const trendMax = Math.max(...trendDays.map((item) => item.qty), 1);
     const jobGroupMap = new Map<string, { jobNo: string; materialCode: string; partName: string; totalQty: number; receivedQty: number; pendingQty: number; ngQty: number; tagCount: number }>();
     stock.tags.forEach((tag) => {
       const key = tag.jobNo + "|" + tag.materialCode;
@@ -2412,6 +2339,100 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       if (current === 1 || current === jobCloseTotalPages || Math.abs(current - safeJobClosePage) <= 1) jobClosePageButtons.push(current);
       else if (jobClosePageButtons[jobClosePageButtons.length - 1] !== "…") jobClosePageButtons.push("…");
     }
+
+    return <div className="tag-print-home">
+      <div className="tag-stat-row">
+        <article className="tag-stat green"><span>▤</span><div><small>Tag ทั้งหมด</small><b>{fmt(stock.tags.length)}</b><em>ใบ</em></div></article>
+        <article className="tag-stat orange"><span>◷</span><div><small>รอรับเข้า Stock</small><b>{fmt(awaitingReceipt)}</b><em>ใบ</em></div></article>
+        <article className="tag-stat purple"><span>✓</span><div><small>รับเข้าแล้ว</small><b>{fmt(receivedTags)}</b><em>ใบ</em></div></article>
+        <article className="tag-stat blue"><span>▣</span><div><small>Job ที่สร้าง Tag</small><b>{fmt(jobCount)}</b><em>Job</em></div></article>
+      </div>
+
+      {canPrintTags && <Card className="tag-create-card" title="สร้างและพิมพ์ Tag ก่อนส่งเข้า Stock" action={<button className="button primary" form="tag-create-form" disabled={stockSaving || !selectedStockPart || selectedStockPart.standardQty <= 0}>▣ {stockSaving ? "กำลังสร้าง…" : "สร้าง Tag"}</button>}>
+        <form id="tag-create-form" className="tag-create-form" onSubmit={createStockTag}>
+          <label className="tag-part-select"><span>เลือก Part *</span><input list="stock-part-codes" value={stockTagForm.materialCode} onChange={(event) => setStockTagForm((current) => ({ ...current, materialCode: event.target.value.toUpperCase(), qty: "" }))} placeholder="พิมพ์ Part No. หรือเลือกรายการ" autoComplete="off" spellCheck={false} required /></label>
+          <datalist id="stock-part-codes">{activeStockParts.map((item) => <option key={item.materialCode} value={item.materialCode}>{item.partName}{item.customer ? ` · ${item.customer}` : ""}</option>)}</datalist>
+          <label><span>จำนวนสูงสุดต่อกล่อง</span><input value={selectedStockPart?.standardQty ? fmt(selectedStockPart.standardQty) : ""} placeholder="เลือก Part ก่อน" readOnly /></label>
+          <label><span>จำนวนงานรวม (Job) *</span><input type="number" min="1" value={stockTagForm.qty} onChange={(event) => setStockTagForm((current) => ({ ...current, qty: event.target.value }))} required /></label>
+          <label className="tag-job-field"><span>Job *</span><input value={stockTagForm.jobNo} onChange={(event) => setStockTagForm((current) => ({ ...current, jobNo: event.target.value.toUpperCase() }))} placeholder="กรอก Job" required /></label>
+          <div className="tag-auto-photo">{selectedStockPart ? <PartImage materialCode={selectedStockPart.materialCode} version={selectedPartImage?.updatedAt} /> : <div className="tag-auto-photo-empty"><span>▧</span><b>รูปชิ้นงาน</b><small>ดึงจากทะเบียน Part อัตโนมัติ</small></div>}</div>
+          <div className="tag-create-note">
+            <span>{selectedStockPart ? "✓" : "ⓘ"}</span>
+            <div>{selectedStockPart ? <><b>{selectedStockPart.materialCode} · {selectedStockPart.partName}</b><small>{plannedBoxCount > 0 ? `ระบบจะสร้าง ${fmt(plannedBoxCount)} Tag · กล่องละสูงสุด ${fmt(selectedStockPart.standardQty)} ชิ้น` : "กรอกจำนวนงานรวมเพื่อคำนวณจำนวน Tag"}</small></> : <><b>{stockTagForm.materialCode ? "ไม่พบ Part นี้ในทะเบียน" : "เลือกรายการ Part เพื่อเริ่มสร้าง Tag"}</b><small>รูปและจำนวนต่อกล่องจะดึงจากทะเบียน Part</small></>}</div>
+          </div>
+          <button className="button primary tag-create-submit" disabled={stockSaving || !selectedStockPart || selectedStockPart.standardQty <= 0}>▣ สร้าง Tag ตามจำนวนกล่อง</button>
+        </form>
+        {createdStockTags.length > 0 && <div className="tag-created-banner"><PartImage materialCode={createdStockTags[0].materialCode} compact /><div><small>สร้างสำเร็จ · A4 หนึ่งหน้าสูงสุด 8 Tag</small><b>{fmt(createdStockTags.length)} Tag / {fmt(createdStockTags.reduce((sum, item) => sum + item.qty, 0))} ชิ้น</b><p>{createdStockTags[0].materialCode} · Job {createdStockTags[0].jobNo}</p></div><button className="button primary" onClick={() => void printStockTags(createdStockTags)}>▤ พิมพ์ Tag</button></div>}
+      </Card>}
+
+      {canPrintTags && <Card className="tag-list-card" title="Tag ที่สร้างแล้ว" action={<button className="button secondary" onClick={() => void loadStock()}>↻ รีเฟรช</button>}>
+        <div className="tag-list-toolbar"><input value={tagSearch} onChange={(event) => { setTagSearch(event.target.value); setTagPage(1); }} placeholder="⌕ ค้นหา Tag ID, Part No., Job, ลูกค้า หรือวันที่ออก Tag" />{tagSearch && <button type="button" className="button secondary" onClick={() => { setTagSearch(""); setTagPage(1); }}>ล้าง</button>}</div>
+        <p className="tag-list-help">พบ {fmt(visibleTags.length)} จาก {fmt(stock.tags.length)} Tag · Tag ที่สร้างแล้วแก้ไขไม่ได้ การพิมพ์ซ้ำใช้ Tag ID เดิมและไม่เพิ่มยอด Stock</p>
+        {stockLoading ? <div className="inline-loading">กำลังโหลด Tag…</div> : visibleTags.length ? <div className="tag-modern-table">
+          <div className="tag-modern-head"><span>Tag ID</span><span>Part / รูปชิ้นงาน</span><span>จำนวน/กล่อง</span><span>Job</span><span>วันที่ออก Tag / รับเข้า Stock</span><span>สถานะ</span><span>จัดการ</span></div>
+          <div className="tag-modern-body">{paginatedTags.map((item) => {
+            const image = partImages.find((entry) => entry.materialCode === item.materialCode);
+            const boxMatch = item.tagId.match(/-B(\d+)OF(\d+)$/);
+            const statusText = item.status === "ng" ? "NG / ปิดรับเข้า" : item.status === "depleted" ? "ขายออกหมด" : item.status === "printed" ? "รอรับเข้า" : item.reservedQty ? "รอขายออก" : "รับเข้าแล้ว";
+            const statusClass = item.status === "ng" || item.status === "depleted" ? "over" : item.status === "printed" || item.reservedQty ? "partial" : "completed";
+            return <div className="tag-modern-row" key={item.id}>
+              <span className="tag-id-cell"><b>{item.tagId}</b><small>{boxMatch ? `กล่อง ${Number(boxMatch[1])} / ${Number(boxMatch[2])}` : "Tag งาน"}</small></span>
+              <span className="tag-product-cell"><PartImage materialCode={item.materialCode} compact version={image?.updatedAt} /><span><b>{item.materialCode}</b><small>{item.partName}</small><small>{item.customer || "ไม่ระบุลูกค้า"}</small></span></span>
+              <span><b>{fmt(item.qty)} ชิ้น</b></span>
+              <span><b>{item.jobNo}</b></span>
+              <span><b>ออก Tag: {formatDateOnly(item.createdAt)}</b><small>{item.receivedAt ? `รับเข้า Stock: ${formatDateTime(item.receivedAt)}` : "วันที่ผลิต: รอรับเข้า Stock"}</small></span>
+              <span><em className={`status ${statusClass}`}>{statusText}</em></span>
+              <span className="tag-row-actions"><button className="tiny-button" onClick={() => void printStockTags(item)}>▤ พิมพ์</button>{user.role === "admin" && item.status === "printed" && <button type="button" className="tiny-button danger-outline" disabled={Boolean(deletingStockTagId)} onClick={() => void deleteStockTag(item)}>{deletingStockTagId === item.tagId ? "กำลังลบ…" : "♲ ลบ"}</button>}</span>
+            </div>;
+          })}</div>
+          <footer>
+            <span>แสดง {fmt(tagStartIndex + 1)} - {fmt(Math.min(tagStartIndex + tagPageSize, visibleTags.length))} จาก {fmt(visibleTags.length)} รายการ</span>
+            <nav className="part-pagination" aria-label="หน้ารายการ Tag"><button className="part-page-button" disabled={safeTagPage === 1} onClick={() => setTagPage(Math.max(1, safeTagPage - 1))}>‹</button>{tagPageButtons.map((item, index) => item === "…" ? <span className="part-page-dots" key={"tag-dots-" + index}>…</span> : <button className={"part-page-button " + (item === safeTagPage ? "active" : "")} key={item} onClick={() => setTagPage(item)}>{item}</button>)}<button className="part-page-button" disabled={safeTagPage === tagTotalPages} onClick={() => setTagPage(Math.min(tagTotalPages, safeTagPage + 1))}>›</button></nav>
+            <label className="part-page-size">แสดงต่อหน้า <select value={tagPageSize} onChange={(event) => { setTagPageSize(Number(event.target.value)); setTagPage(1); }}><option value={10}>10</option><option value={20}>20</option><option value={50}>50</option></select></label>
+          </footer>
+        </div> : <Empty title={tagNeedle ? "ไม่พบ Tag ที่ค้นหา" : "ยังไม่มี Tag"} text={tagNeedle ? "ลองเปลี่ยนคำค้นหา" : "เลือก Part และสร้าง Tag สำหรับนำงานเข้า Stock"} />}
+      </Card>}
+      {allowedPages.has("stock") && <Card className="stock-job-close-card" title="ปิดรับเข้า Job / จัดการงาน NG">
+        <p className="stock-job-close-help">เมื่อรับงานเข้าไม่ครบตาม Tag ให้ตรวจยอดแล้วกดปิดรับเข้า ระบบจะเปลี่ยนเฉพาะ Tag ที่ยังไม่ถูกยิงเป็น NG และไม่นับรวมใน Stock</p>
+        <div className="stock-job-close-search"><span>⌕</span><input value={jobCloseSearch} onChange={(event) => { setJobCloseSearch(event.target.value); setJobClosePage(1); }} placeholder="ค้นหา Job, Part No. หรือชื่อชิ้นงาน..." />{jobCloseSearch && <button type="button" onClick={() => { setJobCloseSearch(""); setJobClosePage(1); }}>×</button>}</div>
+        {filteredStockJobGroups.length ? <><div className="stock-job-close-summary">{paginatedStockJobGroups.map((group) => {
+          const key = group.jobNo + "|" + group.materialCode;
+          return <div className="stock-job-close-row" key={key}>
+            <span><b>{group.jobNo}</b><small>{fmt(group.tagCount)} Tag</small></span>
+            <span><b>{group.materialCode}</b><small>{group.partName}</small></span>
+            <span className="job-metric"><small>ทั้งหมด</small><b>{fmt(group.totalQty)}</b></span>
+            <span className="job-metric received"><small>รับเข้าแล้ว</small><b>{fmt(group.receivedQty)}</b></span>
+            <span className="job-metric waiting"><small>รอรับเข้า</small><b>{fmt(group.pendingQty)}</b></span>
+            <span className="job-metric ng"><small>NG</small><b>{fmt(group.ngQty)}</b></span>
+            <span className="job-actions">{group.pendingQty > 0 && <button className="button danger" disabled={Boolean(jobClosingKey)} onClick={() => void closeStockJob(group.jobNo, group.materialCode, group.totalQty, group.receivedQty, group.pendingQty)}>{jobClosingKey === key ? "กำลังปิด…" : "ปิดรับเข้า Job"}</button>}{group.ngQty > 0 && user.role === "admin" && <button className="button secondary" disabled={Boolean(jobClosingKey)} onClick={() => void reopenNgStockJob(group.jobNo, group.materialCode, group.ngQty)}>เปิด Job คืน</button>}{group.pendingQty === 0 && group.ngQty === 0 && <em className="stock-job-complete">✓ รับเข้าครบแล้ว</em>}</span>
+          </div>;
+        })}</div><footer className="stock-job-close-pagination"><span>แสดง {fmt(jobCloseStartIndex + 1)} - {fmt(Math.min(jobCloseStartIndex + jobClosePageSize, filteredStockJobGroups.length))} จาก {fmt(filteredStockJobGroups.length)} Job</span><nav aria-label="หน้ารายการปิดรับเข้า Job"><button disabled={safeJobClosePage === 1} onClick={() => setJobClosePage(Math.max(1, safeJobClosePage - 1))}>‹</button>{jobClosePageButtons.map((item, index) => item === "…" ? <span key={"job-dots-" + index}>…</span> : <button className={item === safeJobClosePage ? "active" : ""} key={item} onClick={() => setJobClosePage(item)}>{item}</button>)}<button disabled={safeJobClosePage === jobCloseTotalPages} onClick={() => setJobClosePage(Math.min(jobCloseTotalPages, safeJobClosePage + 1))}>›</button></nav><b>10 Job / หน้า</b></footer></> : <Empty title={jobCloseSearch ? "ไม่พบ Job ที่ค้นหา" : "ยังไม่มี Job"} text={jobCloseSearch ? "ลองค้นหาด้วย Job, Part No. หรือชื่อชิ้นงาน" : "เมื่อสร้าง Tag แล้ว Job จะแสดงในส่วนนี้"} />}
+        {stock.jobClosures.length > 0 && <div className="stock-job-close-history"><b>ประวัติปิดรับเข้าล่าสุด</b><ul>{stock.jobClosures.slice(0, 5).map((item) => <li key={item.id}><b>{item.jobNo}</b><span>{item.materialCode}</span><em>NG {fmt(item.ngQty)} ชิ้น</em><span>{item.reason}</span><span>{item.closedByName} · {formatDateTime(item.closedAt)}</span></li>)}</ul></div>}
+      </Card>}
+    </div>;
+  }
+
+  function renderStock() {
+    const receivedStockTags = stock.tags.filter((item) => item.status === "in_stock" || item.status === "depleted");
+    const onHand = receivedStockTags.reduce((sum, item) => sum + Number(item.remainingQty), 0);
+    const reserved = receivedStockTags.reduce((sum, item) => sum + Number(item.reservedQty), 0);
+    const available = Math.max(onHand - reserved, 0);
+    const awaitingReceipt = stock.tags.filter((item) => item.status === "printed").length;
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const receivedToday = receivedStockTags.filter((item) => (item.receivedAt || "").slice(0, 10) === todayKey).reduce((sum, item) => sum + Number(item.receivedQty ?? item.qty), 0);
+    const dispatchedToday = stock.dispatchLinks.filter((item) => (item.dispatchedAt || "").slice(0, 10) === todayKey).reduce((sum, item) => sum + Number(item.qty), 0);
+    const stockNeedle = tagSearch.trim().toLowerCase();
+    const recentStock = receivedStockTags.filter((item) => !stockNeedle || [item.tagId, item.materialCode, item.partName, item.jobNo].some((value) => String(value || "").toLowerCase().includes(stockNeedle))).slice(0, 6);
+    const totalForChart = Math.max(onHand, 1);
+    const readyPercent = Math.round((available / totalForChart) * 100);
+    const reservedPercent = Math.round((reserved / totalForChart) * 100);
+    const trendDays = Array.from({ length: 7 }, (_, offset) => {
+      const date = new Date();
+      date.setDate(date.getDate() - (6 - offset));
+      const key = date.toISOString().slice(0, 10);
+      return { key, label: String(date.getDate()) + "/" + String(date.getMonth() + 1), qty: receivedStockTags.filter((item) => (item.receivedAt || "").slice(0, 10) === key).reduce((sum, item) => sum + Number(item.receivedQty ?? item.qty), 0) };
+    });
+    const trendMax = Math.max(...trendDays.map((item) => item.qty), 1);
     return <div className="stock-home">
       <div className="stock-stat-row">
         <article className="stock-stat blue"><span>◇</span><div><small>Tag รอรับเข้า</small><b>{fmt(awaitingReceipt)}</b><em>ใบ</em></div><button onClick={() => go("tags")}>ดูรายละเอียด →</button></article>
@@ -2472,23 +2493,6 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
             {!stock.countAdjustments.length && <p>ยังไม่มีรายการ</p>}
           </div>
         </div>}
-      </Card>
-      <Card className="stock-job-close-card" title="ปิดรับเข้า Job / จัดการงาน NG">
-        <p className="stock-job-close-help">เมื่อรับงานเข้าไม่ครบตาม Tag ให้ตรวจยอดแล้วกดปิดรับเข้า ระบบจะเปลี่ยนเฉพาะ Tag ที่ยังไม่ถูกยิงเป็น NG และไม่นับรวมใน Stock</p>
-        <div className="stock-job-close-search"><span>⌕</span><input value={jobCloseSearch} onChange={(event) => { setJobCloseSearch(event.target.value); setJobClosePage(1); }} placeholder="ค้นหา Job, Part No. หรือชื่อชิ้นงาน..." />{jobCloseSearch && <button type="button" onClick={() => { setJobCloseSearch(""); setJobClosePage(1); }}>×</button>}</div>
-        {filteredStockJobGroups.length ? <><div className="stock-job-close-summary">{paginatedStockJobGroups.map((group) => {
-          const key = group.jobNo + "|" + group.materialCode;
-          return <div className="stock-job-close-row" key={key}>
-            <span><b>{group.jobNo}</b><small>{fmt(group.tagCount)} Tag</small></span>
-            <span><b>{group.materialCode}</b><small>{group.partName}</small></span>
-            <span className="job-metric"><small>ทั้งหมด</small><b>{fmt(group.totalQty)}</b></span>
-            <span className="job-metric received"><small>รับเข้าแล้ว</small><b>{fmt(group.receivedQty)}</b></span>
-            <span className="job-metric waiting"><small>รอรับเข้า</small><b>{fmt(group.pendingQty)}</b></span>
-            <span className="job-metric ng"><small>NG</small><b>{fmt(group.ngQty)}</b></span>
-            <span className="job-actions">{group.pendingQty > 0 && <button className="button danger" disabled={Boolean(jobClosingKey)} onClick={() => void closeStockJob(group.jobNo, group.materialCode, group.totalQty, group.receivedQty, group.pendingQty)}>{jobClosingKey === key ? "กำลังปิด…" : "ปิดรับเข้า Job"}</button>}{group.ngQty > 0 && user.role === "admin" && <button className="button secondary" disabled={Boolean(jobClosingKey)} onClick={() => void reopenNgStockJob(group.jobNo, group.materialCode, group.ngQty)}>เปิด Job คืน</button>}{group.pendingQty === 0 && group.ngQty === 0 && <em className="stock-job-complete">✓ รับเข้าครบแล้ว</em>}</span>
-          </div>;
-        })}</div><footer className="stock-job-close-pagination"><span>แสดง {fmt(jobCloseStartIndex + 1)} - {fmt(Math.min(jobCloseStartIndex + jobClosePageSize, filteredStockJobGroups.length))} จาก {fmt(filteredStockJobGroups.length)} Job</span><nav aria-label="หน้ารายการปิดรับเข้า Job"><button disabled={safeJobClosePage === 1} onClick={() => setJobClosePage(Math.max(1, safeJobClosePage - 1))}>‹</button>{jobClosePageButtons.map((item, index) => item === "…" ? <span key={"job-dots-" + index}>…</span> : <button className={item === safeJobClosePage ? "active" : ""} key={item} onClick={() => setJobClosePage(item)}>{item}</button>)}<button disabled={safeJobClosePage === jobCloseTotalPages} onClick={() => setJobClosePage(Math.min(jobCloseTotalPages, safeJobClosePage + 1))}>›</button></nav><b>10 Job / หน้า</b></footer></> : <Empty title={jobCloseSearch ? "ไม่พบ Job ที่ค้นหา" : "ยังไม่มี Job"} text={jobCloseSearch ? "ลองค้นหาด้วย Job, Part No. หรือชื่อชิ้นงาน" : "เมื่อสร้าง Tag แล้ว Job จะแสดงในส่วนนี้"} />}
-        {stock.jobClosures.length > 0 && <div className="stock-job-close-history"><b>ประวัติปิดรับเข้าล่าสุด</b><ul>{stock.jobClosures.slice(0, 5).map((item) => <li key={item.id}><b>{item.jobNo}</b><span>{item.materialCode}</span><em>NG {fmt(item.ngQty)} ชิ้น</em><span>{item.reason}</span><span>{item.closedByName} · {formatDateTime(item.closedAt)}</span></li>)}</ul></div>}
       </Card>
       <div className="stock-analytics-grid">
         <Card className="stock-status-card" title="3. สรุปสถานะ Stock"><div className="stock-donut-wrap"><div className="stock-donut" style={{ "--ready-stock": String(readyPercent * 3.6) + "deg" } as React.CSSProperties}><span><b>{fmt(onHand)}</b><small>ชิ้น</small></span></div><ul><li><i className="ready" /><span>พร้อมจัดงาน</span><b>{fmt(available)} ชิ้น</b><em>{readyPercent}%</em></li><li><i className="reserved" /><span>รอขายออก</span><b>{fmt(reserved)} ชิ้น</b><em>{reservedPercent}%</em></li></ul></div></Card>
