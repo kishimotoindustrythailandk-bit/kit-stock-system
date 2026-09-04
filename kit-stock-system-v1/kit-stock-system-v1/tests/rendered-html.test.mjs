@@ -147,15 +147,33 @@ test("searches created Tags and reprints the original Tag ID without creating St
   assert.match(appSource, /การพิมพ์ซ้ำใช้ Tag ID เดิมและไม่เพิ่มยอด Stock/);
 });
 
-test("summarizes cumulative Stock quantity by Job and Part", async () => {
-  const appSource = await source("../app/delivery-control-app.tsx");
-  assert.match(appSource, /const jobGroupMap = new Map/);
-  assert.match(appSource, /current\.totalQty \+= Number\(tag\.qty/);
-  assert.match(appSource, /current\.tagCount \+= 1/);
-  assert.match(appSource, /const stockJobGroups = \[\.\.\.jobGroupMap\.values\(\)\]/);
-  assert.match(appSource, /ปิดรับเข้า Job \/ จัดการงาน NG/);
-  assert.match(appSource, /รอรับเข้า/);
-  assert.match(appSource, /รับเข้าแล้ว/);
+test("places Job close and NG management on Print Tag with Stock authorization", async () => {
+  const [appSource, stockApi] = await Promise.all([
+    source("../app/delivery-control-app.tsx"),
+    source("../app/api/stock/route.ts"),
+  ]);
+  const tagsSection = sourceSection(appSource, "function renderTags()", "function renderStock()");
+  const stockSection = sourceSection(appSource, "function renderStock()", "function renderPlan()");
+  const pageAccess = sourceSection(appSource, "const canPrintTags", "const restoredPageRef");
+  const closeJobAction = sourceSection(stockApi, 'if (action === "close_job")', 'if (action === "reopen_ng_job")');
+  const reopenJobAction = sourceSection(stockApi, 'if (action === "reopen_ng_job")', 'if (action === "receive")');
+
+  assert.match(tagsSection, /const jobGroupMap = new Map/);
+  assert.match(tagsSection, /current\.totalQty \+= Number\(tag\.qty/);
+  assert.match(tagsSection, /current\.tagCount \+= 1/);
+  assert.match(tagsSection, /ปิดรับเข้า Job \/ จัดการงาน NG/);
+  assert.match(tagsSection, /\{canPrintTags && <Card className="tag-create-card"/);
+  assert.match(tagsSection, /\{canPrintTags && <Card className="tag-list-card"/);
+  assert.match(tagsSection, /allowedPages\.has\("stock"\) && <Card className="stock-job-close-card"/);
+  assert.match(pageAccess, /const canPrintTags = user\.role === "admin" \|\| user\.permissions\?\.includes\("tags"\)/);
+  assert.match(pageAccess, /if \(set\.has\("stock"\)\) set\.add\("tags"\)/);
+  assert.doesNotMatch(stockSection, /ปิดรับเข้า Job \/ จัดการงาน NG/);
+  assert.doesNotMatch(stockSection, /const jobGroupMap = new Map/);
+
+  assert.match(closeJobAction, /!hasPermission\(user, "stock"\) \|\| !requireStockRole\(user\.role\)/);
+  assertBefore(closeJobAction, /hasPermission\(user, "stock"\)/, /UPDATE stock_tags SET status = 'ng'/);
+  assert.match(reopenJobAction, /user\.role !== "admin" \|\| !hasPermission\(user, "stock"\)/);
+  assertBefore(reopenJobAction, /hasPermission\(user, "stock"\)/, /UPDATE stock_tags SET status = 'printed'/);
 });
 
 test("splits a Job into full and remainder boxes in the authoritative API", async () => {
@@ -189,14 +207,18 @@ test("imports Parts from Excel and prints complete Stock Tag data", async () => 
   assert.match(stockApi, /deliveryQty: totalQty/);
 });
 
-test("separates Stock operations from Tag printing", async () => {
+test("separates Stock receiving from Tag printing and Job management", async () => {
   const appSource = await source("../app/delivery-control-app.tsx");
+  const tagsSection = sourceSection(appSource, "function renderTags()", "function renderStock()");
+  const stockSection = sourceSection(appSource, "function renderStock()", "function renderPlan()");
+
   assert.match(appSource, /key: "stock", label: "Stock"/);
   assert.match(appSource, /key: "tags", label: "พิมพ์ Tag"/);
-  assert.match(appSource, /function renderTags\(\)/);
-  assert.match(appSource, /function renderStock\(\)/);
-  assert.match(appSource, /Tag ที่สร้างแล้ว/);
-  assert.match(appSource, /ยิง Tag รับงานเข้า Stock/);
+  assert.match(tagsSection, /Tag ที่สร้างแล้ว/);
+  assert.match(tagsSection, /ปิดรับเข้า Job \/ จัดการงาน NG/);
+  assert.doesNotMatch(tagsSection, /สแกน Tag เพื่อรับเข้า Stock/);
+  assert.match(stockSection, /สแกน Tag เพื่อรับเข้า Stock/);
+  assert.doesNotMatch(stockSection, /ปิดรับเข้า Job \/ จัดการงาน NG/);
 });
 
 test("connects camera Stock receipt preview to explicit confirmation", async () => {
