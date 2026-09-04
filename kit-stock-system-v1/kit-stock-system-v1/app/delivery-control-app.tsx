@@ -409,8 +409,8 @@ async function playOverdueAlertTone(audioContextRef: { current: AudioContext | n
     const audioWindow = window as typeof window & { webkitAudioContext?: typeof AudioContext };
     const AudioContextClass = audioWindow.AudioContext || audioWindow.webkitAudioContext;
     if (!AudioContextClass) return false;
-    const context = audioContextRef.current?.state !== "closed" ? audioContextRef.current : new AudioContextClass();
-    if (!context) return false;
+    const existingContext = audioContextRef.current;
+    const context = existingContext && existingContext.state !== "closed" ? existingContext : new AudioContextClass();
     audioContextRef.current = context;
     if (context.state !== "running") await context.resume();
 

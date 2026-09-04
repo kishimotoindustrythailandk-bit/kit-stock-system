@@ -57,6 +57,8 @@ test("includes the mobile navigation and card layouts", async () => {
   assert.match(appSource, /const overdueDues = useMemo/);
   assert.match(appSource, /showOverduePlan/);
   assert.match(appSource, /playOverdueAlertTone/);
+  assert.match(appSource, /const existingContext = audioContextRef\.current/);
+  assert.match(appSource, /existingContext && existingContext\.state !== "closed" \? existingContext : new AudioContextClass\(\)/);
   assert.match(appSource, /previousOverdueIdsRef/);
   assert.match(appSource, /aria-pressed=\{overdueSoundEnabled\}/);
   assert.match(appSource, /overdue-sound-shortcut/);
