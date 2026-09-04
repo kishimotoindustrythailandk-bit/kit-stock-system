@@ -210,8 +210,9 @@ test("imports Parts from Excel and prints complete Stock Tag data", async () => 
 });
 
 test("previews and imports a Part register with matched Master and box images", async () => {
-  const [appSource, css] = await Promise.all([
+  const [appSource, stockApi, css] = await Promise.all([
     source("../app/delivery-control-app.tsx"),
+    source("../app/api/stock/route.ts"),
     source("../app/globals.css"),
   ]);
   const bundleFlow = sourceSection(appSource, "async function previewPartBundle", "async function syncDueParts");
@@ -220,7 +221,13 @@ test("previews and imports a Part register with matched Master and box images", 
   assert.match(bundleFlow, /parsePartExcel\(partBundleExcel\)/);
   assert.match(bundleFlow, /matchBundleImages/);
   assert.match(bundleFlow, /action: "import_parts"/);
+  assert.match(bundleFlow, /importContract: "preserve_existing_v1"/);
+  assert.match(bundleFlow, /skippedMaterialCodes/);
+  assert.match(bundleFlow, /candidateUploads\.filter/);
   assert.match(bundleFlow, /form\.set\("slot", upload\.slot\)/);
+  assert.match(stockApi, /body\.importContract !== "preserve_existing_v1"/);
+  assert.match(stockApi, /ON CONFLICT\(material_code\) DO NOTHING/);
+  assert.match(stockApi, /skippedMaterialCodes/);
   assert.match(partsPage, /นำเข้าทะเบียน Part จาก Excel/);
   assert.match(partsPage, /ดาวน์โหลด Template/);
   assert.match(partsPage, /ดาวน์โหลดข้อมูล Part/);
