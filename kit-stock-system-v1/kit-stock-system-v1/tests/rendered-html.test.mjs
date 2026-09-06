@@ -250,7 +250,18 @@ test("previews and imports a Part register with matched Master and box images", 
   assert.match(partsPage, /รูปชิ้นงานในกล่อง · ชื่อไฟล์ต้องตรงกับ Part No\./);
   assert.match(partsPage, /รูปตัวอย่าง \(Master\)/);
   assert.match(partsPage, /รูปชิ้นงานในกล่อง/);
+  assert.match(partsPage, /const masterImage = partImages\.find/);
+  assert.match(partsPage, /const actualImage = partActualImages\.find/);
+  assert.match(partsPage, /<PartImagePair materialCode=\{part\.materialCode\} masterVersion=\{masterImage\?\.updatedAt\} actualVersion=\{actualImage\?\.updatedAt\} masterAvailable=\{Boolean\(masterImage\)\} actualAvailable=\{Boolean\(actualImage\)\}/);
+  assert.match(partsPage, /ในกล่อง: \{actualImage \? "มีรูป" : "ยังไม่มี"\} · Master: \{masterImage \? "มีรูป" : "ยังไม่มี"\}/);
+  assert.match(appSource, /const key = `\$\{slot\}:\$\{materialCode\}:\$\{version \|\| "unversioned"\}`/);
+  assert.match(appSource, /loading="lazy" decoding="async"/);
+  assert.match(appSource, /actualAvailable \? <PartImage materialCode=\{materialCode\} slot="actual"/);
+  assert.match(appSource, /masterAvailable \? <PartImage materialCode=\{materialCode\} slot="master"/);
   assert.match(partsPage, /ตรวจสอบข้อมูลและจับคู่รูป/);
+  assert.match(css, /\.part-code-cell>\.part-image-pair/);
+  assert.match(css, /\.part-modern-head,\.part-modern-row\{grid-template-columns:minmax\(250px,1\.8fr\).*\.9fr\}/s);
+  assert.match(css, /@media\(max-width:760px\).*\.part-code-cell>\.part-image-pair.*height:110px/s);
   assert.match(css, /\.part-bundle-form/);
   assert.match(css, /@media\(max-width:760px\).*\.part-bundle-form\{grid-template-columns:1fr\}/s);
 });

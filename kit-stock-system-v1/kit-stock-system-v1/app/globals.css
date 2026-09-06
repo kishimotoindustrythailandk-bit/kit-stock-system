@@ -1849,3 +1849,26 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
   .overdue-alert small { font-size: 9px; line-height: 1.45; }
   .overdue-sound-toggle { width: 100%; min-width: 0; min-height: 52px; }
 }
+
+/* v2.23.0 — Actual and Master images in the Part registry */
+.part-modern-head,.part-modern-row{grid-template-columns:minmax(250px,1.8fr) 1.05fr .8fr .7fr .65fr .55fr .9fr}
+.part-code-cell{display:grid;align-items:start;gap:7px}
+.part-code-cell>.part-image-pair{max-width:250px;gap:6px!important}
+.part-code-cell>.part-image-pair figure{padding:4px;border-radius:9px}
+.part-code-cell>.part-image-pair figcaption{min-height:24px;margin-bottom:4px!important;padding:3px 4px;font-size:10px!important;line-height:1.2}
+.part-code-cell>.part-image-pair .part-photo,.part-code-cell>.part-image-pair .part-photo-fallback{width:100%;height:72px;border-radius:7px}
+.part-code-cell>span{min-width:0}
+@media(max-width:1180px) and (min-width:761px){
+  .part-modern-head,.part-modern-row{grid-template-columns:minmax(220px,1.65fr) 1fr .7fr .65fr .6fr .55fr .9fr;gap:9px}
+}
+@media(max-width:760px){
+  .part-modern-row{grid-template-columns:1fr 1fr}
+  .part-code-cell{grid-column:1/-1}
+  .part-code-cell>.part-image-pair{max-width:none}
+  .part-code-cell>.part-image-pair figcaption{min-height:32px;font-size:11px!important}
+  .part-code-cell>.part-image-pair .part-photo,.part-code-cell>.part-image-pair .part-photo-fallback{height:110px}
+  .part-modern-row>span:nth-child(4)::before{content:"Location"}
+  .part-modern-row>span:nth-child(5)::before{content:"จำนวนต่อกล่อง"}
+  .part-modern-row>span:nth-child(6)::before{content:"สถานะ"}
+  .part-modern-row>span:nth-child(7)::before{content:"จัดการ"}
+}

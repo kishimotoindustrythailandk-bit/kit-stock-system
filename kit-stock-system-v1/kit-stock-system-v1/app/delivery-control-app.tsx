@@ -465,23 +465,25 @@ function Empty({ title = "ยังไม่มีข้อมูล", text = "�
  * เพราะ URL เดิมอ้างด้วย materialCode อย่างเดียว
  */
 function PartImage({ materialCode, compact = false, version, slot = "master" }: { materialCode: string; compact?: boolean; version?: string; slot?: "master" | "actual" }) {
-  const key = `${slot}:${materialCode}`;
+  const key = `${slot}:${materialCode}:${version || "unversioned"}`;
   const [failedKey, setFailedKey] = useState("");
   if (failedKey === key) return <div className={`part-photo-fallback ${compact ? "compact" : ""}`}><span>◈</span><small>ยังไม่มีรูป</small></div>;
   const source = `/api/part-images?materialCode=${encodeURIComponent(materialCode)}${slot === "actual" ? "&slot=actual" : ""}${version ? `&v=${encodeURIComponent(version)}` : ""}`;
-  return <div className={`part-photo ${compact ? "compact" : ""}`}><img src={source} alt={`รูปชิ้นงาน ${materialCode}`} onError={() => setFailedKey(key)} /></div>;
+  const imageLabel = slot === "actual" ? "รูปชิ้นงานในกล่อง" : "รูปตัวอย่าง Master";
+  return <div className={`part-photo ${compact ? "compact" : ""}`}><img src={source} alt={`${imageLabel} ${materialCode}`} loading="lazy" decoding="async" onError={() => setFailedKey(key)} /></div>;
 }
 
 /**
  * โชว์รูปคู่กันตามตำแหน่งที่ผู้ใช้งานคุ้นเคย: รูปชิ้นงานอยู่ซ้าย และรูปตัวอย่างอยู่ขวา
  * ใช้ตอนสแกนเพื่อให้ผู้ตรวจเทียบว่าชิ้นงานในกล่องตรงกับตัวอย่างจริง
  */
-function PartImagePair({ materialCode, masterVersion, actualVersion }: { materialCode: string; masterVersion?: string; actualVersion?: string }) {
+function PartImagePair({ materialCode, masterVersion, actualVersion, masterAvailable = true, actualAvailable = true }: { materialCode: string; masterVersion?: string; actualVersion?: string; masterAvailable?: boolean; actualAvailable?: boolean }) {
   const capStyle: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: "#6b7787", marginBottom: 5, textAlign: "center", letterSpacing: "0.02em" };
   const figStyle: React.CSSProperties = { margin: 0, flex: "1 1 130px", minWidth: 0 };
+  const fallback = <div className="part-photo-fallback"><span>◈</span><small>ยังไม่มีรูป</small></div>;
   return <div className="part-image-pair" style={{ display: "flex", gap: 12, flexWrap: "wrap", width: "100%" }}>
-    <figure style={figStyle}><figcaption style={capStyle}>รูปชิ้นงานในกล่อง</figcaption><PartImage materialCode={materialCode} slot="actual" version={actualVersion} /></figure>
-    <figure style={figStyle}><figcaption style={capStyle}>รูปตัวอย่าง (Master)</figcaption><PartImage materialCode={materialCode} slot="master" version={masterVersion} /></figure>
+    <figure style={figStyle}><figcaption style={capStyle}>รูปชิ้นงานในกล่อง</figcaption>{actualAvailable ? <PartImage materialCode={materialCode} slot="actual" version={actualVersion} /> : fallback}</figure>
+    <figure style={figStyle}><figcaption style={capStyle}>รูปตัวอย่าง (Master)</figcaption>{masterAvailable ? <PartImage materialCode={materialCode} slot="master" version={masterVersion} /> : fallback}</figure>
   </div>;
 }
 
@@ -2630,10 +2632,11 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         {visibleParts.length ? <div className="part-modern-table">
           <div className="part-modern-head"><span>Part / Material No.</span><span>ชื่อชิ้นงาน</span><span>ลูกค้า</span><span>Location</span><span>จำนวนสูงสุดต่อกล่อง</span><span>สถานะ</span><span>จัดการ</span></div>
           <div className="part-modern-body">{paginatedParts.map((part) => {
-            const image = partImages.find((item) => item.materialCode === part.materialCode);
+            const masterImage = partImages.find((item) => item.materialCode === part.materialCode);
+            const actualImage = partActualImages.find((item) => item.materialCode === part.materialCode);
             const hasTag = stock.tags.some((tag) => tag.materialCode === part.materialCode);
             return <div className="part-modern-row" key={part.materialCode}>
-              <span className="part-code-cell"><PartImage materialCode={part.materialCode} compact version={image?.updatedAt} /><span><b>{part.materialCode}</b><small>{image ? "มีรูปชิ้นงาน" : "ยังไม่มีรูป"}</small></span></span>
+              <span className="part-code-cell"><PartImagePair materialCode={part.materialCode} masterVersion={masterImage?.updatedAt} actualVersion={actualImage?.updatedAt} masterAvailable={Boolean(masterImage)} actualAvailable={Boolean(actualImage)} /><span><b>{part.materialCode}</b><small>ในกล่อง: {actualImage ? "มีรูป" : "ยังไม่มี"} · Master: {masterImage ? "มีรูป" : "ยังไม่มี"}</small></span></span>
               <span>{part.partName}</span><span>{part.customer || "—"}</span><span><b>{part.location || "—"}</b></span><span>{part.standardQty > 0 ? fmt(part.standardQty) + " ชิ้น" : "ยังไม่กำหนด"}</span>
               <span><em className={"part-active " + (part.active ? "on" : "off")}>{part.active ? "ใช้งาน" : "ยกเลิก"}</em></span>
               <span className="part-row-actions">{user.role === "admin" ? <><button className="tiny-button" onClick={() => editPart(part)}>✎ แก้ไข</button>{hasTag ? <small>มีประวัติ Stock</small> : <button className="tiny-button danger-outline" disabled={Boolean(deletingPartCode)} onClick={() => void deleteStockPart(part)}>♲ {deletingPartCode === part.materialCode ? "กำลังลบ…" : "ลบ"}</button>}</> : <small>ดูข้อมูลเท่านั้น</small>}</span>
