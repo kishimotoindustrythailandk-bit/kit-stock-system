@@ -672,6 +672,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const verifyInput = useRef<HTMLInputElement>(null);
   const verifyResultRef = useRef<HTMLElement>(null);
   const canPrintTags = user.role === "admin" || user.permissions?.includes("tags");
+  const canCreateReplacement = user.role === "admin" || user.role === "qc" || user.role === "inspector";
+  const canIssueReplacement = user.role === "admin" || user.role === "delivery" || user.role === "dispatcher";
   const allowedPages = useMemo(() => new Set<PageKey>(
     user.role === "admin" ? NAV.map((item) => item.key) : user.permissions,
   ), [user.permissions, user.role]);
@@ -3293,7 +3295,6 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const totalIssued = replacement.issues.reduce((sum, item) => sum + Number(item.qty), 0);
     const reasonLabel = (value: string) => value === "defect" ? "งานเสีย" : value === "shortage" ? "งานขาด" : "อื่น ๆ";
     const statusLabel = (value: string) => value === "completed" ? "เบิกครบแล้ว" : value === "partial" ? "เบิกบางส่วน" : value === "cancelled" ? "ยกเลิก" : "รอจัดงาน";
-    const canCreate = allowedPages.has("replacement");
 
     return <div className="replacement-page">
       <div className="metrics four compact replacement-metrics">
@@ -3303,9 +3304,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         <MetricCard tone="purple" icon="▦" label="เบิกออกสะสม" value={fmt(totalIssued)} suffix="ชิ้น" />
       </div>
 
-      <div className="replacement-work-grid">
-        <Card className="replacement-request-card" title={<><span className="replacement-step">1</span> QC แจ้งขอเบิกงานทดแทน</>}>
-          {canCreate ? <form className="replacement-form" onSubmit={createReplacementRequest}>
+      <div className="replacement-work-grid" style={canCreateReplacement && canIssueReplacement ? undefined : { gridTemplateColumns: "1fr" }}>
+        {canCreateReplacement && <Card className="replacement-request-card" title={<><span className="replacement-step">1</span> QC แจ้งขอเบิกงานทดแทน</>}>
+          <form className="replacement-form" onSubmit={createReplacementRequest}>
             <label className="wide"><span>Part / Material No. *</span><input list="replacement-parts" value={replacementForm.materialCode} onChange={(event) => {
               const value = event.target.value.toUpperCase();
               const part = stock.parts.find((item) => item.materialCode === value);
@@ -3317,10 +3318,10 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
             <label><span>วันที่ต้องการ</span><input type="date" value={replacementForm.neededDate} onChange={(event) => setReplacementForm((current) => ({ ...current, neededDate: event.target.value }))} /></label>
             <label className="wide"><span>รายละเอียด / เลขที่เอกสารอ้างอิง</span><textarea rows={3} value={replacementForm.reasonDetail} onChange={(event) => setReplacementForm((current) => ({ ...current, reasonDetail: event.target.value }))} placeholder="ระบุอาการเสีย จำนวนขาด หรือข้อมูลที่ทีมจัดงานต้องทราบ" /></label>
             <button className="button primary full" disabled={replacementSaving}>{replacementSaving ? "กำลังสร้างใบขอ…" : "＋ สร้างใบขอเบิกให้ทีมจัดงาน"}</button>
-          </form> : <div className="replacement-role-note"><span>QC</span><div><b>หน้านี้ใช้สำหรับ QC แจ้งขอเบิก</b><p>บัญชีทีมจัดงานจะเห็นใบขอและสแกนเบิกในขั้นตอนที่ 2</p></div></div>}
-        </Card>
+          </form>
+        </Card>}
 
-        <Card className="replacement-scan-card" title={<><span className="replacement-step green">2</span> ทีมจัดงานสแกน KIT Tag</>} action={selected ? <span className="replacement-selected">{selected.requestNo}</span> : undefined}>
+        {canIssueReplacement && <Card className="replacement-scan-card" title={<><span className="replacement-step green">2</span> Delivery สแกน KIT Tag งานทดแทน</>} action={selected ? <span className="replacement-selected">{selected.requestNo}</span> : undefined}>
           {selected ? <>
             <div className="replacement-selected-request">
               <PartImage materialCode={selected.materialCode} compact />
@@ -3338,7 +3339,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
             </form>
             <p className="replacement-help">ระบบจะตัด Stock และตัดยอดคงเหลือของใบขอเมื่อกด “ยืนยันเบิกงานทดแทน” เท่านั้น</p>
           </> : <Empty title="ยังไม่มีใบขอรอจัดงาน" text="เมื่อ QC สร้างใบขอ รายการจะขึ้นให้เลือกและสแกน KIT Tag ที่นี่" />}
-        </Card>
+        </Card>}
       </div>
 
       <Card className="replacement-list-card" title={<><span className="replacement-list-icon">↺</span> ใบขอเบิกงานทดแทน <em>{fmt(requestRows.length)} ใบ</em></>} action={<div className="arranged-search"><span>⌕</span><input type="search" value={replacementSearch} onChange={(event) => setReplacementSearch(event.target.value)} placeholder="ค้นหาเลขที่ใบขอ, Part, ลูกค้า, ผู้ขอ" /></div>}>
@@ -3352,7 +3353,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
             <td data-label="คงเหลือ" className="num"><b className={item.remainingQty ? "red-text" : "green-text"}>{fmt(item.remainingQty)}</b></td>
             <td data-label="ผู้ขอ"><b>{item.requestedByName}</b><small>{item.requestedByCode}</small></td>
             <td data-label="สถานะ"><span className={`status ${item.status === "completed" ? "completed" : item.status === "partial" ? "partial" : item.status === "cancelled" ? "over" : "pending"}`}>{statusLabel(item.status)}</span></td>
-            <td data-label="จัดการ"><div className="user-actions">{(item.status === "pending" || item.status === "partial") && <button className="tiny-button" onClick={() => { setReplacementSelectedId(String(item.id)); setReplacementPreview(null); setReplacementTag(""); window.setTimeout(() => replacementInputRef.current?.focus(), 100); }}>เลือกจัดงาน</button>}{canCreate && item.status === "pending" && item.issuedQty === 0 && <button className="tiny-button danger-outline" onClick={() => void cancelReplacementRequest(item)}>ยกเลิก</button>}</div></td>
+            <td data-label="จัดการ"><div className="user-actions">{canIssueReplacement && (item.status === "pending" || item.status === "partial") && <button className="tiny-button" onClick={() => { setReplacementSelectedId(String(item.id)); setReplacementPreview(null); setReplacementTag(""); if (!window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) window.setTimeout(() => replacementInputRef.current?.focus(), 100); }}>เลือกจัดงาน</button>}{canCreateReplacement && item.status === "pending" && item.issuedQty === 0 && <button className="tiny-button danger-outline" onClick={() => void cancelReplacementRequest(item)}>ยกเลิก</button>}</div></td>
           </tr>)}
         </tbody></table></div> : <Empty title="ยังไม่มีใบขอเบิก" text="QC สามารถสร้างใบขอสำหรับงานเสียหรืองานขาดได้จากแบบฟอร์มด้านบน" />}
         <footer className="replacement-list-footer"><span>ยอดขอเบิกทั้งหมด {fmt(totalRequested)} ชิ้น</span><b>เบิกออกแล้ว {fmt(totalIssued)} ชิ้น</b></footer>
