@@ -563,7 +563,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [verifyRaw, setVerifyRaw] = useState("");
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [verifyLoading, setVerifyLoading] = useState(false);
-  const [arrangeDueId, setArrangeDueId] = useState("");
+  const [arrangeDueDate, setArrangeDueDate] = useState("");
   const [arrangeTag, setArrangeTag] = useState("");
   const [arrangeQty, setArrangeQty] = useState("");
   const [arrangeDueSearch, setArrangeDueSearch] = useState("");
@@ -1428,7 +1428,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const event = typeof value === "object" ? value : undefined;
     event?.preventDefault();
     const scannedValue = typeof value === "string" ? value.trim() : arrangeTag.trim();
-    if (!effectiveArrangeDueId || !scannedValue || checkingTag) return;
+    if (!effectiveArrangeDueDate || !scannedValue || checkingTag) return;
     setCheckingTag(true);
     setArrangementPreview(null);
     setNotice(null);
@@ -1438,7 +1438,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           action: "stage",
-          dueLineId: Number(effectiveArrangeDueId),
+          deliveryDate: effectiveArrangeDueDate,
           rawPayload: scannedValue,
           qty: Number(arrangeQty || 0),
         }),
@@ -2161,9 +2161,12 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const arrangeableDues = useMemo(() => payload.dues.filter((due) =>
     Number(due.reqQty) > Number(due.scannedQty) + Number(due.arrangedQty || 0)
   ), [payload.dues]);
-  const effectiveArrangeDueId = arrangeableDues.some((due) => String(due.id) === arrangeDueId)
-    ? arrangeDueId
-    : arrangeableDues[0] ? String(arrangeableDues[0].id) : "";
+  const arrangeDueDates = useMemo(() => [...new Set(arrangeableDues.map((due) => due.deliveryDate))].sort(), [arrangeableDues]);
+  const effectiveArrangeDueDate = arrangeDueDates.includes(arrangeDueDate)
+    ? arrangeDueDate
+    : arrangeDueDates.includes(bangkokDateTimeKey().slice(0, 10))
+      ? bangkokDateTimeKey().slice(0, 10)
+      : arrangeDueDates[0] || "";
 
   function go(next: PageKey) {
     if (!allowedPages.has(next)) {
@@ -2349,7 +2352,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
             <td data-label="คงเหลือ" className={`num ${stateOf(due) === "over" ? "danger" : "warning"}`}><b>{fmt(Math.max(due.reqQty - due.scannedQty, 0))}</b></td>
             <td data-label="สถานะ"><span className={`status ${Number(due.arrangedQty) > 0 && stateOf(due) === "pending" ? "partial" : stateOf(due)}`}>{stateLabel(due)}</span></td>
             <td data-label="จัดการ">{workflowPage && <button className="tiny-button" onClick={() => {
-              setArrangeDueId(String(due.id));
+              setArrangeDueDate(due.deliveryDate);
               go(workflowPage);
             }}>{Number(due.scannedQty) < due.reqQty ? (workflowPage === "dispatch" ? "ขายออก" : "จัดงาน") : "ดู"}</button>}</td>
           </tr>)}</tbody>
@@ -3046,13 +3049,14 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
 
   function renderScan(scanMode: "arrange" | "dispatch") {
     const progress = tagPreview ? Math.min(100, Math.round((tagPreview.due.projectedQty / tagPreview.due.reqQty) * 100)) : 0;
-    const selectedArrangeDue = payload.dues.find((due) => String(due.id) === effectiveArrangeDueId);
+    const selectedDateDues = arrangeableDues.filter((due) => due.deliveryDate === effectiveArrangeDueDate);
+    const selectedDateRemaining = selectedDateDues.reduce((sum, due) => sum + Math.max(Number(due.reqQty) - Number(due.scannedQty) - Number(due.arrangedQty || 0), 0), 0);
     if (scanMode === "arrange") {
       const completedCount = payload.dues.filter((due) => Number(due.scannedQty) >= Number(due.reqQty)).length;
       const overdueCount = payload.dues.filter((due) => isDeliveryOverdue(due) && Number(due.scannedQty) < Number(due.reqQty)).length;
       const remainingCount = payload.dues.filter((due) => Number(due.scannedQty) < Number(due.reqQty)).length;
       const needle = arrangeDueSearch.trim().toLowerCase();
-      const arrangeRows = arrangeableDues.filter((due) => !needle || [due.materialCode, due.materialDescription, due.doNo, due.fact, due.line, due.site, formatDate(due.deliveryDate), due.deliveryTime].join(" ").toLowerCase().includes(needle));
+      const arrangeRows = arrangeableDues.filter((due) => due.deliveryDate === effectiveArrangeDueDate && (!needle || [due.materialCode, due.materialDescription, due.doNo, due.fact, due.line, due.site, formatDate(due.deliveryDate), due.deliveryTime].join(" ").toLowerCase().includes(needle)));
       const arrangePageSize = 8;
       const arrangePages = Math.max(1, Math.ceil(arrangeRows.length / arrangePageSize));
       const safeArrangePage = Math.min(arrangeListPage, arrangePages);
@@ -3073,12 +3077,12 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <article className="arrange-color-card green" style={{ background: "linear-gradient(135deg,#e0faeb 0%,#abeac7 100%)", borderColor: "#7bd6a5" }}><span style={{ background: "linear-gradient(145deg,#50dc96,#08a455)" }}>✓</span><div><small>ครบตามแผน</small><b>{fmt(completedCount)}</b><em>รายการ</em></div></article>
           <article className="arrange-color-card orange" style={{ background: "linear-gradient(135deg,#fff3d4 0%,#ffd58a 100%)", borderColor: "#f3b94f" }}><span style={{ background: "linear-gradient(145deg,#ffc653,#ee8200)" }}>◷</span><div><small>คงเหลือ</small><b>{fmt(remainingCount)}</b><em>รายการ</em></div></article>
           <article className="arrange-color-card red" style={{ background: "linear-gradient(135deg,#ffe7eb 0%,#ffb5c1 100%)", borderColor: "#f28a9c" }}><span style={{ background: "linear-gradient(145deg,#ff7182,#df263f)" }}>!</span><div><small>เกินดิวจัดส่ง</small><b>{fmt(overdueCount)}</b><em>รายการ</em></div></article>
-          <article className="arrange-brand-card"><span>◇</span><div><b>จัดงานด้วย KIT Tag</b><small>เลือก Due แล้วสแกน Tag เพื่อบันทึกงานรอขายออก</small></div></article>
+          <article className="arrange-brand-card"><span>◇</span><div><b>จัดงานด้วย KIT Tag</b><small>เลือกวันที่ Due แล้วสแกน KIT Tag ใดก่อนก็ได้</small></div></article>
         </div>
 
         <div className="arrange-workspace">
           <section className="arrange-scan-panel">
-            <header className="arrange-section-head"><span>⌗</span><div><h3>สแกน KIT Stock Tag</h3><p>เลือก Due ทางขวา แล้วสแกน Tag ของงานที่ต้องการจัด</p></div><button className="camera-button arrange-camera-button" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>▣ เปิดกล้อง</button></header>
+            <header className="arrange-section-head"><span>⌗</span><div><h3>สแกน KIT Stock Tag</h3><p>เลือกเฉพาะวันที่ Due แล้วสแกน KIT Tag ของ Part ใดก่อนก็ได้ ระบบจับคู่ Due ให้อัตโนมัติ</p></div><button className="camera-button arrange-camera-button" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>▣ เปิดกล้อง</button></header>
             <div className="arrange-scan-body">
               <button type="button" className="arrange-camera-zone" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>
                 <span>⌗</span><b>{checkingTag ? "กำลังบันทึกงาน…" : "พร้อมสแกน KIT Tag"}</b><small>ยิงบาร์โค้ด หรือแตะเพื่อเปิดกล้องโทรศัพท์</small><i />
@@ -3088,44 +3092,45 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
                   <div className="arrange-success"><span>✓</span><b>จัดงานสำเร็จ!</b></div>
                   <div className="arrange-part-result"><PartImage materialCode={arrangementPreview.due.materialCode} compact /><div><small>Part No.</small><b>{arrangementPreview.due.materialCode}</b><p>{arrangementPreview.due.materialDescription || "ไม่ระบุชื่อชิ้นงาน"}</p></div></div>
                   <dl><div><dt>Job</dt><dd>{arrangementPreview.tag.jobNo}</dd></div><div><dt>Due ทั้งหมด</dt><dd>{fmt(arrangementPreview.due.reqQty)} ชิ้น</dd></div><div><dt>จัดครั้งนี้</dt><dd>{fmt(arrangementPreview.pick.pickedQty)} ชิ้น</dd></div><div><dt>คงเหลือ</dt><dd>{fmt(arrangementPreview.due.remainingQty)} ชิ้น</dd></div></dl>
-                </> : selectedArrangeDue ? <>
-                  <div className="arrange-waiting"><span>▦</span><b>Due ที่เลือก</b></div>
-                  <div className="arrange-part-result"><PartImage materialCode={selectedArrangeDue.materialCode} compact /><div><small>Part No.</small><b>{selectedArrangeDue.materialCode}</b><p>{selectedArrangeDue.materialDescription || "ไม่ระบุชื่อชิ้นงาน"}</p></div></div>
-                  <dl><div><dt>FAC / Line</dt><dd>{selectedArrangeDue.fact} / {selectedArrangeDue.line || "—"}</dd></div><div><dt>Due</dt><dd>{formatDate(selectedArrangeDue.deliveryDate)} {selectedArrangeDue.deliveryTime}</dd></div><div><dt>ต้องจัด</dt><dd>{fmt(selectedArrangeDue.reqQty)} ชิ้น</dd></div><div><dt>เหลือจัด</dt><dd>{fmt(selectedArrangeDue.reqQty - selectedArrangeDue.scannedQty - (selectedArrangeDue.arrangedQty || 0))} ชิ้น</dd></div></dl>
-                </> : <Empty title="กรุณาเลือก Due" text="เลือกรายการจากด้านขวาก่อนสแกน KIT Tag" />}
+                </> : effectiveArrangeDueDate ? <>
+                  <div className="arrange-waiting"><span>▦</span><b>วันที่ Due ที่เลือก</b></div>
+                  <div className="arrange-part-result"><span className="arrange-date-icon">◷</span><div><small>วันที่ส่งงาน</small><b>{formatDate(effectiveArrangeDueDate)}</b><p>ยิง KIT Tag ใดก่อนก็ได้ ระบบจะจับคู่ Part กับ Due ในวันนี้ให้อัตโนมัติ</p></div></div>
+                  <dl><div><dt>Due ที่ยังจัดไม่ครบ</dt><dd>{fmt(selectedDateDues.length)} รายการ</dd></div><div><dt>จำนวนคงเหลือรวม</dt><dd>{fmt(selectedDateRemaining)} ชิ้น</dd></div></dl>
+                </> : <Empty title="กรุณาเลือกวันที่ Due" text="เลือกวันที่ส่งงานก่อนสแกน KIT Tag" />}
               </div>
             </div>
             <form className="arrange-action-form" onSubmit={stageStockTag}>
               <label><span>จำนวนที่จะจัด</span><input type="number" min="1" value={arrangeQty} onChange={(e) => setArrangeQty(e.target.value)} placeholder="อัตโนมัติตาม Due" /></label>
               <label className="arrange-tag-field"><span>KIT Stock Tag *</span><input ref={tagInput} value={arrangeTag} onChange={(e) => { setArrangeTag(e.target.value); setArrangementPreview(null); }} placeholder="ยิง Tag แล้วเครื่องส่ง Enter" autoComplete="off" /></label>
-              <button className="button primary" disabled={!effectiveArrangeDueId || !arrangeTag.trim() || checkingTag}>{checkingTag ? "กำลังจัดงาน…" : "✓ ยืนยันจัดงาน"}</button>
+              <button className="button primary" disabled={!effectiveArrangeDueDate || !arrangeTag.trim() || checkingTag}>{checkingTag ? "กำลังจัดงาน…" : "✓ ยืนยันจัดงาน"}</button>
             </form>
             <div className="arrange-help">ⓘ ขั้นตอนนี้บันทึกงาน “รอขายออก” เท่านั้น ยังไม่ลด Stock และ Due จนกว่าผู้ตรวจจะขายออก</div>
           </section>
 
           <aside className="arrange-due-panel">
-            <header><span>▤</span><div><h3>เลือก Due</h3><p>{fmt(arrangeRows.length)} รายการที่ยังจัดไม่ครบ</p></div></header>
-            <div className="arrange-due-search"><span>⌕</span><input value={arrangeDueSearch} onChange={(e) => { setArrangeDueSearch(e.target.value); setArrangeListPage(1); }} placeholder="ค้นหา Due, Job, Part No." /></div>
+            <header><span>▤</span><div><h3>เลือกวันที่ Due</h3><p>เลือกวันเดียว แล้วยิง Tag ได้ทุก Part ในวันนั้น</p></div></header>
+            <div className="arrange-due-search"><span>◷</span><select value={effectiveArrangeDueDate} onChange={(event) => { setArrangeDueDate(event.target.value); setArrangementPreview(null); setArrangeListPage(1); }}>
+              {arrangeDueDates.map((date) => <option key={date} value={date}>{formatDate(date)} · {fmt(arrangeableDues.filter((due) => due.deliveryDate === date).length)} รายการ</option>)}
+            </select></div>
             <div className="arrange-due-cards">
-              {arrangeRows.slice(0, 6).map((due) => {
-                const selected = String(due.id) === effectiveArrangeDueId;
-                const remaining = due.reqQty - due.scannedQty - (due.arrangedQty || 0);
-                return <button key={due.id} className={selected ? "selected" : ""} onClick={() => { setArrangeDueId(String(due.id)); setArrangementPreview(null); }}>
-                  <i>{selected ? "●" : "○"}</i><span>▦</span><div><b>{formatDate(due.deliveryDate)} · {due.fact}</b><small>{due.materialCode} · {due.deliveryTime}</small><em>เหลือจัด {fmt(remaining)} ชิ้น</em></div><strong>›</strong>
+              {arrangeDueDates.slice(0, 6).map((date) => {
+                const selected = date === effectiveArrangeDueDate;
+                const dateDues = arrangeableDues.filter((due) => due.deliveryDate === date);
+                const remaining = dateDues.reduce((sum, due) => sum + Math.max(Number(due.reqQty) - Number(due.scannedQty) - Number(due.arrangedQty || 0), 0), 0);
+                return <button key={date} className={selected ? "selected" : ""} onClick={() => { setArrangeDueDate(date); setArrangementPreview(null); setArrangeListPage(1); }}>
+                  <i>{selected ? "●" : "○"}</i><span>◷</span><div><b>{formatDate(date)}</b><small>{fmt(dateDues.length)} Due ที่ยังจัดไม่ครบ</small><em>เหลือจัดรวม {fmt(remaining)} ชิ้น</em></div><strong>›</strong>
                 </button>;
               })}
-              {!arrangeRows.length && <Empty title="ไม่พบ Due" text="ลองเปลี่ยนคำค้นหา หรือนำเข้าแผนส่งงาน" />}
+              {!arrangeDueDates.length && <Empty title="ไม่มีวันที่ Due ที่ต้องจัด" text="นำเข้าแผนส่งงาน หรือรายการทั้งหมดจัดครบแล้ว" />}
             </div>
           </aside>
         </div>
 
-        <Card className="arrange-list-panel" title={<><span className="arrange-list-icon">▣</span> รายการงานที่ต้องจัด <em>{fmt(arrangeRows.length)} รายการ</em></>} action={<span className="arrange-selected-label">{selectedArrangeDue ? `Due: ${formatDate(selectedArrangeDue.deliveryDate)} · ${selectedArrangeDue.fact}` : "ยังไม่ได้เลือก Due"}</span>}>
-          {pageRows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table arrange-table"><thead><tr><th>เลือก</th><th>รูปภาพ</th><th>Part No.</th><th>Part Name</th><th>DO / Seq</th><th className="num">ต้องจัด</th><th className="num">จัดแล้ว</th><th className="num">คงเหลือ</th><th>สถานะ</th></tr></thead><tbody>
+        <Card className="arrange-list-panel" title={<><span className="arrange-list-icon">▣</span> รายการงานในวันที่เลือก <em>{fmt(arrangeRows.length)} รายการ</em></>} action={<span className="arrange-selected-label">{effectiveArrangeDueDate ? `วันที่ Due: ${formatDate(effectiveArrangeDueDate)}` : "ยังไม่ได้เลือกวันที่"}</span>}>
+          {pageRows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table arrange-table"><thead><tr><th>รูปภาพ</th><th>Part No.</th><th>Part Name</th><th>DO / Seq</th><th className="num">ต้องจัด</th><th className="num">จัดแล้ว</th><th className="num">คงเหลือ</th><th>สถานะ</th></tr></thead><tbody>
             {pageRows.map((due) => {
               const remaining = due.reqQty - due.scannedQty - (due.arrangedQty || 0);
-              const selected = String(due.id) === effectiveArrangeDueId;
-              return <tr key={due.id} className={selected ? "selected-row" : ""} onClick={() => { setArrangeDueId(String(due.id)); setArrangementPreview(null); }}>
-                <td data-label="เลือก"><button className={`arrange-radio ${selected ? "selected" : ""}`}>{selected ? "●" : "○"}</button></td>
+              return <tr key={due.id}>
                 <td data-label="รูปภาพ"><PartImage materialCode={due.materialCode} compact /></td>
                 <td data-label="Part No."><b>{due.materialCode}</b><small>{due.fact} / {due.line || "—"}</small></td>
                 <td data-label="Part Name">{due.materialDescription || "—"}</td>
