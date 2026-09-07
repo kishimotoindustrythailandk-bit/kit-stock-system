@@ -1332,7 +1332,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       const result = contentType.includes("application/json")
         ? await response.json() as VerifyResult & { error?: string }
         : { action: "verify" as const, verdict: "bad_tag" as const, error: response.redirected ? "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่" : "ระบบตอบกลับไม่ถูกต้อง กรุณาลองสแกนใหม่" };
-      if (!response.ok || !("tag" in result) || !result.tag) throw new Error(result.error || result.message || "ตรวจสอบ Tag ไม่สำเร็จ");
+      const responseError = "error" in result ? result.error : undefined;
+      const responseMessage = "message" in result ? result.message : undefined;
+      if (!response.ok || !contentType.includes("application/json")) throw new Error(responseError || responseMessage || "ตรวจสอบ Tag ไม่สำเร็จ");
       setRawTag(scannedValue);
       setDispatchConfirmation(result);
     } catch (caught) {
