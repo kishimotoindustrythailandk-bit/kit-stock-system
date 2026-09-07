@@ -2411,7 +2411,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     } catch (caught) {
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจ KIT Tag ไม่สำเร็จ" });
       setReplacementTag("");
-      window.setTimeout(() => replacementInputRef.current?.focus(), 80);
+      if (!window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) {
+        window.setTimeout(() => replacementInputRef.current?.focus(), 80);
+      }
     } finally {
       setReplacementSaving(false);
     }
@@ -2436,7 +2438,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       setReplacementQty("");
       setNotice({ type: "success", text: `เบิกงานทดแทน ${fmt(qty)} ชิ้นแล้ว และตัดยอด Stock/ใบขอเรียบร้อย` });
       await Promise.all([loadReplacements(), loadStock()]);
-      window.setTimeout(() => replacementInputRef.current?.focus(), 100);
+      if (!window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) {
+        window.setTimeout(() => replacementInputRef.current?.focus(), 100);
+      }
     } catch (caught) {
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "เบิกงานทดแทนไม่สำเร็จ" });
     } finally {
@@ -3329,7 +3333,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
                 if ((event.key === "Enter" || event.key === "Tab") && replacementTag.trim()) {
                   event.preventDefault(); void previewReplacementIssue();
                 }
-              }} placeholder="ยิง Tag แล้วเครื่องส่ง Enter" autoComplete="off" autoFocus /></label>
+              }} placeholder="ยิง Tag แล้วเครื่องส่ง Enter" autoComplete="off" /></label>
               <button className="button primary" disabled={!replacementTag.trim() || replacementSaving}>{replacementSaving ? "กำลังตรวจ Tag…" : "ตรวจ Tag และจำนวน"}</button>
             </form>
             <p className="replacement-help">ระบบจะตัด Stock และตัดยอดคงเหลือของใบขอเมื่อกด “ยืนยันเบิกงานทดแทน” เท่านั้น</p>
@@ -3545,7 +3549,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         <section className="replacement-confirm-info">
           <div className="dispatch-confirm-part"><small>PART / MATERIAL</small><b>{replacementPreview.request.materialCode}</b><p>{replacementPreview.request.partName || replacementPreview.tag.partName || "ไม่ระบุชื่อชิ้นงาน"}</p></div>
           <div className="replacement-confirm-details"><div><small>ใบขอ QC</small><b>{replacementPreview.request.requestNo}</b></div><div><small>ลูกค้า / Site</small><b>{replacementPreview.request.customer || "—"}</b></div><div><small>KIT Stock Tag</small><b>{replacementPreview.tag.tagId}</b></div><div><small>Job / Location</small><b>{replacementPreview.tag.jobNo || "—"} / {replacementPreview.tag.location || "—"}</b></div></div>
-          <div className="replacement-qty-compare"><div><small>QC ขอเบิก</small><b>{fmt(replacementPreview.request.requestedQty)}</b><em>ชิ้น</em></div><div><small>เบิกแล้ว</small><b>{fmt(replacementPreview.request.issuedQty)}</b><em>ชิ้น</em></div><label><small>เบิกครั้งนี้</small><input type="number" inputMode="numeric" min={1} max={Math.min(replacementPreview.request.remainingQty, replacementPreview.tag.availableQty)} value={replacementQty} onChange={(event) => setReplacementQty(event.target.value.replace(/[^0-9]/g, ""))} autoFocus /><em>แก้ไขจำนวนได้</em></label><div><small>คงเหลือหลังเบิก</small><b>{fmt(Math.max(replacementPreview.request.remainingQty - Number(replacementQty || 0), 0))}</b><em>ชิ้น</em></div></div>
+          <div className="replacement-qty-compare"><div><small>QC ขอเบิก</small><b>{fmt(replacementPreview.request.requestedQty)}</b><em>ชิ้น</em></div><div><small>เบิกแล้ว</small><b>{fmt(replacementPreview.request.issuedQty)}</b><em>ชิ้น</em></div><label><small>เบิกครั้งนี้</small><input type="number" inputMode="numeric" min={1} max={Math.min(replacementPreview.request.remainingQty, replacementPreview.tag.availableQty)} value={replacementQty} onChange={(event) => setReplacementQty(event.target.value.replace(/[^0-9]/g, ""))} /><em>แก้ไขจำนวนได้</em></label><div><small>คงเหลือหลังเบิก</small><b>{fmt(Math.max(replacementPreview.request.remainingQty - Number(replacementQty || 0), 0))}</b><em>ชิ้น</em></div></div>
           <p className="replacement-stock-note">Stock Tag นี้พร้อมใช้ {fmt(replacementPreview.tag.availableQty)} ชิ้น · ระบบจะตัด Stock เมื่อยืนยัน</p>
         </section>
       </div>
