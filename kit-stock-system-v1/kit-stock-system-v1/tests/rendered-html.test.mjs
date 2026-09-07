@@ -483,3 +483,19 @@ test("Stock popup strict image mode reads each saved image table directly", asyn
   assert.match(routeSource, /strictSlots[\s\S]*FROM \$\{tableForSlot\(slot\)\} p/);
   assert.match(routeSource, /images: result\.results, slot, strict: strictSlots/);
 });
+
+
+test("Stock scanner unlocks after slow requests and refreshes Stock in the background", async () => {
+  const appSource = await source("../app/delivery-control-app.tsx");
+  const previewScan = sourceSection(appSource, "async function receiveStockTag", "async function confirmReceiveStockTag");
+  const confirmScan = sourceSection(appSource, "async function confirmReceiveStockTag", "async function closeStockJob");
+
+  assert.match(previewScan, /new AbortController\(\)/);
+  assert.match(previewScan, /controller\.abort\(\), 10000/);
+  assert.match(previewScan, /signal: controller\.signal/);
+  assert.match(previewScan, /caught\.name === "AbortError"/);
+  assert.match(previewScan, /setStockScan\(""\)/);
+  assert.match(previewScan, /stockScanInputRef\.current\?\.focus\(\)/);
+  assert.match(confirmScan, /void loadStock\(\)/);
+  assert.doesNotMatch(confirmScan, /await loadStock\(\)/);
+});

@@ -1833,10 +1833,14 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     if (!rawPayload || stockScanRequestRef.current) return;
     stockScanRequestRef.current = true;
     setStockSaving(true);
+    setNotice(null);
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 10000);
     try {
       const response = await fetch("/api/stock", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "receive", mode: "preview", rawPayload }),
+        signal: controller.signal,
       });
       const data = await response.json() as StockReceivePreview & { error?: string };
       if (!response.ok || !data.tag) throw new Error(data.error || "ตรวจสอบ Tag ไม่สำเร็จ");
@@ -1844,8 +1848,14 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       setStockReceiveQty(String(data.tag.qty));
       setStockReceivePreview(data);
     } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบ Tag ไม่สำเร็จ" });
+      setStockScan("");
+      const message = caught instanceof Error && caught.name === "AbortError"
+        ? "ระบบตอบกลับช้าเกินไป กรุณายิง Tag ใหม่"
+        : caught instanceof Error ? caught.message : "ตรวจสอบ Tag ไม่สำเร็จ";
+      setNotice({ type: "error", text: message });
+      window.setTimeout(() => stockScanInputRef.current?.focus(), 80);
     } finally {
+      window.clearTimeout(timeoutId);
       stockScanRequestRef.current = false;
       setStockSaving(false);
     }
@@ -1872,7 +1882,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       setStockReceiveQty("");
       const ngQty = Number(data.ngQty || 0);
       setNotice({ type: "success", text: `รับ Tag ${data.tag?.tagId || ""} เข้า Stock ${fmt(Number(data.receivedQty || receivedQty))} ชิ้น${ngQty ? ` · NG ${fmt(ngQty)} ชิ้น` : ""}` });
-      await loadStock();
+      void loadStock();
     } catch (caught) {
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "รับเข้า Stock ไม่สำเร็จ" });
     } finally {
