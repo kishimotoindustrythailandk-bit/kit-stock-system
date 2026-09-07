@@ -1002,6 +1002,12 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
                 void verifyTag(value);
                 return;
               }
+              if (page === "replacement") {
+                setReplacementTag(value);
+                setReplacementPreview(null);
+                void previewReplacementIssue(value);
+                return;
+              }
               const arrangeMode = page === "arrange";
               if (arrangeMode) {
                 setArrangeTag(value);
@@ -3318,7 +3324,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
               <dl><div><dt>QC ขอ</dt><dd>{fmt(selected.requestedQty)}</dd></div><div><dt>เบิกแล้ว</dt><dd>{fmt(selected.issuedQty)}</dd></div><div><dt>คงเหลือ</dt><dd>{fmt(selected.remainingQty)}</dd></div></dl>
             </div>
             <form className="replacement-scan-form" onSubmit={(event) => { event.preventDefault(); void previewReplacementIssue(); }}>
-              <button type="button" className="replacement-scan-zone" onClick={() => replacementInputRef.current?.focus()}><span>⌗</span><b>พร้อมสแกน KIT Stock Tag</b><small>ยิงบาร์โค้ดจากเครื่องสแกน แล้วตรวจจำนวนก่อนยืนยันเบิก</small></button>
+              <button type="button" className="replacement-scan-zone" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}><span>⌗</span><b>พร้อมสแกน KIT Stock Tag</b><small>ยิงบาร์โค้ด หรือแตะเพื่อเปิดกล้อง แล้วตรวจจำนวนก่อนยืนยันเบิก</small></button>
               <label><span>KIT Stock Tag *</span><input ref={replacementInputRef} value={replacementTag} onChange={(event) => setReplacementTag(event.target.value)} onKeyDown={(event) => {
                 if ((event.key === "Enter" || event.key === "Tab") && replacementTag.trim()) {
                   event.preventDefault(); void previewReplacementIssue();
