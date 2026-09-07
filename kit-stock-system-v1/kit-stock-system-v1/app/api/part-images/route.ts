@@ -46,29 +46,76 @@ export async function GET(request: Request) {
     if (!DB) return Response.json({ error: "ไม่พบการเชื่อมต่อ D1" }, { status: 500 });
     const url = new URL(request.url);
     const slot = resolveSlot(url.searchParams.get("slot"));
-    const table = tableForSlot(slot);
     const materialCode = cleanMaterialCode(url.searchParams.get("materialCode"));
     if (!materialCode) {
       if (!auth.user || (!hasPermission(auth.user, "parts") && !hasPermission(auth.user, "settings"))) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ดูทะเบียนรูปชิ้นงาน" }, { status: 403 });
-      const result = await DB.prepare(`
-        SELECT p.material_code AS materialCode, p.object_key AS objectKey,
-          p.original_name AS originalName, p.content_type AS contentType,
-          p.updated_by_name AS updatedByName, p.updated_at AS updatedAt,
-          COALESCE(MAX(d.material_description), '') AS materialDescription
-        FROM ${table} p
-        LEFT JOIN delivery_due_lines d ON d.material_code = p.material_code
-        GROUP BY p.material_code, p.object_key, p.original_name, p.content_type, p.updated_by_name, p.updated_at
-        ORDER BY p.updated_at DESC
-      `).all();
+      // Legacy part_images เดิมคือรูปชิ้นงานในกล่อง จนกว่าจะมี Actual ที่ระบุชัดเจน
+      // สำหรับ Part นั้น การ resolve ทั้งสอง list ใน SQL ครั้งเดียวป้องกัน N+1 เมื่อข้อมูลเยอะ
+      const result = slot === "actual"
+        ? await DB.prepare(`
+          WITH effective_images AS (
+            SELECT material_code, object_key, original_name, content_type, updated_by_name, updated_at
+            FROM part_actual_images
+            UNION ALL
+            SELECT legacy.material_code, legacy.object_key, legacy.original_name, legacy.content_type,
+              legacy.updated_by_name, legacy.updated_at
+            FROM part_images legacy
+            WHERE NOT EXISTS (
+              SELECT 1 FROM part_actual_images explicit_actual
+              WHERE explicit_actual.material_code = legacy.material_code
+            )
+          )
+          SELECT p.material_code AS materialCode, p.object_key AS objectKey,
+            p.original_name AS originalName, p.content_type AS contentType,
+            p.updated_by_name AS updatedByName, p.updated_at AS updatedAt,
+            COALESCE(MAX(d.material_description), '') AS materialDescription
+          FROM effective_images p
+          LEFT JOIN delivery_due_lines d ON d.material_code = p.material_code
+          GROUP BY p.material_code, p.object_key, p.original_name, p.content_type, p.updated_by_name, p.updated_at
+          ORDER BY p.updated_at DESC
+        `).all()
+        : await DB.prepare(`
+          SELECT p.material_code AS materialCode, p.object_key AS objectKey,
+            p.original_name AS originalName, p.content_type AS contentType,
+            p.updated_by_name AS updatedByName, p.updated_at AS updatedAt,
+            COALESCE(MAX(d.material_description), '') AS materialDescription
+          FROM part_images p
+          INNER JOIN part_actual_images explicit_actual ON explicit_actual.material_code = p.material_code
+          LEFT JOIN delivery_due_lines d ON d.material_code = p.material_code
+          GROUP BY p.material_code, p.object_key, p.original_name, p.content_type, p.updated_by_name, p.updated_at
+          ORDER BY p.updated_at DESC
+        `).all();
       return Response.json({ images: result.results, slot });
     }
     if (!BUCKET) return Response.json({ error: "ไม่พบการเชื่อมต่อ R2" }, { status: 500 });
-    const row = await DB.prepare(`
-      SELECT material_code AS materialCode, object_key AS objectKey,
-        original_name AS originalName, content_type AS contentType,
-        updated_by_name AS updatedByName, updated_at AS updatedAt
-      FROM ${table} WHERE material_code = ?1 LIMIT 1
-    `).bind(materialCode).first<ImageRow>();
+    const row = slot === "actual"
+      ? await DB.prepare(`
+        WITH effective_image AS (
+          SELECT material_code, object_key, original_name, content_type, updated_by_name, updated_at, 0 AS priority
+          FROM part_actual_images WHERE material_code = ?1
+          UNION ALL
+          SELECT legacy.material_code, legacy.object_key, legacy.original_name, legacy.content_type,
+            legacy.updated_by_name, legacy.updated_at, 1 AS priority
+          FROM part_images legacy
+          WHERE legacy.material_code = ?1
+            AND NOT EXISTS (
+              SELECT 1 FROM part_actual_images explicit_actual
+              WHERE explicit_actual.material_code = legacy.material_code
+            )
+        )
+        SELECT material_code AS materialCode, object_key AS objectKey,
+          original_name AS originalName, content_type AS contentType,
+          updated_by_name AS updatedByName, updated_at AS updatedAt
+        FROM effective_image ORDER BY priority LIMIT 1
+      `).bind(materialCode).first<ImageRow>()
+      : await DB.prepare(`
+        SELECT p.material_code AS materialCode, p.object_key AS objectKey,
+          p.original_name AS originalName, p.content_type AS contentType,
+          p.updated_by_name AS updatedByName, p.updated_at AS updatedAt
+        FROM part_images p
+        INNER JOIN part_actual_images explicit_actual ON explicit_actual.material_code = p.material_code
+        WHERE p.material_code = ?1 LIMIT 1
+      `).bind(materialCode).first<ImageRow>();
     if (!row) return Response.json({ error: "ยังไม่มีรูปชิ้นงาน" }, { status: 404 });
     const object = await BUCKET.get(row.objectKey);
     if (!object) return Response.json({ error: "ไม่พบไฟล์รูปใน R2" }, { status: 404 });
