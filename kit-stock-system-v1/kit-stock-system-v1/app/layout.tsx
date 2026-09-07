@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import StockReceiveImageOrderFix from "./stock-receive-image-order-fix";
 
 export const metadata: Metadata = {
   title: "KIT Delivery Due Control",
@@ -12,10 +11,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="th">
-      <body>
-        <StockReceiveImageOrderFix />
-        {children}
-      </body>
+      <body>{children}</body>
     </html>
   );
 }
