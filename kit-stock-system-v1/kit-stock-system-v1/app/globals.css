@@ -187,7 +187,7 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .scanner-title h3 { font-size: 17px; }
 .scanner-title p { margin-top: 4px; color: #bfc9d6; font-size: 10px; }
 .camera-button { padding: 10px 13px; color: #fff; border: 1px solid #374254; border-radius: 9px; background: #202a39; font-weight: 600; }
-.scanner-visual { min-height: 405px; display: grid; place-items: center; padding: 28px; background: radial-gradient(circle at 50% 45%, #24364d, #0e1724 72%); }
+.scanner-visual { width: 100%; min-height: 405px; display: grid; place-items: center; padding: 28px; border: 0; background: radial-gradient(circle at 50% 45%, #24364d, #0e1724 72%); }
 .scan-frame { position: relative; width: min(70%, 355px); aspect-ratio: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #e8edf5; border: 3px solid #49d27e; border-radius: 24px; box-shadow: 0 0 40px rgba(65, 214, 125, .14); text-align: center; }
 .scan-frame::before, .scan-frame::after { content: ""; position: absolute; left: -3px; right: -3px; height: 16px; background: #0e1724; }
 .scan-frame::before { top: 22%; } .scan-frame::after { bottom: 22%; }
