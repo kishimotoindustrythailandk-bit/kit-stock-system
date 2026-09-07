@@ -464,16 +464,16 @@ function Empty({ title = "ยังไม่มีข้อมูล", text = "�
  * เป็นคนละรูปกับที่เคยแคชไว้ มิฉะนั้นอัปโหลดรูปใหม่ทับแล้วจะยังเห็นรูปเก่า
  * เพราะ URL เดิมอ้างด้วย materialCode อย่างเดียว
  */
-function PartImage({ materialCode, compact = false, version, slot = "master" }: { materialCode: string; compact?: boolean; version?: string; slot?: "master" | "actual" }) {
-  const key = `${slot}:${materialCode}:${version || "unversioned"}`;
+function PartImage({ materialCode, compact = false, version, slot = "master", strict = false }: { materialCode: string; compact?: boolean; version?: string; slot?: "master" | "actual"; strict?: boolean }) {
+  const key = `${slot}:${materialCode}:${version || "unversioned"}:${strict ? "strict" : "compatible"}`;
   const [failedKey, setFailedKey] = useState("");
   if (failedKey === key) return <div className={`part-photo-fallback ${compact ? "compact" : ""}`}><span>◈</span><small>ยังไม่มีรูป</small></div>;
-  const source = `/api/part-images?materialCode=${encodeURIComponent(materialCode)}${slot === "actual" ? "&slot=actual" : ""}${version ? `&v=${encodeURIComponent(version)}` : ""}`;
+  const source = `/api/part-images?materialCode=${encodeURIComponent(materialCode)}${slot === "actual" ? "&slot=actual" : ""}${strict ? "&strict=1" : ""}${version ? `&v=${encodeURIComponent(version)}` : ""}`;
   const imageLabel = slot === "actual" ? "รูปชิ้นงานในกล่อง" : "รูปตัวอย่าง Master";
   return <div className={`part-photo ${compact ? "compact" : ""}`}><img src={source} alt={`${imageLabel} ${materialCode}`} loading="lazy" decoding="async" onError={() => setFailedKey(key)} /></div>;
 }
 
-const EFFECTIVE_IMAGE_PROJECTION_VERSION = "effective-slots-v2";
+const EFFECTIVE_IMAGE_PROJECTION_VERSION = "effective-slots-v3";
 
 /**
  * โชว์รูปคู่กันตามตำแหน่งที่ผู้ใช้งานคุ้นเคย: รูปชิ้นงานอยู่ซ้าย และรูปตัวอย่างอยู่ขวา
@@ -482,13 +482,13 @@ const EFFECTIVE_IMAGE_PROJECTION_VERSION = "effective-slots-v2";
  * ผู้ใช้ Stock/Delivery ไม่มีสิทธิ์โหลด metadata รูป จึงไม่มี updatedAt สำหรับ cache busting
  * projectionVersion ทำให้ popup ไม่ใช้ URL unversioned ที่อาจค้างจาก semantics ก่อน legacy fallback
  */
-function PartImagePair({ materialCode, masterVersion, actualVersion, masterAvailable = true, actualAvailable = true, projectionVersion = EFFECTIVE_IMAGE_PROJECTION_VERSION }: { materialCode: string; masterVersion?: string; actualVersion?: string; masterAvailable?: boolean; actualAvailable?: boolean; projectionVersion?: string }) {
+function PartImagePair({ materialCode, masterVersion, actualVersion, masterAvailable = true, actualAvailable = true, projectionVersion = EFFECTIVE_IMAGE_PROJECTION_VERSION, strictSlots = false }: { materialCode: string; masterVersion?: string; actualVersion?: string; masterAvailable?: boolean; actualAvailable?: boolean; projectionVersion?: string; strictSlots?: boolean }) {
   const capStyle: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: "#6b7787", marginBottom: 5, textAlign: "center", letterSpacing: "0.02em" };
   const figStyle: React.CSSProperties = { margin: 0, flex: "1 1 130px", minWidth: 0 };
   const fallback = <div className="part-photo-fallback"><span>◈</span><small>ยังไม่มีรูป</small></div>;
   return <div className="part-image-pair" style={{ display: "flex", gap: 12, flexWrap: "wrap", width: "100%" }}>
-    <figure style={figStyle}><figcaption style={capStyle}>รูปชิ้นงานในกล่อง</figcaption>{actualAvailable ? <PartImage materialCode={materialCode} slot="actual" version={actualVersion || projectionVersion} /> : fallback}</figure>
-    <figure style={figStyle}><figcaption style={capStyle}>รูปตัวอย่าง (Master)</figcaption>{masterAvailable ? <PartImage materialCode={materialCode} slot="master" version={masterVersion || projectionVersion} /> : fallback}</figure>
+    <figure style={figStyle}><figcaption style={capStyle}>รูปชิ้นงานในกล่อง</figcaption>{actualAvailable ? <PartImage materialCode={materialCode} slot="actual" version={actualVersion || projectionVersion} strict={strictSlots} /> : fallback}</figure>
+    <figure style={figStyle}><figcaption style={capStyle}>รูปตัวอย่าง (Master)</figcaption>{masterAvailable ? <PartImage materialCode={materialCode} slot="master" version={masterVersion || projectionVersion} strict={strictSlots} /> : fallback}</figure>
   </div>;
 }
 
@@ -3480,7 +3480,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     {stockReceivePreview && <div className="modal-backdrop dispatch-confirm-backdrop stock-receive-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="stock-receive-confirm-title"><div className="dispatch-confirm-modal stock-receive-confirm-modal">
       <header><div><span>✓</span><div><small>ตรวจพบ KIT Stock Tag</small><h3 id="stock-receive-confirm-title">ตรวจสอบก่อนรับเข้า Stock</h3></div></div><button type="button" onClick={() => { setStockReceivePreview(null); setStockReceiveQty(""); setStockScan(""); }} aria-label="ปิด">×</button></header>
       <div className="dispatch-confirm-content">
-        <section className="dispatch-confirm-images"><PartImagePair materialCode={stockReceivePreview.tag.materialCode} masterVersion={partImages.find((item) => item.materialCode === stockReceivePreview.tag.materialCode)?.updatedAt} actualVersion={partActualImages.find((item) => item.materialCode === stockReceivePreview.tag.materialCode)?.updatedAt} /></section>
+        <section className="dispatch-confirm-images"><PartImagePair materialCode={stockReceivePreview.tag.materialCode} masterVersion={partImages.find((item) => item.materialCode === stockReceivePreview.tag.materialCode)?.updatedAt} actualVersion={partActualImages.find((item) => item.materialCode === stockReceivePreview.tag.materialCode)?.updatedAt} strictSlots /></section>
         <section className="dispatch-confirm-info">
           <div className="dispatch-confirm-part"><small>PART / MATERIAL</small><b>{stockReceivePreview.tag.materialCode}</b><p>{stockReceivePreview.tag.partName || stockReceivePreview.master.partName || "ไม่ระบุชื่อชิ้นงาน"}</p></div>
           <div className="dispatch-confirm-details"><div><small>KIT Stock Tag</small><b>{stockReceivePreview.tag.tagId}</b></div><div><small>Job</small><b>{stockReceivePreview.tag.jobNo || "—"}</b></div><div><small>ลูกค้า</small><b>{stockReceivePreview.tag.customer || "—"}</b></div><div><small>Location</small><b>{stockReceivePreview.tag.location || "—"}</b></div></div>

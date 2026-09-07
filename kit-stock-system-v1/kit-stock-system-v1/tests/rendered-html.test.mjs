@@ -457,6 +457,8 @@ test("keeps the Stock receiving popup Actual and Master sources on their labelle
   assert.match(stockPopup, /<PartImagePair materialCode=\{stockReceivePreview\.tag\.materialCode\}/);
   assert.match(stockPopup, /masterVersion=\{partImages\.find\(\(item\) => item\.materialCode === stockReceivePreview\.tag\.materialCode\)\?\.updatedAt\}/);
   assert.match(stockPopup, /actualVersion=\{partActualImages\.find\(\(item\) => item\.materialCode === stockReceivePreview\.tag\.materialCode\)\?\.updatedAt\}/);
+  assert.match(stockPopup, /actualVersion=\{partActualImages[\s\S]*strictSlots/);
+  assert.match(pair, /strict=\{strictSlots\}/);
   assertBefore(stockPopup, /masterVersion=\{partImages\.find/, /actualVersion=\{partActualImages\.find/);
 });
 
@@ -472,4 +474,12 @@ test("keeps the ตรวจและขายออก popup Actual and Master 
   assert.match(dispatchPopup, /masterVersion=\{partImages\.find/);
   assert.match(dispatchPopup, /actualVersion=\{partActualImages\.find/);
   assertBefore(dispatchPopup, /masterVersion=\{partImages\.find/, /actualVersion=\{partActualImages\.find/);
+});
+
+
+test("Stock popup strict image mode reads each saved image table directly", async () => {
+  const routeSource = await source("../app/api/part-images/route.ts");
+  assert.match(routeSource, /const strictSlots = \["1", "true", "yes"\]/);
+  assert.match(routeSource, /strictSlots[\s\S]*FROM \$\{tableForSlot\(slot\)\} p/);
+  assert.match(routeSource, /images: result\.results, slot, strict: strictSlots/);
 });

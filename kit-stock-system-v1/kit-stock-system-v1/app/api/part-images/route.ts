@@ -46,13 +46,25 @@ export async function GET(request: Request) {
     if (!DB) return Response.json({ error: "ไม่พบการเชื่อมต่อ D1" }, { status: 500 });
     const url = new URL(request.url);
     const slot = resolveSlot(url.searchParams.get("slot"));
+    const strictSlots = ["1", "true", "yes"].includes(String(url.searchParams.get("strict") ?? "").trim().toLowerCase());
     const materialCode = cleanMaterialCode(url.searchParams.get("materialCode"));
     if (!materialCode) {
       if (!auth.user || (!hasPermission(auth.user, "parts") && !hasPermission(auth.user, "settings"))) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ดูทะเบียนรูปชิ้นงาน" }, { status: 403 });
       // Legacy part_images เดิมคือรูปชิ้นงานในกล่อง จนกว่าจะมี Actual ที่ระบุชัดเจน
       // สำหรับ Part นั้น การ resolve ทั้งสอง list ใน SQL ครั้งเดียวป้องกัน N+1 เมื่อข้อมูลเยอะ
-      const result = slot === "actual"
+      const result = strictSlots
         ? await DB.prepare(`
+          SELECT p.material_code AS materialCode, p.object_key AS objectKey,
+            p.original_name AS originalName, p.content_type AS contentType,
+            p.updated_by_name AS updatedByName, p.updated_at AS updatedAt,
+            COALESCE(MAX(d.material_description), '') AS materialDescription
+          FROM ${tableForSlot(slot)} p
+          LEFT JOIN delivery_due_lines d ON d.material_code = p.material_code
+          GROUP BY p.material_code, p.object_key, p.original_name, p.content_type, p.updated_by_name, p.updated_at
+          ORDER BY p.updated_at DESC
+        `).all()
+        : slot === "actual"
+          ? await DB.prepare(`
           WITH effective_images AS (
             SELECT material_code, object_key, original_name, content_type, updated_by_name, updated_at
             FROM part_actual_images
@@ -85,11 +97,19 @@ export async function GET(request: Request) {
           GROUP BY p.material_code, p.object_key, p.original_name, p.content_type, p.updated_by_name, p.updated_at
           ORDER BY p.updated_at DESC
         `).all();
-      return Response.json({ images: result.results, slot });
+      return Response.json({ images: result.results, slot, strict: strictSlots });
     }
     if (!BUCKET) return Response.json({ error: "ไม่พบการเชื่อมต่อ R2" }, { status: 500 });
-    const row = slot === "actual"
+    const row = strictSlots
       ? await DB.prepare(`
+        SELECT p.material_code AS materialCode, p.object_key AS objectKey,
+          p.original_name AS originalName, p.content_type AS contentType,
+          p.updated_by_name AS updatedByName, p.updated_at AS updatedAt
+        FROM ${tableForSlot(slot)} p
+        WHERE p.material_code = ?1 LIMIT 1
+      `).bind(materialCode).first<ImageRow>()
+      : slot === "actual"
+        ? await DB.prepare(`
         WITH effective_image AS (
           SELECT material_code, object_key, original_name, content_type, updated_by_name, updated_at, 0 AS priority
           FROM part_actual_images WHERE material_code = ?1
