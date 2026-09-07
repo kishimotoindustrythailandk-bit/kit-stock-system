@@ -650,6 +650,10 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [stockReceivePreview, setStockReceivePreview] = useState<StockReceivePreview | null>(null);
   const [stockReceiveQty, setStockReceiveQty] = useState("");
   const [stockSaving, setStockSaving] = useState(false);
+  // Scanner/camera handlers live inside effects and can otherwise see an old Stock snapshot.
+  // Keep the latest data in a ref so a known printed Tag can open its confirmation immediately.
+  const stockDataRef = useRef(stock);
+  stockDataRef.current = stock;
   const [createdStockTags, setCreatedStockTags] = useState<StockTag[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
   const partBundleExcelInput = useRef<HTMLInputElement>(null);
@@ -1831,31 +1835,65 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     }
     const rawPayload = (typeof input === "string" ? input : stockScan).trim();
     if (!rawPayload || stockScanRequestRef.current) return;
+
+    // The Stock list is already loaded on this page. For a known Tag that is still
+    // waiting to be received, show the popup immediately instead of making the
+    // operator wait for another D1 round trip. The confirm request remains the
+    // authoritative validation and prevents duplicate receiving.
+    const fields = rawPayload.split("|");
+    const cachedTagId = fields[0] === "KITSTOCK" && fields[1]
+      ? fields[1].trim().toUpperCase()
+      : /^KITSTK-[A-Z0-9-]+$/i.test(rawPayload) ? rawPayload.toUpperCase() : "";
+    const cachedTag = stockDataRef.current.tags.find((item) => item.tagId === cachedTagId);
+    if (cachedTag?.status === "printed") {
+      const cachedPart = stockDataRef.current.parts.find((item) => item.materialCode === cachedTag.materialCode);
+      setStockScan(rawPayload);
+      setStockReceiveQty(String(cachedTag.qty));
+      setStockReceivePreview({
+        action: "receive_preview",
+        rawPayload,
+        tag: {
+          ...cachedTag,
+          partName: cachedTag.partName || cachedPart?.partName || "",
+          customer: cachedTag.customer || cachedPart?.customer || "",
+          location: cachedTag.location || cachedPart?.location || "",
+        },
+        master: {
+          materialCode: cachedTag.materialCode,
+          partName: cachedTag.partName || cachedPart?.partName || "",
+          customer: cachedTag.customer || cachedPart?.customer || "",
+          hasImage: false,
+        },
+      });
+      return;
+    }
+
     stockScanRequestRef.current = true;
     setStockSaving(true);
-    setNotice(null);
     const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), 10000);
+    const timeout = window.setTimeout(() => controller.abort(), 12_000);
     try {
       const response = await fetch("/api/stock", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "receive", mode: "preview", rawPayload }),
         signal: controller.signal,
       });
-      const data = await response.json() as StockReceivePreview & { error?: string };
-      if (!response.ok || !data.tag) throw new Error(data.error || "ตรวจสอบ Tag ไม่สำเร็จ");
+      const contentType = response.headers.get("content-type") || "";
+      const data = contentType.includes("application/json")
+        ? await response.json() as StockReceivePreview & { error?: string }
+        : { error: response.redirected ? "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่" : "ระบบตอบกลับไม่ถูกต้อง กรุณาลองสแกนใหม่" };
+      if (!response.ok || !("tag" in data) || !data.tag) throw new Error(data.error || "ตรวจสอบ Tag ไม่สำเร็จ");
       setStockScan(rawPayload);
       setStockReceiveQty(String(data.tag.qty));
       setStockReceivePreview(data);
     } catch (caught) {
-      setStockScan("");
-      const message = caught instanceof Error && caught.name === "AbortError"
-        ? "ระบบตอบกลับช้าเกินไป กรุณายิง Tag ใหม่"
+      const message = caught instanceof DOMException && caught.name === "AbortError"
+        ? "ตรวจสอบ Tag ใช้เวลานานเกินไป กรุณาลองสแกนใหม่"
         : caught instanceof Error ? caught.message : "ตรวจสอบ Tag ไม่สำเร็จ";
       setNotice({ type: "error", text: message });
-      window.setTimeout(() => stockScanInputRef.current?.focus(), 80);
+      window.setTimeout(() => stockScanInputRef.current?.select(), 80);
     } finally {
-      window.clearTimeout(timeoutId);
+      window.clearTimeout(timeout);
       stockScanRequestRef.current = false;
       setStockSaving(false);
     }
