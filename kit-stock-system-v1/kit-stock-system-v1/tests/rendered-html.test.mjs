@@ -445,3 +445,31 @@ test("separates arranging and dispatching with guards before mutations", async (
   assert.match(css, /\.mobile-bottom-nav \.bottom-logout/);
   assert.match(migration, /permission_key = 'scan'/);
 });
+
+test("keeps the Stock receiving popup Actual and Master sources on their labelled panels", async () => {
+  const appSource = await source("../app/delivery-control-app.tsx");
+  const pair = sourceSection(appSource, "const EFFECTIVE_IMAGE_PROJECTION_VERSION", "export default function DeliveryControlApp");
+  const stockPopup = sourceSection(appSource, "{stockReceivePreview &&", "{dispatchConfirmation &&");
+
+  assert.match(pair, /projectionVersion = EFFECTIVE_IMAGE_PROJECTION_VERSION/);
+  assert.match(pair, /รูปชิ้นงานในกล่อง[\s\S]*slot="actual" version=\{actualVersion \|\| projectionVersion\}/);
+  assert.match(pair, /รูปตัวอย่าง \(Master\)[\s\S]*slot="master" version=\{masterVersion \|\| projectionVersion\}/);
+  assert.match(stockPopup, /<PartImagePair materialCode=\{stockReceivePreview\.tag\.materialCode\}/);
+  assert.match(stockPopup, /masterVersion=\{partImages\.find\(\(item\) => item\.materialCode === stockReceivePreview\.tag\.materialCode\)\?\.updatedAt\}/);
+  assert.match(stockPopup, /actualVersion=\{partActualImages\.find\(\(item\) => item\.materialCode === stockReceivePreview\.tag\.materialCode\)\?\.updatedAt\}/);
+  assertBefore(stockPopup, /masterVersion=\{partImages\.find/, /actualVersion=\{partActualImages\.find/);
+});
+
+test("keeps the ตรวจและขายออก popup Actual and Master sources on their labelled panels", async () => {
+  const appSource = await source("../app/delivery-control-app.tsx");
+  const pair = sourceSection(appSource, "const EFFECTIVE_IMAGE_PROJECTION_VERSION", "export default function DeliveryControlApp");
+  const dispatchPopup = sourceSection(appSource, "{dispatchConfirmation &&", "{cameraOpen &&");
+
+  assert.match(pair, /projectionVersion = EFFECTIVE_IMAGE_PROJECTION_VERSION/);
+  assert.match(pair, /รูปชิ้นงานในกล่อง[\s\S]*slot="actual" version=\{actualVersion \|\| projectionVersion\}/);
+  assert.match(pair, /รูปตัวอย่าง \(Master\)[\s\S]*slot="master" version=\{masterVersion \|\| projectionVersion\}/);
+  assert.match(dispatchPopup, /<PartImagePair materialCode=\{dispatchConfirmation\.tag\?\.materialCode \|\| dispatchConfirmation\.master\?\.materialCode \|\| ""\}/);
+  assert.match(dispatchPopup, /masterVersion=\{partImages\.find/);
+  assert.match(dispatchPopup, /actualVersion=\{partActualImages\.find/);
+  assertBefore(dispatchPopup, /masterVersion=\{partImages\.find/, /actualVersion=\{partActualImages\.find/);
+});
