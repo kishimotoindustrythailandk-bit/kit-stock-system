@@ -473,17 +473,22 @@ function PartImage({ materialCode, compact = false, version, slot = "master" }: 
   return <div className={`part-photo ${compact ? "compact" : ""}`}><img src={source} alt={`${imageLabel} ${materialCode}`} loading="lazy" decoding="async" onError={() => setFailedKey(key)} /></div>;
 }
 
+const EFFECTIVE_IMAGE_PROJECTION_VERSION = "effective-slots-v2";
+
 /**
  * โชว์รูปคู่กันตามตำแหน่งที่ผู้ใช้งานคุ้นเคย: รูปชิ้นงานอยู่ซ้าย และรูปตัวอย่างอยู่ขวา
  * ใช้ตอนสแกนเพื่อให้ผู้ตรวจเทียบว่าชิ้นงานในกล่องตรงกับตัวอย่างจริง
+ *
+ * ผู้ใช้ Stock/Delivery ไม่มีสิทธิ์โหลด metadata รูป จึงไม่มี updatedAt สำหรับ cache busting
+ * projectionVersion ทำให้ popup ไม่ใช้ URL unversioned ที่อาจค้างจาก semantics ก่อน legacy fallback
  */
-function PartImagePair({ materialCode, masterVersion, actualVersion, masterAvailable = true, actualAvailable = true }: { materialCode: string; masterVersion?: string; actualVersion?: string; masterAvailable?: boolean; actualAvailable?: boolean }) {
+function PartImagePair({ materialCode, masterVersion, actualVersion, masterAvailable = true, actualAvailable = true, projectionVersion = EFFECTIVE_IMAGE_PROJECTION_VERSION }: { materialCode: string; masterVersion?: string; actualVersion?: string; masterAvailable?: boolean; actualAvailable?: boolean; projectionVersion?: string }) {
   const capStyle: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: "#6b7787", marginBottom: 5, textAlign: "center", letterSpacing: "0.02em" };
   const figStyle: React.CSSProperties = { margin: 0, flex: "1 1 130px", minWidth: 0 };
   const fallback = <div className="part-photo-fallback"><span>◈</span><small>ยังไม่มีรูป</small></div>;
   return <div className="part-image-pair" style={{ display: "flex", gap: 12, flexWrap: "wrap", width: "100%" }}>
-    <figure style={figStyle}><figcaption style={capStyle}>รูปชิ้นงานในกล่อง</figcaption>{actualAvailable ? <PartImage materialCode={materialCode} slot="actual" version={actualVersion} /> : fallback}</figure>
-    <figure style={figStyle}><figcaption style={capStyle}>รูปตัวอย่าง (Master)</figcaption>{masterAvailable ? <PartImage materialCode={materialCode} slot="master" version={masterVersion} /> : fallback}</figure>
+    <figure style={figStyle}><figcaption style={capStyle}>รูปชิ้นงานในกล่อง</figcaption>{actualAvailable ? <PartImage materialCode={materialCode} slot="actual" version={actualVersion || projectionVersion} /> : fallback}</figure>
+    <figure style={figStyle}><figcaption style={capStyle}>รูปตัวอย่าง (Master)</figcaption>{masterAvailable ? <PartImage materialCode={materialCode} slot="master" version={masterVersion || projectionVersion} /> : fallback}</figure>
   </div>;
 }
 
