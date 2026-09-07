@@ -18,11 +18,13 @@ function canAccess(user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>
 }
 
 function canRequest(user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>) {
-  return hasPermission(user, "replacement");
+  return hasPermission(user, "replacement")
+    && (user.role === "admin" || user.role === "qc" || user.role === "inspector");
 }
 
 function canIssue(user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>) {
-  return hasPermission(user, "replacement");
+  return hasPermission(user, "replacement")
+    && (user.role === "admin" || user.role === "delivery" || user.role === "dispatcher");
 }
 
 /**
