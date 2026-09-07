@@ -1460,7 +1460,7 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .stock-receive-confirm-modal > header{background:linear-gradient(135deg,#087ccf,#11ad72)}
 .stock-receive-confirm-modal .dispatch-confirm-part{background:linear-gradient(135deg,#e9f7ff,#e7fbf1)}
 .stock-receive-confirm-modal .dispatch-confirm-part b{color:#0875bd}
-.stock-receive-qty-box{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}
+.stock-receive-qty-box{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
 .stock-receive-qty-box>div,.stock-receive-qty-box>label{display:block;padding:12px;border:1px solid #dfe9f4;border-radius:13px;background:#f5f8fc;text-align:center}
 .stock-receive-qty-box small{display:block;color:#71839e;font-weight:700}
 .stock-receive-qty-box b{display:block;margin:5px 0;color:#16335e;font-size:25px}
@@ -1468,11 +1468,13 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .stock-receive-qty-box label{border-color:#70c99b;background:#e8faef}
 .stock-receive-qty-box input{width:100%;height:46px;margin:5px 0;border:1px solid #60bd8c;border-radius:9px;background:#fff;color:#087c42;text-align:center;font-size:24px;font-weight:800;outline:0}
 .stock-receive-qty-box input:focus{border-color:#079958;box-shadow:0 0 0 3px rgba(7,153,88,.13)}
+.stock-receive-qty-box .production-date{border-color:#87aee8;background:#eef5ff}
+.stock-receive-qty-box .production-date input{border-color:#7ba6e4;color:#174f9b;font-size:16px}
 .stock-receive-qty-box .has-ng{border-color:#ffb6bf;background:#fff0f2}
 .stock-receive-qty-box .has-ng b{color:#d92e42}
 .stock-receive-ng-note{margin:0;padding:11px 13px;border:1px solid #ffd09a;border-radius:11px;color:#a45a00;background:#fff6e6;font-weight:700}
 .stock-confirm-receive-button{background:linear-gradient(135deg,#17b96a,#078946)}
-@media(max-width:760px){.stock-receive-qty-box{grid-template-columns:1fr 1fr}.stock-receive-qty-box>div:first-child{grid-column:1/-1}.stock-receive-confirm-modal .dispatch-confirm-images .part-image-pair .part-photo,.stock-receive-confirm-modal .dispatch-confirm-images .part-image-pair .part-photo-fallback{height:135px}}
+@media(max-width:760px){.stock-receive-qty-box{grid-template-columns:1fr 1fr}.stock-receive-confirm-modal .dispatch-confirm-images .part-image-pair .part-photo,.stock-receive-confirm-modal .dispatch-confirm-images .part-image-pair .part-photo-fallback{height:135px}}
 
 
 /* QC replacement withdrawal: request -> scan KIT Tag -> deduct -> print. */

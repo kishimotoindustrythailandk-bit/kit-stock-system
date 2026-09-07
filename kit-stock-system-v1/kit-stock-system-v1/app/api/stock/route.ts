@@ -530,6 +530,11 @@ export async function POST(request: Request) {
       }
 
       const receivedQty = body.receivedQty === undefined ? Number(tag.qty) : Number(body.receivedQty);
+      const productionDate = clean(body.productionDate, 10)
+        || new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(productionDate)) {
+        return Response.json({ error: "กรุณาระบุวันที่ผลิตให้ถูกต้อง" }, { status: 400 });
+      }
       if (!Number.isInteger(receivedQty) || receivedQty < 0 || receivedQty > Number(tag.qty)) {
         return Response.json({ error: `จำนวนรับเข้าต้องอยู่ระหว่าง 0 ถึง ${tag.qty} ชิ้น` }, { status: 400 });
       }
@@ -538,7 +543,7 @@ export async function POST(request: Request) {
       const [updated] = await db.update(stockTags).set({
         status: nextStatus, remainingQty: receivedQty,
         receivedByName: user.displayName, receivedByCode: user.employeeCode,
-        productionDate: sql`date('now', '+7 hours')`,
+        productionDate,
         receivedAt: sql`CURRENT_TIMESTAMP`,
       }).where(and(eq(stockTags.id, tag.id), eq(stockTags.status, "printed"))).returning();
       if (!updated) {

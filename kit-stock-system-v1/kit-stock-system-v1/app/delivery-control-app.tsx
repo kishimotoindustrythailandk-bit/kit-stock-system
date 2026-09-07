@@ -655,6 +655,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const hardwareScanTimerRef = useRef<number | null>(null);
   const [stockReceivePreview, setStockReceivePreview] = useState<StockReceivePreview | null>(null);
   const [stockReceiveQty, setStockReceiveQty] = useState("");
+  const [stockReceiveProductionDate, setStockReceiveProductionDate] = useState("");
   const [stockSaving, setStockSaving] = useState(false);
   // Scanner/camera handlers live inside effects and can otherwise see an old Stock snapshot.
   // Keep the latest data in a ref so a known printed Tag can open its confirmation immediately.
@@ -1868,6 +1869,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       const cachedPart = stockDataRef.current.parts.find((item) => item.materialCode === cachedTag.materialCode);
       setStockScan(rawPayload);
       setStockReceiveQty(String(cachedTag.qty));
+      setStockReceiveProductionDate(bangkokDateTimeKey().slice(0, 10));
       setStockReceivePreview({
         action: "receive_preview",
         rawPayload,
@@ -1904,6 +1906,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       if (!response.ok || !("tag" in data) || !data.tag) throw new Error(data.error || "ตรวจสอบ Tag ไม่สำเร็จ");
       setStockScan(rawPayload);
       setStockReceiveQty(String(data.tag.qty));
+      setStockReceiveProductionDate(bangkokDateTimeKey().slice(0, 10));
       setStockReceivePreview(data);
     } catch (caught) {
       const message = caught instanceof DOMException && caught.name === "AbortError"
@@ -1922,6 +1925,11 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     if (!stockReceivePreview || stockSaving) return;
     const receivedQty = Number(stockReceiveQty);
     const totalQty = Number(stockReceivePreview.tag.qty);
+    const productionDate = stockReceiveProductionDate;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(productionDate)) {
+      setNotice({ type: "error", text: "กรุณาเลือกวันที่ผลิต" });
+      return;
+    }
     if (!Number.isInteger(receivedQty) || receivedQty < 0 || receivedQty > totalQty) {
       setNotice({ type: "error", text: `จำนวนรับเข้าต้องอยู่ระหว่าง 0 ถึง ${fmt(totalQty)} ชิ้น` });
       return;
@@ -1930,13 +1938,14 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     try {
       const response = await fetch("/api/stock", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "receive", rawPayload: stockReceivePreview.rawPayload, receivedQty }),
+        body: JSON.stringify({ action: "receive", rawPayload: stockReceivePreview.rawPayload, receivedQty, productionDate }),
       });
       const data = await response.json() as { tag?: StockTag; receivedQty?: number; ngQty?: number; error?: string };
       if (!response.ok) throw new Error(data.error || "รับเข้า Stock ไม่สำเร็จ");
       setStockScan("");
       setStockReceivePreview(null);
       setStockReceiveQty("");
+      setStockReceiveProductionDate("");
       const ngQty = Number(data.ngQty || 0);
       setNotice({ type: "success", text: `รับ Tag ${data.tag?.tagId || ""} เข้า Stock ${fmt(Number(data.receivedQty || receivedQty))} ชิ้น${ngQty ? ` · NG ${fmt(ngQty)} ชิ้น` : ""}` });
       void loadStock();
@@ -3545,7 +3554,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <footer><button type="button" className="button secondary" onClick={() => setStockCountPreview(null)}>ยกเลิก</button><button type="button" className="button confirm-stock-count-button" disabled={stockManagementSaving} onClick={() => void confirmStockCountAdjustment()}>{stockManagementSaving ? "กำลังปรับยอด…" : "✓ ยืนยันปรับยอด Stock"}</button></footer>
     </div></div>}
     {stockReceivePreview && <div className="modal-backdrop dispatch-confirm-backdrop stock-receive-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="stock-receive-confirm-title"><div className="dispatch-confirm-modal stock-receive-confirm-modal">
-      <header><div><span>✓</span><div><small>ตรวจพบ KIT Stock Tag</small><h3 id="stock-receive-confirm-title">ตรวจสอบก่อนรับเข้า Stock</h3></div></div><button type="button" onClick={() => { setStockReceivePreview(null); setStockReceiveQty(""); setStockScan(""); }} aria-label="ปิด">×</button></header>
+      <header><div><span>✓</span><div><small>ตรวจพบ KIT Stock Tag</small><h3 id="stock-receive-confirm-title">ตรวจสอบก่อนรับเข้า Stock</h3></div></div><button type="button" onClick={() => { setStockReceivePreview(null); setStockReceiveQty(""); setStockReceiveProductionDate(""); setStockScan(""); }} aria-label="ปิด">×</button></header>
       <div className="dispatch-confirm-content">
         <section className="dispatch-confirm-images"><PartImagePair materialCode={stockReceivePreview.tag.materialCode} masterVersion={partImages.find((item) => item.materialCode === stockReceivePreview.tag.materialCode)?.updatedAt} actualVersion={partActualImages.find((item) => item.materialCode === stockReceivePreview.tag.materialCode)?.updatedAt} strictSlots swapSources /></section>
         <section className="dispatch-confirm-info">
@@ -3555,11 +3564,12 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
             <div><small>จำนวนตาม Tag</small><b>{fmt(stockReceivePreview.tag.qty)}</b><em>ชิ้น</em></div>
             <label><small>จำนวนรับเข้าจริง</small><input type="number" inputMode="numeric" min={0} max={stockReceivePreview.tag.qty} step={1} value={stockReceiveQty} onChange={(event) => setStockReceiveQty(event.target.value.replace(/[^0-9]/g, ""))} autoFocus /><em>แก้ไขได้เมื่อมีงานเสีย</em></label>
             <div className={Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0) > 0 ? "has-ng" : ""}><small>จำนวน NG</small><b>{fmt(Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0))}</b><em>ชิ้น</em></div>
+            <label className="production-date"><small>วันที่ผลิต</small><input type="date" value={stockReceiveProductionDate} onChange={(event) => setStockReceiveProductionDate(event.target.value)} required /><em>ค่าเริ่มต้นคือวันที่สแกนรับเข้า · แก้ไขได้</em></label>
           </div>
           {Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0) > 0 && <p className="stock-receive-ng-note">! ระบบจะเพิ่มเข้า Stock เฉพาะ {fmt(Number(stockReceiveQty || 0))} ชิ้น และบันทึก NG {fmt(Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0))} ชิ้น</p>}
         </section>
       </div>
-      <footer><button type="button" className="button secondary" onClick={() => { setStockReceivePreview(null); setStockReceiveQty(""); setStockScan(""); }}>ยกเลิก / สแกนใหม่</button><button type="button" className="button confirm-dispatch-button stock-confirm-receive-button" disabled={stockSaving || stockReceiveQty === "" || Number(stockReceiveQty) < 0 || Number(stockReceiveQty) > Number(stockReceivePreview.tag.qty)} onClick={() => void confirmReceiveStockTag()}>{stockSaving ? "กำลังรับเข้า…" : "✓ ยืนยันรับเข้า Stock"}</button></footer>
+      <footer><button type="button" className="button secondary" onClick={() => { setStockReceivePreview(null); setStockReceiveQty(""); setStockReceiveProductionDate(""); setStockScan(""); }}>ยกเลิก / สแกนใหม่</button><button type="button" className="button confirm-dispatch-button stock-confirm-receive-button" disabled={stockSaving || stockReceiveQty === "" || !stockReceiveProductionDate || Number(stockReceiveQty) < 0 || Number(stockReceiveQty) > Number(stockReceivePreview.tag.qty)} onClick={() => void confirmReceiveStockTag()}>{stockSaving ? "กำลังรับเข้า…" : "✓ ยืนยันรับเข้า Stock"}</button></footer>
     </div></div>}
     {dispatchConfirmation && <div className="modal-backdrop dispatch-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="dispatch-confirm-title"><div className="dispatch-confirm-modal">
       <header><div><span>✓</span><div><small>ตรวจพบ Tag ลูกค้า</small><h3 id="dispatch-confirm-title">ตรวจสอบงานก่อนขายออก</h3></div></div><button type="button" onClick={() => setDispatchConfirmation(null)} aria-label="ปิด">×</button></header>
