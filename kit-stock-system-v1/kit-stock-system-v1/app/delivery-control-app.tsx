@@ -1039,7 +1039,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }, [cameraOpen, cameraPurpose, page]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const scannerPage = page === "stock" || page === "dispatch" || page === "replacement";
+    const scannerPage = page === "stock" || page === "dispatch" || (page === "replacement" && canIssueReplacement);
     if (!scannerPage || stockReceivePreview || dispatchConfirmation || replacementPreview || cameraOpen) return;
     const activeInput = page === "stock" ? stockScanInputRef.current : page === "replacement" ? replacementInputRef.current : tagInput.current;
     const mobileOrTouch = window.matchMedia("(max-width: 720px), (pointer: coarse)").matches;
