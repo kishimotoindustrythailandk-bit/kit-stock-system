@@ -1319,19 +1319,30 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     setDispatchConfirmation(null);
     setTagPreview(null);
     setNotice(null);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 12_000);
     try {
       const response = await fetch("/api/due", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ rawPayload: scannedValue, mode: "verify" }),
+        signal: controller.signal,
       });
-      const result = await response.json() as VerifyResult & { error?: string };
-      if (!response.ok) throw new Error(result.error || "ตรวจสอบ Tag ไม่สำเร็จ");
+      const contentType = response.headers.get("content-type") || "";
+      const result = contentType.includes("application/json")
+        ? await response.json() as VerifyResult & { error?: string }
+        : { action: "verify" as const, verdict: "bad_tag" as const, error: response.redirected ? "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่" : "ระบบตอบกลับไม่ถูกต้อง กรุณาลองสแกนใหม่" };
+      if (!response.ok || !("tag" in result) || !result.tag) throw new Error(result.error || result.message || "ตรวจสอบ Tag ไม่สำเร็จ");
       setRawTag(scannedValue);
       setDispatchConfirmation(result);
     } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบ Tag ไม่สำเร็จ" });
+      const message = caught instanceof DOMException && caught.name === "AbortError"
+        ? "ตรวจสอบ Tag ใช้เวลานานเกินไป กรุณาลองสแกนใหม่"
+        : caught instanceof Error ? caught.message : "ตรวจสอบ Tag ไม่สำเร็จ";
+      setNotice({ type: "error", text: message });
+      window.setTimeout(() => tagInput.current?.select(), 80);
     } finally {
+      window.clearTimeout(timeout);
       dispatchScanRequestRef.current = false;
       setCheckingTag(false);
     }
