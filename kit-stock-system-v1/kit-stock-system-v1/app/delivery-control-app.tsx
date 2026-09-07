@@ -1914,7 +1914,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         ? "ตรวจสอบ Tag ใช้เวลานานเกินไป กรุณาลองสแกนใหม่"
         : caught instanceof Error ? caught.message : "ตรวจสอบ Tag ไม่สำเร็จ";
       setNotice({ type: "error", text: message });
-      window.setTimeout(() => stockScanInputRef.current?.select(), 80);
+      if (!window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) {
+        window.setTimeout(() => stockScanInputRef.current?.select(), 80);
+      }
     } finally {
       window.clearTimeout(timeout);
       stockScanRequestRef.current = false;
@@ -2909,7 +2911,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         <Card className="stock-receive-card" title="1. สแกน Tag เพื่อรับเข้า Stock">
           <button type="button" className="stock-camera-zone" onClick={() => { setCameraPurpose("stock"); setCameraOpen(true); }}><span>⌗</span><b>พร้อมสแกน Tag</b><small>นำ Tag มาแตะที่เครื่องสแกน</small></button>
           <div className="stock-scan-count"><i /> สแกนแล้ว {fmt(receivedStockTags.length)} ใบ</div>
-          <form className="stock-receive-form" onSubmit={receiveStockTag}><input ref={stockScanInputRef} value={stockScan} onChange={(e) => updateStockScannerValue(e.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void receiveStockTag(value); } }} placeholder="เช่น TG-20250901-0001" autoComplete="off" autoFocus /><button className="button primary" disabled={!stockScan.trim() || stockSaving}>{stockSaving ? "กำลังตรวจสอบ…" : "ตรวจสอบก่อนรับเข้า"}</button></form>
+          <form className="stock-receive-form" onSubmit={receiveStockTag}><input ref={stockScanInputRef} value={stockScan} onChange={(e) => updateStockScannerValue(e.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void receiveStockTag(value); } }} placeholder="เช่น TG-20250901-0001" autoComplete="off" /><button className="button primary" disabled={!stockScan.trim() || stockSaving}>{stockSaving ? "กำลังตรวจสอบ…" : "ตรวจสอบก่อนรับเข้า"}</button></form>
           <div className="stock-guide"><b>↕ ขั้นตอนการทำงาน</b><p>สแกน Tag ทีละใบ เพื่อบันทึกรับเข้า Stock เข้าระบบอัตโนมัติ</p></div>
         </Card>
         <Card className="stock-latest-card" title="2. รายการ Stock ล่าสุด" action={<div className="stock-list-tools"><input value={tagSearch} onChange={(e) => setTagSearch(e.target.value)} placeholder="ค้นหา Tag / รายการสินค้า / Job..." /><button onClick={() => void loadStock()}>↻</button></div>}>
@@ -3568,7 +3570,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <div className="dispatch-confirm-details"><div><small>KIT Stock Tag</small><b>{stockReceivePreview.tag.tagId}</b></div><div><small>Job</small><b>{stockReceivePreview.tag.jobNo || "—"}</b></div><div><small>ลูกค้า</small><b>{stockReceivePreview.tag.customer || "—"}</b></div><div><small>Location</small><b>{stockReceivePreview.tag.location || "—"}</b></div></div>
           <div className="stock-receive-qty-box">
             <div><small>จำนวนตาม Tag</small><b>{fmt(stockReceivePreview.tag.qty)}</b><em>ชิ้น</em></div>
-            <label><small>จำนวนรับเข้าจริง</small><input type="number" inputMode="numeric" min={0} max={stockReceivePreview.tag.qty} step={1} value={stockReceiveQty} onChange={(event) => setStockReceiveQty(event.target.value.replace(/[^0-9]/g, ""))} autoFocus /><em>แก้ไขได้เมื่อมีงานเสีย</em></label>
+            <label><small>จำนวนรับเข้าจริง</small><input type="number" inputMode="numeric" min={0} max={stockReceivePreview.tag.qty} step={1} value={stockReceiveQty} onChange={(event) => setStockReceiveQty(event.target.value.replace(/[^0-9]/g, ""))} /><em>แก้ไขได้เมื่อมีงานเสีย</em></label>
             <div className={Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0) > 0 ? "has-ng" : ""}><small>จำนวน NG</small><b>{fmt(Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0))}</b><em>ชิ้น</em></div>
             <label className="production-date"><small>วันที่ผลิต</small><input type="date" value={stockReceiveProductionDate} onChange={(event) => setStockReceiveProductionDate(event.target.value)} required /><em>ค่าเริ่มต้นคือวันที่สแกนรับเข้า · แก้ไขได้</em></label>
           </div>
