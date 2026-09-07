@@ -1034,7 +1034,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const scannerPage = page === "stock" || page === "dispatch" || page === "replacement";
     if (!scannerPage || stockReceivePreview || dispatchConfirmation || replacementPreview || cameraOpen) return;
     const activeInput = page === "stock" ? stockScanInputRef.current : page === "replacement" ? replacementInputRef.current : tagInput.current;
-    const focusTimer = window.setTimeout(() => activeInput?.focus(), 80);
+    const mobileOrTouch = window.matchMedia("(max-width: 720px), (pointer: coarse)").matches;
+    const focusTimer = mobileOrTouch ? null : window.setTimeout(() => activeInput?.focus(), 80);
     const submitBuffer = () => {
       const value = hardwareScanBufferRef.current.trim();
       hardwareScanBufferRef.current = "";
@@ -1074,7 +1075,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     };
     document.addEventListener("keydown", onScannerKey);
     return () => {
-      window.clearTimeout(focusTimer);
+      if (focusTimer !== null) window.clearTimeout(focusTimer);
       if (hardwareScanTimerRef.current !== null) window.clearTimeout(hardwareScanTimerRef.current);
       hardwareScanBufferRef.current = "";
       document.removeEventListener("keydown", onScannerKey);
