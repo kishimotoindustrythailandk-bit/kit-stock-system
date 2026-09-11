@@ -1874,3 +1874,54 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
   .part-modern-row>span:nth-child(6)::before{content:"สถานะ"}
   .part-modern-row>span:nth-child(7)::before{content:"จัดการ"}
 }
+.forecast-page { display: grid; gap: 18px; }
+.forecast-import-layout { display: grid; gap: 14px; }
+.forecast-file-picker { display: flex; align-items: center; gap: 14px; padding: 18px; border: 2px dashed #a9c3ee; border-radius: 14px; background: #f7faff; cursor: pointer; }
+.forecast-file-picker > span { display: grid; place-items: center; width: 48px; height: 48px; flex: 0 0 48px; border-radius: 13px; color: #fff; background: linear-gradient(135deg, #176be0, #7042df); font-size: 23px; }
+.forecast-file-picker div { min-width: 0; flex: 1; }
+.forecast-file-picker b, .forecast-file-picker small { display: block; }
+.forecast-file-picker b { color: #173567; overflow-wrap: anywhere; }
+.forecast-file-picker small { margin-top: 4px; color: #71809a; }
+.forecast-file-picker input { max-width: 240px; }
+.forecast-parsing { padding: 12px 14px; border-radius: 10px; background: #edf5ff; color: #1d5eb6; font-weight: 700; }
+.forecast-preview { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.forecast-preview > div, .forecast-active > div { padding: 13px 14px; border: 1px solid #dbe6f6; border-radius: 11px; background: #fff; }
+.forecast-preview small, .forecast-preview b, .forecast-active small, .forecast-active b { display: block; }
+.forecast-preview small, .forecast-active small { margin-bottom: 4px; color: #71809a; }
+.forecast-preview b, .forecast-active b { color: #173567; overflow-wrap: anywhere; }
+.forecast-import-actions { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.forecast-import-actions p { margin: 0; color: #7a5a16; }
+.forecast-progress { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 5px 12px; }
+.forecast-progress span { height: 9px; overflow: hidden; border-radius: 99px; background: #e4ebf5; }
+.forecast-progress span i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #1670e7, #7042df); transition: width .2s ease; }
+.forecast-progress small { grid-column: 1 / -1; color: #71809a; }
+.forecast-active { display: grid; grid-template-columns: 2fr repeat(3, 1fr); gap: 10px; }
+.forecast-filters { display: flex; gap: 8px; }
+.forecast-filters input, .forecast-filters select { min-height: 38px; padding: 8px 11px; border: 1px solid #d4dfef; border-radius: 9px; background: #fff; color: #243958; }
+.forecast-filters input { min-width: 250px; }
+.forecast-method-note { margin-bottom: 12px; padding: 10px 13px; border: 1px solid #d5e4fa; border-radius: 9px; background: #f2f7ff; color: #3b5d89; font-size: 13px; }
+.forecast-table td:first-child b, .forecast-table td:first-child small, .forecast-table td:first-child em, .forecast-table td:nth-child(6) b, .forecast-table td:nth-child(6) small { display: block; }
+.forecast-table td:first-child small, .forecast-table td:nth-child(6) small { margin-top: 3px; color: #71809a; }
+.forecast-table td:first-child em { margin-top: 5px; color: #6b55bd; font-size: 11px; font-style: normal; }
+.forecast-table .danger { color: #c62e3e; }
+.forecast-overdue-row { background: #fffafb; }
+.forecast-covered-text { color: #16824d; }
+.forecast-status { display: inline-flex; align-items: center; padding: 5px 9px; border-radius: 99px; font-size: 12px; font-weight: 800; white-space: nowrap; }
+.forecast-status.covered { color: #117647; background: #def5e9; }
+.forecast-status.shortage { color: #a85a04; background: #fff0d7; }
+.forecast-status.no_stock { color: #b72536; background: #ffe3e7; }
+.forecast-status.archived { color: #5c6d87; background: #edf1f6; }
+
+@media (max-width: 900px) {
+  .forecast-preview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .forecast-active { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .forecast-file-picker { align-items: flex-start; flex-wrap: wrap; }
+  .forecast-file-picker input { width: 100%; max-width: none; }
+  .forecast-import-actions { align-items: stretch; flex-direction: column; }
+  .forecast-filters { width: 100%; flex-direction: column; }
+  .forecast-filters input { min-width: 0; width: 100%; }
+}
+
+@media (max-width: 560px) {
+  .forecast-preview, .forecast-active { grid-template-columns: 1fr; }
+}

@@ -111,6 +111,40 @@ export const deliveryTagReceipts = sqliteTable("delivery_tag_receipts", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+export const forecastImports = sqliteTable("forecast_imports", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  importToken: text("import_token").notNull().unique(),
+  fileName: text("file_name").notNull(),
+  sourceCalculatedAt: text("source_calculated_at").notNull(),
+  rowCount: integer("row_count").notNull().default(0),
+  materialCount: integer("material_count").notNull().default(0),
+  totalQty: integer("total_qty").notNull().default(0),
+  status: text("status").notNull().default("uploading"),
+  importedByName: text("imported_by_name").notNull(),
+  importedByCode: text("imported_by_code").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  activatedAt: text("activated_at"),
+});
+
+export const forecastLines = sqliteTable("forecast_lines", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  importId: integer("import_id").notNull().references(() => forecastImports.id, { onDelete: "cascade" }),
+  sourceKey: text("source_key").notNull(),
+  materialCode: text("material_code").notNull(),
+  description: text("description").notNull().default(""),
+  deliveryDate: text("delivery_date").notNull(),
+  deliveryTime: text("delivery_time").notNull(),
+  prodQty: integer("prod_qty").notNull(),
+  deliverySpot: text("delivery_spot").notNull().default(""),
+  factory: text("factory").notNull().default(""),
+  shop: text("shop").notNull().default(""),
+  line: text("line").notNull().default(""),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => ({
+  importSourceKey: uniqueIndex("idx_forecast_lines_import_source").on(table.importId, table.sourceKey),
+  importMaterialDate: index("idx_forecast_lines_import_material_date").on(table.importId, table.materialCode, table.deliveryDate, table.deliveryTime),
+}));
+
 export const partImages = sqliteTable("part_images", {
   materialCode: text("material_code").primaryKey(),
   objectKey: text("object_key").notNull(),
