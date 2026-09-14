@@ -22,17 +22,21 @@ button, a { -webkit-tap-highlight-color: transparent; }
 button { cursor: pointer; }
 
 .control-shell { min-height: 100vh; }
-.control-sidebar { position: fixed; inset: 0 auto 0 0; width: 236px; z-index: 30; display: flex; flex-direction: column; padding: 26px 16px 20px; background: #fff; border-right: 1px solid var(--line); }
+.control-sidebar { position: fixed; inset: 0 auto 0 0; width: 236px; z-index: 30; display: flex; flex-direction: column; padding: 26px 16px 20px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: #aac3e7 transparent; -webkit-overflow-scrolling: touch; background: #fff; border-right: 1px solid var(--line); }
+.control-sidebar::-webkit-scrollbar { width: 7px; }
+.control-sidebar::-webkit-scrollbar-track { background: transparent; }
+.control-sidebar::-webkit-scrollbar-thumb { background: #aac3e7; border: 2px solid #fff; border-radius: 99px; }
+.control-sidebar::-webkit-scrollbar-thumb:hover { background: #759bcf; }
 .kit-logo { padding: 0 14px 22px; }
 .kit-logo b { display: block; font: 800 52px/1 system-ui, sans-serif; letter-spacing: -5px; color: #075bce; }
 .kit-logo span { display: block; margin-top: 5px; font-size: 8px; font-weight: 800; letter-spacing: .75px; color: #73809b; }
-.control-sidebar nav { display: grid; gap: 6px; }
+.control-sidebar nav { flex: 0 0 auto; display: grid; gap: 6px; }
 .control-sidebar nav button { display: flex; align-items: center; gap: 13px; width: 100%; min-height: 47px; padding: 0 14px; border: 0; border-radius: 10px; color: #31415f; background: transparent; text-align: left; font-weight: 600; transition: .18s ease; }
 .control-sidebar nav button span { width: 24px; color: #5d7197; font-size: 22px; text-align: center; }
 .control-sidebar nav button:hover { background: #f1f6ff; color: var(--blue); }
 .control-sidebar nav button.active { color: #fff; background: linear-gradient(135deg, #0d6ee6, #034fbf); box-shadow: 0 8px 18px rgba(6, 91, 210, .22); }
 .control-sidebar nav button.active span { color: #fff; }
-.sidebar-bottom { margin-top: auto; }
+.sidebar-bottom { flex: 0 0 auto; margin-top: auto; }
 .mobile-logout { display: none; }
 .help-box { margin: 18px 0; padding: 13px; border: 1px solid var(--line); border-radius: 12px; }
 .help-box b { display: block; font-size: 12px; }
