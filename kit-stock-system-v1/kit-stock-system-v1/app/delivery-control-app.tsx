@@ -195,7 +195,7 @@ type MaterialLot = {
   spec: string; size: string; lotNo: string; coilNo: string;
   originalQty: number; remainingQty: number; unit: string;
   originalWeightKg: number; remainingWeightKg: number; supplierDate: string;
-  receivedDate: string; location: string; status: string; rawPayload: string;
+  receivedDate: string; location: string; status: string; labelImageKey: string; rawPayload: string;
   receivedByName: string; receivedByCode: string; createdAt: string; updatedAt: string;
 };
 type MaterialTransaction = {
@@ -617,6 +617,97 @@ function Empty({ title = "ยังไม่มีข้อมูล", text = "�
  * เป็นคนละรูปกับที่เคยแคชไว้ มิฉะนั้นอัปโหลดรูปใหม่ทับแล้วจะยังเห็นรูปเก่า
  * เพราะ URL เดิมอ้างด้วย materialCode อย่างเดียว
  */
+// ===== OCR ฉลากวัตถุดิบ (อ่านอังกฤษ+ตัวเลขด้วย Tesseract) =====
+type LabelField = "supplierDate" | "invoiceNo" | "materialCode" | "description" | "size" | "packNo" | "qty";
+const LABEL_REQUIRED_FIELDS: LabelField[] = ["supplierDate", "invoiceNo", "materialCode", "description", "size", "packNo", "qty"];
+
+function pad2(value: number | string) {
+  return String(value).padStart(2, "0");
+}
+
+// แปลงวันที่บนฉลากเป็น yyyy-mm-dd รองรับ dd/mm/yyyy, dd-Mmm-yy(yy),
+// เดือนภาษาไทยย่อ (15-ก.ย.-68), พ.ศ. และ ค.ศ.
+function parseLabelDate(input: string): string {
+  const s = String(input || "").trim();
+  if (!s) return "";
+  const thMonths: Record<string, number> = { "ม.ค.": 1, "ก.พ.": 2, "มี.ค.": 3, "เม.ย.": 4, "พ.ค.": 5, "มิ.ย.": 6, "ก.ค.": 7, "ส.ค.": 8, "ก.ย.": 9, "ต.ค.": 10, "พ.ย.": 11, "ธ.ค.": 12 };
+  const enMonths: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+  const toCE = (year: number, isThaiMonth: boolean) => {
+    if (year >= 2400) return year - 543;
+    if (year >= 1900) return year;
+    // 2 หลัก
+    return isThaiMonth ? 2000 + (year - 43) : 2000 + year;
+  };
+  let m = s.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (m) return `${m[1]}-${pad2(m[2])}-${pad2(m[3])}`;
+  m = s.match(/(\d{1,2})[-/\s]([A-Za-zก-๙.]{2,})[-/\s](\d{2,4})/);
+  if (m) {
+    const day = Number(m[1]);
+    const token = m[2];
+    let mon = 0;
+    let isThai = false;
+    for (const [k, v] of Object.entries(thMonths)) if (token.includes(k.replace(/\.$/, "")) || token.includes(k)) { mon = v; isThai = true; break; }
+    if (!mon) { const key = token.toLowerCase(); for (const [k, v] of Object.entries(enMonths)) if (key.startsWith(k)) { mon = v; break; } }
+    if (mon && day) { const y = toCE(Number(m[3]), isThai); return `${y}-${pad2(mon)}-${pad2(day)}`; }
+  }
+  m = s.match(/(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/);
+  if (m) { const y = toCE(Number(m[3]), false); return `${y}-${pad2(m[2])}-${pad2(m[1])}`; }
+  return "";
+}
+
+// ดึง 7 ช่องจากข้อความที่ OCR อ่านได้ พร้อมธงความมั่นใจ (none = อ่านไม่ได้, low = ไม่มั่นใจ)
+function parseLabelFields(text: string, overallConfidence = 100): { fields: Partial<Record<LabelField, string>>; flags: Partial<Record<LabelField, "low" | "none">> } {
+  const joined = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).join("\n");
+  const fields: Partial<Record<LabelField, string>> = {};
+  const flags: Partial<Record<LabelField, "low" | "none">> = {};
+  const grab = (key: LabelField, regexes: RegExp[], upper = true) => {
+    for (const re of regexes) {
+      const found = joined.match(re);
+      if (found && found[1]) {
+        let value = found[1].trim().replace(/\s{2,}/g, " ");
+        if (upper) value = value.toUpperCase();
+        if (value) { fields[key] = value; return; }
+      }
+    }
+  };
+  grab("invoiceNo", [/\bINV(?:OICE)?\.?\s*(?:NO\.?|#|:)?\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-/]{2,})/i]);
+  grab("packNo", [/\bPACK(?:ING)?\.?\s*(?:NO\.?|#|:)?\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-/]{2,})/i]);
+  grab("materialCode", [/\b(?:MAT(?:ERIAL)?\s*)?CODE\.?\s*(?:NO\.?|#|:)?\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-/]{2,})/i, /\bPART\s*(?:NO\.?|CODE)\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-/]{2,})/i]);
+  grab("description", [/\bDESC(?:RIPTION)?\.?\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-/ ]{2,})/i]);
+  grab("size", [/\bSIZE\.?\s*[:\-]?[ \t]*([A-Za-z0-9][A-Za-z0-9\-/*. \t]{2,})/i, /\b(T\d+(?:\.\d+)?[ \t]*[*xX][ \t]*\d+(?:\.\d+)?[ \t]*[*xX][ \t]*\d+(?:\.\d+)?[ \tA-Za-z0-9\-]*)/i]);
+  const qtyMatch = joined.match(/\b(?:QTY|QUANTITY|Q'?TY)\.?\s*(?:NO\.?|#|:)?\s*[:\-]?\s*([0-9][0-9,]{0,7})/i);
+  if (qtyMatch) fields.qty = qtyMatch[1].replace(/,/g, "");
+  const dateLabel = joined.match(/\bDATE\.?\s*[:\-]?\s*([0-9A-Za-zก-๙.\-/ ]{6,20})/i);
+  let dateValue = dateLabel ? parseLabelDate(dateLabel[1]) : "";
+  if (!dateValue) {
+    const anyDate = joined.match(/(\d{1,2}[-/][A-Za-zก-๙.]{2,}[-/]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4})/);
+    if (anyDate) dateValue = parseLabelDate(anyDate[1]);
+  }
+  if (dateValue) fields.supplierDate = dateValue;
+
+  for (const key of LABEL_REQUIRED_FIELDS) if (!fields[key]) flags[key] = "none";
+  for (const key of ["invoiceNo", "packNo", "materialCode"] as LabelField[]) if (fields[key] && (fields[key] as string).length < 3) flags[key] = "low";
+  if (overallConfidence < 60) for (const key of LABEL_REQUIRED_FIELDS) if (fields[key] && !flags[key]) flags[key] = "low";
+  return { fields, flags };
+}
+
+// ย่อรูปเป็น data URL (ใช้ทั้งพรีวิวและส่งเข้า OCR) — ฉลากใหญ่ย่อไม่เกิน maxEdge px
+async function fileToScaledDataUrl(file: File, maxEdge: number, quality = 0.85): Promise<string> {
+  const bmp = typeof window.createImageBitmap === "function" ? await createImageBitmap(file).catch(() => null) : null;
+  const width = bmp ? bmp.width : 0;
+  const height = bmp ? bmp.height : 0;
+  if (!bmp || !width || !height) {
+    return await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(file); });
+  }
+  const scale = Math.min(1, maxEdge / Math.max(width, height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  const ctx = canvas.getContext("2d");
+  if (ctx) ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
 function PartImage({ materialCode, compact = false, version, slot = "master", strict = false }: { materialCode: string; compact?: boolean; version?: string; slot?: "master" | "actual"; strict?: boolean }) {
   const key = `${slot}:${materialCode}:${version || "unversioned"}:${strict ? "strict" : "compatible"}`;
   const [failedKey, setFailedKey] = useState("");
@@ -724,6 +815,11 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [materialScan, setMaterialScan] = useState("");
   const [materialScanning, setMaterialScanning] = useState(false);
   const [materialReceiveForm, setMaterialReceiveForm] = useState<MaterialReceiveForm | null>(null);
+  const [materialOcrRunning, setMaterialOcrRunning] = useState(false);
+  const [materialOcrFlags, setMaterialOcrFlags] = useState<Partial<Record<LabelField, "low" | "none">>>({});
+  const [materialLabelImage, setMaterialLabelImage] = useState<string | null>(null);
+  const [materialLabelFile, setMaterialLabelFile] = useState<File | null>(null);
+  const [materialLabelView, setMaterialLabelView] = useState<string | null>(null);
   const [materialIssueLot, setMaterialIssueLot] = useState<MaterialLot | null>(null);
   const [materialIssueForm, setMaterialIssueForm] = useState({ qty: "", weightKg: "", jobNo: "", department: "", purpose: "", note: "" });
   const [materialSaving, setMaterialSaving] = useState(false);
@@ -839,6 +935,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const partBundleMasterInput = useRef<HTMLInputElement>(null);
   const partBundleActualInput = useRef<HTMLInputElement>(null);
   const tagInput = useRef<HTMLInputElement>(null);
+  const labelFileInput = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const tagResultRef = useRef<HTMLElement>(null);
   const verifyInput = useRef<HTMLInputElement>(null);
@@ -1014,18 +1111,86 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     setMaterialIssueForm({ qty: "", weightKg: "", jobNo: "", department: "", purpose: "", note: "" });
   }
 
+  function closeMaterialReceive() {
+    setMaterialReceiveForm(null);
+    setMaterialOcrFlags({});
+    setMaterialLabelImage(null);
+    setMaterialLabelFile(null);
+  }
+
+  // ถ่าย/เลือกรูปฉลากเต็มใบ แล้วให้ Tesseract อ่านอังกฤษ+ตัวเลข → เด้ง popup ให้ตรวจแก้
+  async function runLabelOcr(file: File) {
+    if (materialOcrRunning) return;
+    setMaterialOcrRunning(true);
+    setNotice(null);
+    try {
+      const preview = await fileToScaledDataUrl(file, 1400, 0.85);
+      setMaterialLabelImage(preview);
+      setMaterialLabelFile(file);
+      const Tesseract = (await import("tesseract.js")).default;
+      const { data } = await Tesseract.recognize(preview, "eng");
+      const overall = Number(data?.confidence ?? 0);
+      const { fields, flags } = parseLabelFields(String(data?.text || ""), overall);
+      setMaterialOcrFlags(flags);
+      setMaterialReceiveForm({
+        supplierCode: "",
+        rawPayload: fields.packNo ? `OCR:${fields.packNo}` : `OCR:${Date.now()}`,
+        barcodeValue: fields.packNo || `OCR-${Date.now()}`,
+        invoiceNo: fields.invoiceNo || "",
+        packNo: fields.packNo || "",
+        materialCode: fields.materialCode || "",
+        description: fields.description || "",
+        spec: "",
+        size: fields.size || "",
+        lotNo: "",
+        coilNo: "",
+        qty: fields.qty || "",
+        unit: "SHEET",
+        weightKg: "",
+        supplierDate: fields.supplierDate || "",
+        receivedDate: bangkokDateTimeKey().slice(0, 10),
+        location: "",
+        note: "",
+        warning: "อ่านจากรูปฉลากด้วย OCR — กรุณาตรวจช่องที่เน้นสีเหลือง (ไม่มั่นใจ) และสีแดง (อ่านไม่ได้/ยังว่าง) ก่อนยืนยัน",
+      });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? `อ่านฉลากไม่สำเร็จ: ${caught.message}` : "อ่านฉลากไม่สำเร็จ" });
+    } finally {
+      setMaterialOcrRunning(false);
+    }
+  }
+
+  // ระบายสีช่องตามผล OCR: แดง = จำเป็นแต่ยังว่าง/อ่านไม่ได้, เหลือง = อ่านได้แต่ไม่มั่นใจ
+  const ocrFieldStyle = (field: LabelField, value: string): React.CSSProperties => {
+    if (!materialLabelImage) return {};
+    const empty = !String(value || "").trim();
+    if (empty && LABEL_REQUIRED_FIELDS.includes(field)) return { borderColor: "#dc2626", background: "#fef2f2", boxShadow: "0 0 0 2px rgba(220,38,38,.15)" };
+    if (materialOcrFlags[field] === "low") return { borderColor: "#d97706", background: "#fffbeb", boxShadow: "0 0 0 2px rgba(217,119,6,.15)" };
+    return {};
+  };
+
   async function saveMaterialReceipt(event: FormEvent) {
     event.preventDefault();
     if (!materialReceiveForm || materialSaving) return;
     setMaterialSaving(true);
     try {
+      let labelImageKey = "";
+      if (materialLabelFile) {
+        try {
+          const labelForm = new FormData();
+          labelForm.set("image", materialLabelFile);
+          const labelRes = await fetch("/api/material-labels", { method: "POST", body: labelForm });
+          const labelData = await labelRes.json() as { objectKey?: string; error?: string };
+          if (labelRes.ok && labelData.objectKey) labelImageKey = labelData.objectKey;
+        } catch { /* เก็บรูปไม่สำเร็จก็ยังรับเข้าได้ ไม่บล็อกงานหน้างาน */ }
+      }
       const response = await fetch("/api/materials", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "receive", ...materialReceiveForm }),
+        body: JSON.stringify({ action: "receive", ...materialReceiveForm, labelImageKey }),
       });
       const data = await response.json() as { lot?: MaterialLot; error?: string };
       if (!response.ok) throw new Error(data.error || "รับ Mat’s เข้าไม่สำเร็จ");
-      setMaterialReceiveForm(null);
+      closeMaterialReceive();
       setMaterialScan("");
       setNotice({ type: "success", text: `รับ Mat’s ${data.lot?.materialCode || ""} เข้าแล้ว เลขที่ ${data.lot?.receiptNo || ""}` });
       await loadMaterials();
@@ -3799,9 +3964,13 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         <input value={materialScan} onChange={(event) => setMaterialScan(event.target.value)} placeholder="หรือกรอกรหัส Pack / Coil / Barcode" autoComplete="off" />
         <button className="button primary" disabled={!materialScan.trim() || materialScanning}>ตรวจสอบ</button>
       </form>
+      {mode === "receive" && <button type="button" className="button secondary material-ocr-button" disabled={materialOcrRunning} style={{ marginTop: 10, width: "100%" }} onClick={() => labelFileInput.current?.click()}>
+        {materialOcrRunning ? "กำลังอ่านฉลาก… (ประมาณ 3–10 วินาที)" : "📷 ถ่ายรูปฉลากเต็มใบ แล้วให้ระบบอ่านให้ (OCR)"}
+      </button>}
     </div>;
 
     return <div className="materials-page">
+      <input ref={labelFileInput} type="file" accept="image/*" capture="environment" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void runLabelOcr(file); event.target.value = ""; }} />
       <div className="materials-summary">
         <article className="material-summary-card blue"><span>▣</span><div><small>Pack / Coil คงเหลือ</small><b>{fmt(materials.summary.lotCount)}</b><em>รายการ</em></div></article>
         <article className="material-summary-card green"><span>▤</span><div><small>จำนวนคงเหลือ</small><b>{fmt(materials.summary.qty)}</b><em>แผ่น / ชิ้น</em></div></article>
@@ -3834,7 +4003,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <td data-label="รับเข้า" className="num"><b>{fmt(item.originalQty)} {item.unit}</b><small>{weight(item.originalWeightKg)} kg</small></td>
           <td data-label="คงเหลือ" className="num"><b>{fmt(item.remainingQty)} {item.unit}</b><small>{weight(item.remainingWeightKg)} kg</small></td>
           <td data-label="สถานะ"><span className={`material-stock-status ${item.status}`}>{item.status === "in_stock" ? "มีของ" : "เบิกหมด"}</span></td>
-          <td data-label="จัดการ">{item.status === "in_stock" ? <button className="tiny-button" onClick={() => openMaterialIssue(item)}>เบิกออก</button> : "—"}</td>
+          <td data-label="จัดการ"><div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{item.labelImageKey ? <button className="tiny-button" onClick={() => setMaterialLabelView(item.labelImageKey)}>🔍 ดูฉลาก</button> : null}{item.status === "in_stock" ? <button className="tiny-button" onClick={() => openMaterialIssue(item)}>เบิกออก</button> : null}{!item.labelImageKey && item.status !== "in_stock" ? "—" : null}</div></td>
         </tr>)}</tbody></table></div> : <Empty title={materialSearch ? "ไม่พบรายการที่ค้นหา" : "ยังไม่มี Stock Mat’s"} text={materialSearch ? "ลองเปลี่ยนคำค้นหา" : "สแกนรับ Mat’s เข้าแล้วรายการจะแสดงที่นี่"} />}
       </Card>}
 
@@ -3843,7 +4012,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <td data-label="วันและเวลา"><b>{formatDateTime(item.createdAt)}</b><small>{item.transactionNo}</small></td>
           <td data-label="รายการ"><span className={`material-transaction-type ${item.type}`}>{item.type === "receive" ? "รับเข้า" : "เบิกออก"}</span></td>
           <td data-label="Material / Supplier"><b>{item.materialCode}</b><small>{item.supplierName}</small></td>
-          <td data-label="Inv / Packing No."><b>{item.invoiceNo || "—"}</b><small>{item.packNo || "—"} · {item.receiptNo}</small></td>
+          <td data-label="Inv / Packing No."><b>{item.invoiceNo || "—"}</b><small>{item.packNo || "—"} · {item.receiptNo}</small>{(() => { const lot = materials.lots.find((row) => row.receiptNo === item.receiptNo); return lot?.labelImageKey ? <button type="button" className="tiny-button" style={{ marginTop: 4 }} onClick={() => setMaterialLabelView(lot.labelImageKey)}>🔍 ดูฉลาก</button> : null; })()}</td>
           <td data-label="จำนวน" className="num"><b>{item.type === "receive" ? "+" : "-"}{fmt(item.qty)}</b><small>{weight(item.weightKg)} kg · เหลือ {fmt(item.qtyBalanceAfter)}</small></td>
           <td data-label="Job / แผนก"><b>{item.jobNo || "—"}</b><small>{item.department || item.purpose || "—"}</small></td>
           <td data-label="ผู้ดำเนินการ"><b>{item.actorName}</b><small>{item.actorCode}</small></td>
@@ -4163,22 +4332,33 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       {(dispatchConfirmation.verdict === "ready" || dispatchConfirmation.verdict === "ready_noimg") ? <footer><button type="button" className="button secondary" onClick={() => setDispatchConfirmation(null)}>ยกเลิก / ตรวจใหม่</button><button type="button" className="button confirm-dispatch-button" disabled={checkingTag} onClick={() => void confirmDispatch()}>{checkingTag ? "กำลังขายออก…" : "✓ ยืนยันขายออกและตัดยอด"}</button></footer> : <footer className="dispatch-confirm-blocked"><p>ไม่สามารถขายออกได้: {dispatchConfirmation.message || "ข้อมูลไม่พร้อมขายออก"}</p><button type="button" className="button secondary" onClick={() => setDispatchConfirmation(null)}>ปิดและตรวจใหม่</button></footer>}
     </div></div>}
     {materialReceiveForm && <div className="modal-backdrop material-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="material-receive-title"><form className="material-modal" onSubmit={saveMaterialReceipt}>
-      <header><div><span>⇩</span><div><small>ตรวจพบฉลาก Supplier</small><h3 id="material-receive-title">ตรวจสอบก่อนรับ Mat’s เข้า</h3></div></div><button type="button" onClick={() => setMaterialReceiveForm(null)} aria-label="ปิด">×</button></header>
+      <header><div><span>⇩</span><div><small>ตรวจพบฉลาก Supplier</small><h3 id="material-receive-title">ตรวจสอบก่อนรับ Mat’s เข้า</h3></div></div><button type="button" onClick={closeMaterialReceive} aria-label="ปิด">×</button></header>
       <div className="material-modal-body">
         {materialReceiveForm.warning && <p className="material-warning">! {materialReceiveForm.warning}</p>}
-        <div className="material-barcode-value"><small>ข้อมูลที่สแกนได้</small><b>{materialReceiveForm.rawPayload}</b></div>
+        {materialLabelImage
+          ? <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 10, flexWrap: "wrap" }}>
+              <button type="button" onClick={() => setMaterialLabelView(materialLabelImage)} style={{ padding: 0, border: "1px solid #d3dce7", borderRadius: 8, overflow: "hidden", background: "#f6f8fb", cursor: "zoom-in", flex: "0 0 auto" }} title="แตะเพื่อดูรูปเต็ม"><img src={materialLabelImage} alt="ฉลากที่ถ่าย" style={{ width: 120, height: 90, objectFit: "cover", display: "block" }} /></button>
+              <div style={{ fontSize: 12.5, color: "#46566b", flex: "1 1 200px", minWidth: 0 }}>
+                <b style={{ color: "#131c27" }}>อ่านจากรูปฉลาก (OCR)</b>
+                <div style={{ display: "flex", gap: 12, marginTop: 6, flexWrap: "wrap" }}>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><i style={{ width: 11, height: 11, borderRadius: 3, background: "#fffbeb", border: "1px solid #d97706", display: "inline-block" }} /> เหลือง = ไม่มั่นใจ ตรวจซ้ำ</span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><i style={{ width: 11, height: 11, borderRadius: 3, background: "#fef2f2", border: "1px solid #dc2626", display: "inline-block" }} /> แดง = อ่านไม่ได้ กรอกเอง</span>
+                </div>
+              </div>
+            </div>
+          : <div className="material-barcode-value"><small>ข้อมูลที่สแกนได้</small><b>{materialReceiveForm.rawPayload}</b></div>}
         <div className="material-form-grid">
           <label className="wide"><span>Supplier *</span><select required value={materialReceiveForm.supplierCode} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, supplierCode: event.target.value }))}><option value="">เลือก Supplier</option>{materials.suppliers.filter((item) => item.active).map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
-          <label><span>Date / วันที่บนเอกสาร *</span><input required type="date" value={materialReceiveForm.supplierDate} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, supplierDate: event.target.value }))} /></label>
-          <label><span>Inv No. *</span><input required value={materialReceiveForm.invoiceNo} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, invoiceNo: event.target.value.toUpperCase() }))} placeholder="เช่น 1-668732" /></label>
-          <label><span>Code / รหัส Mat’s *</span><input required value={materialReceiveForm.materialCode} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, materialCode: event.target.value.toUpperCase() }))} placeholder="เช่น RM-300-MCP" /></label>
-          <label><span>Description *</span><input required value={materialReceiveForm.description} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, description: event.target.value.toUpperCase() }))} placeholder="เช่น VU02D612H74" /></label>
-          <label><span>Size *</span><input required value={materialReceiveForm.size} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, size: event.target.value.toUpperCase() }))} placeholder="เช่น T0.8*96*658.5 MSB-CE-ZC" /></label>
-          <label><span>Packing No. *</span><input required value={materialReceiveForm.packNo} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, packNo: event.target.value.toUpperCase() }))} placeholder="เช่น 1-533931" /></label>
+          <label><span>Date / วันที่บนเอกสาร *</span><input required type="date" style={ocrFieldStyle("supplierDate", materialReceiveForm.supplierDate)} value={materialReceiveForm.supplierDate} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, supplierDate: event.target.value }))} /></label>
+          <label><span>Inv No. *</span><input required style={ocrFieldStyle("invoiceNo", materialReceiveForm.invoiceNo)} value={materialReceiveForm.invoiceNo} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, invoiceNo: event.target.value.toUpperCase() }))} placeholder="เช่น 1-668732" /></label>
+          <label><span>Code / รหัส Mat’s *</span><input required style={ocrFieldStyle("materialCode", materialReceiveForm.materialCode)} value={materialReceiveForm.materialCode} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, materialCode: event.target.value.toUpperCase() }))} placeholder="เช่น RM-300-MCP" /></label>
+          <label><span>Description *</span><input required style={ocrFieldStyle("description", materialReceiveForm.description)} value={materialReceiveForm.description} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, description: event.target.value.toUpperCase() }))} placeholder="เช่น VU02D612H74" /></label>
+          <label><span>Size *</span><input required style={ocrFieldStyle("size", materialReceiveForm.size)} value={materialReceiveForm.size} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, size: event.target.value.toUpperCase() }))} placeholder="เช่น T0.8*96*658.5 MSB-CE-ZC" /></label>
+          <label><span>Packing No. *</span><input required style={ocrFieldStyle("packNo", materialReceiveForm.packNo)} value={materialReceiveForm.packNo} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, packNo: event.target.value.toUpperCase() }))} placeholder="เช่น 1-533931" /></label>
           <label><span>Coil No.</span><input value={materialReceiveForm.coilNo} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, coilNo: event.target.value.toUpperCase() }))} /></label>
           <label><span>Lot No.</span><input value={materialReceiveForm.lotNo} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, lotNo: event.target.value.toUpperCase() }))} /></label>
           <label><span>Spec</span><input value={materialReceiveForm.spec} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, spec: event.target.value.toUpperCase() }))} /></label>
-          <label><span>Quantity *</span><input required type="number" min={1} step={1} inputMode="numeric" value={materialReceiveForm.qty} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, qty: event.target.value.replace(/[^0-9]/g, "") }))} placeholder="เช่น 192" /></label>
+          <label><span>Quantity *</span><input required type="number" min={1} step={1} inputMode="numeric" style={ocrFieldStyle("qty", materialReceiveForm.qty)} value={materialReceiveForm.qty} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, qty: event.target.value.replace(/[^0-9]/g, "") }))} placeholder="เช่น 192" /></label>
           <label><span>หน่วย</span><select value={materialReceiveForm.unit} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, unit: event.target.value }))}><option value="SHEET">SHEET / แผ่น</option><option value="PCS">PCS / ชิ้น</option><option value="COIL">COIL</option><option value="KG">KG</option></select></label>
           <label><span>น้ำหนัก (kg)</span><input type="number" min={0} step="0.001" inputMode="decimal" value={materialReceiveForm.weightKg} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, weightKg: event.target.value }))} /></label>
           <label><span>วันที่รับเข้า *</span><input required type="date" value={materialReceiveForm.receivedDate} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, receivedDate: event.target.value }))} /></label>
@@ -4186,8 +4366,15 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <label className="wide"><span>หมายเหตุ</span><input value={materialReceiveForm.note} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, note: event.target.value }))} placeholder="รายละเอียดเพิ่มเติม (ถ้ามี)" /></label>
         </div>
       </div>
-      <footer><button type="button" className="button secondary" onClick={() => setMaterialReceiveForm(null)}>ยกเลิก / สแกนใหม่</button><button className="button primary" disabled={materialSaving || !materialReceiveForm.supplierCode || !materialReceiveForm.supplierDate || !materialReceiveForm.invoiceNo || !materialReceiveForm.materialCode || !materialReceiveForm.description || !materialReceiveForm.size || !materialReceiveForm.packNo || Number(materialReceiveForm.qty) <= 0}>{materialSaving ? "กำลังรับเข้า…" : "✓ ยืนยันรับ Mat’s เข้า"}</button></footer>
+      <footer><button type="button" className="button secondary" onClick={closeMaterialReceive}>ยกเลิก / สแกนใหม่</button><button className="button primary" disabled={materialSaving || !materialReceiveForm.supplierCode || !materialReceiveForm.supplierDate || !materialReceiveForm.invoiceNo || !materialReceiveForm.materialCode || !materialReceiveForm.description || !materialReceiveForm.size || !materialReceiveForm.packNo || Number(materialReceiveForm.qty) <= 0}>{materialSaving ? "กำลังรับเข้า…" : "✓ ยืนยันรับ Mat’s เข้า"}</button></footer>
     </form></div>}
+
+    {materialLabelView && <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setMaterialLabelView(null)} style={{ cursor: "zoom-out", zIndex: 60 }}>
+      <div style={{ maxWidth: "94vw", maxHeight: "92vh" }} onClick={(event) => event.stopPropagation()}>
+        <img src={materialLabelView.startsWith("data:") ? materialLabelView : `/api/material-labels?key=${encodeURIComponent(materialLabelView)}`} alt="รูปฉลาก Mat’s" style={{ maxWidth: "94vw", maxHeight: "84vh", objectFit: "contain", borderRadius: 10, background: "#fff", display: "block" }} />
+        <button type="button" className="button secondary" style={{ marginTop: 10, width: "100%" }} onClick={() => setMaterialLabelView(null)}>ปิด</button>
+      </div>
+    </div>}
     {materialIssueLot && <div className="modal-backdrop material-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="material-issue-title"><form className="material-modal material-issue-modal" onSubmit={saveMaterialIssue}>
       <header><div><span>⇧</span><div><small>{materialIssueLot.receiptNo}</small><h3 id="material-issue-title">ตรวจสอบก่อนเบิก Mat’s ออก</h3></div></div><button type="button" onClick={() => setMaterialIssueLot(null)} aria-label="ปิด">×</button></header>
       <div className="material-modal-body">

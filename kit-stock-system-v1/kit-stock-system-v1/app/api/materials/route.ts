@@ -111,7 +111,7 @@ const LOT_SELECT = `
     lot.original_qty AS originalQty, lot.remaining_qty AS remainingQty, lot.unit,
     lot.original_weight_kg AS originalWeightKg, lot.remaining_weight_kg AS remainingWeightKg,
     lot.supplier_date AS supplierDate, lot.received_date AS receivedDate,
-    lot.location, lot.status, lot.raw_payload AS rawPayload,
+    lot.location, lot.status, lot.label_image_key AS labelImageKey, lot.raw_payload AS rawPayload,
     lot.received_by_name AS receivedByName, lot.received_by_code AS receivedByCode,
     lot.created_at AS createdAt, lot.updated_at AS updatedAt
   FROM material_lots lot
@@ -201,20 +201,26 @@ export async function POST(request: Request) {
       if (!supplier) return Response.json({ error: "ไม่พบ Supplier ที่เลือก" }, { status: 400 });
       const duplicate = await DB.prepare("SELECT receipt_no AS receiptNo FROM material_lots WHERE supplier_code = ?1 AND barcode_value = ?2 LIMIT 1").bind(supplierCode, barcodeValue).first<{ receiptNo: string }>();
       if (duplicate) return Response.json({ error: `ฉลากนี้รับเข้าแล้วในเลขที่ ${duplicate.receiptNo}` }, { status: 409 });
+      // กันรับซ้ำด้วย Packing No. — ฉลากเดียวกันต้องรับได้ครั้งเดียว แม้ถ่าย/สแกนซ้ำ
+      if (packNo) {
+        const dupPack = await DB.prepare("SELECT receipt_no AS receiptNo FROM material_lots WHERE pack_no = ?1 LIMIT 1").bind(packNo).first<{ receiptNo: string }>();
+        if (dupPack) return Response.json({ error: `Packing No. ${packNo} รับเข้าแล้วในเลขที่ ${dupPack.receiptNo}` }, { status: 409 });
+      }
+      const labelImageKey = clean(body.labelImageKey, 300);
       const receiptNo = code("MAT-RCV");
       const lotResult = await DB.prepare(`
         INSERT INTO material_lots (
           receipt_no, supplier_code, barcode_value, invoice_no, pack_no, material_code,
           description, spec, size, lot_no, coil_no, original_qty, remaining_qty,
           unit, original_weight_kg, remaining_weight_kg, supplier_date,
-          received_date, location, status, raw_payload, received_by_name, received_by_code
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?13, ?14, ?14, ?15, ?16, ?17, 'in_stock', ?18, ?19, ?20)
+          received_date, location, status, label_image_key, raw_payload, received_by_name, received_by_code
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?13, ?14, ?14, ?15, ?16, ?17, 'in_stock', ?18, ?19, ?20, ?21)
       `).bind(
         receiptNo, supplierCode, barcodeValue, invoiceNo, packNo, materialCode,
         description, clean(body.spec, 180), size,
         clean(body.lotNo, 140), clean(body.coilNo, 140), qty,
         clean(body.unit, 30) || "SHEET", weightKg, supplierDate,
-        receivedDate, clean(body.location, 120), rawPayload, user.displayName, user.employeeCode,
+        receivedDate, clean(body.location, 120), labelImageKey, rawPayload, user.displayName, user.employeeCode,
       ).run();
       const lotId = Number(lotResult.meta.last_row_id);
       await DB.prepare(`

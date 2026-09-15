@@ -175,6 +175,7 @@ export const materialLots = sqliteTable("material_lots", {
   receivedDate: text("received_date").notNull(),
   location: text("location").notNull().default(""),
   status: text("status").notNull().default("in_stock"),
+  labelImageKey: text("label_image_key").notNull().default(""),
   rawPayload: text("raw_payload").notNull(),
   receivedByName: text("received_by_name").notNull(),
   receivedByCode: text("received_by_code").notNull(),
