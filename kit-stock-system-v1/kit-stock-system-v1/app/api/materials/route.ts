@@ -3,7 +3,7 @@ import { getRuntimeEnv } from "../../../runtime/env";
 
 type MaterialLot = {
   id: number; receiptNo: string; supplierCode: string; supplierName: string;
-  barcodeValue: string; packNo: string; materialCode: string; description: string;
+  barcodeValue: string; invoiceNo: string; packNo: string; materialCode: string; description: string;
   spec: string; size: string; lotNo: string; coilNo: string;
   originalQty: number; remainingQty: number; unit: string;
   originalWeightKg: number; remainingWeightKg: number;
@@ -44,6 +44,7 @@ function parseBarcode(rawValue: string) {
   const parsed = {
     supplierCode: "",
     barcodeValue: raw,
+    invoiceNo: "",
     packNo: "",
     materialCode: "",
     description: "",
@@ -105,7 +106,7 @@ function parseBarcode(rawValue: string) {
 const LOT_SELECT = `
   SELECT lot.id, lot.receipt_no AS receiptNo, lot.supplier_code AS supplierCode,
     supplier.name AS supplierName, lot.barcode_value AS barcodeValue,
-    lot.pack_no AS packNo, lot.material_code AS materialCode, lot.description,
+    lot.invoice_no AS invoiceNo, lot.pack_no AS packNo, lot.material_code AS materialCode, lot.description,
     lot.spec, lot.size, lot.lot_no AS lotNo, lot.coil_no AS coilNo,
     lot.original_qty AS originalQty, lot.remaining_qty AS remainingQty, lot.unit,
     lot.original_weight_kg AS originalWeightKg, lot.remaining_weight_kg AS remainingWeightKg,
@@ -133,7 +134,7 @@ export async function GET() {
           tx.weight_balance_after AS weightBalanceAfter, tx.job_no AS jobNo,
           tx.department, tx.purpose, tx.note, tx.actor_name AS actorName,
           tx.actor_code AS actorCode, tx.created_at AS createdAt,
-          lot.receipt_no AS receiptNo, lot.pack_no AS packNo,
+          lot.receipt_no AS receiptNo, lot.invoice_no AS invoiceNo, lot.pack_no AS packNo,
           lot.material_code AS materialCode, supplier.name AS supplierName
         FROM material_transactions tx
         INNER JOIN material_lots lot ON lot.id = tx.lot_id
@@ -157,7 +158,7 @@ export async function GET() {
     });
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : "โหลดข้อมูล Mat’s ไม่สำเร็จ";
-    return Response.json({ error: /no such table/i.test(message) ? `${message} กรุณารัน migration 0020 ก่อนใช้งาน` : message }, { status: 500 });
+    return Response.json({ error: /no such (table|column)/i.test(message) ? `${message} กรุณารัน migration ล่าสุดก่อนใช้งาน` : message }, { status: 500 });
   }
 }
 
@@ -183,12 +184,19 @@ export async function POST(request: Request) {
       const supplierCode = clean(body.supplierCode, 60);
       const rawPayload = clean(body.rawPayload, 2000);
       const barcodeValue = clean(body.barcodeValue || rawPayload, 500);
+      const invoiceNo = clean(body.invoiceNo, 140).toUpperCase();
+      const packNo = clean(body.packNo, 140).toUpperCase();
       const materialCode = clean(body.materialCode, 100).toUpperCase();
+      const description = clean(body.description, 300).toUpperCase();
+      const size = clean(body.size, 180).toUpperCase();
       const qty = whole(body.qty);
       const weightKg = decimal(body.weightKg);
+      const supplierDate = isoDate(body.supplierDate);
       const receivedDate = isoDate(body.receivedDate);
-      if (!supplierCode || !barcodeValue || !materialCode || !receivedDate) return Response.json({ error: "กรุณาระบุ Supplier, Barcode, Material และวันที่รับ" }, { status: 400 });
-      if (qty <= 0 && weightKg <= 0) return Response.json({ error: "จำนวนรับหรือ Weight ต้องมากกว่า 0" }, { status: 400 });
+      if (!supplierCode || !barcodeValue || !invoiceNo || !materialCode || !description || !size || !packNo || !supplierDate || !receivedDate) {
+        return Response.json({ error: "กรุณาระบุ Supplier, Date, Inv No., Code, Description, Size, Packing No. และวันที่รับให้ครบ" }, { status: 400 });
+      }
+      if (qty <= 0) return Response.json({ error: "Quantity ต้องมากกว่า 0" }, { status: 400 });
       const supplier = await DB.prepare("SELECT code FROM material_suppliers WHERE code = ?1 AND active = 1").bind(supplierCode).first();
       if (!supplier) return Response.json({ error: "ไม่พบ Supplier ที่เลือก" }, { status: 400 });
       const duplicate = await DB.prepare("SELECT receipt_no AS receiptNo FROM material_lots WHERE supplier_code = ?1 AND barcode_value = ?2 LIMIT 1").bind(supplierCode, barcodeValue).first<{ receiptNo: string }>();
@@ -196,16 +204,16 @@ export async function POST(request: Request) {
       const receiptNo = code("MAT-RCV");
       const lotResult = await DB.prepare(`
         INSERT INTO material_lots (
-          receipt_no, supplier_code, barcode_value, pack_no, material_code,
+          receipt_no, supplier_code, barcode_value, invoice_no, pack_no, material_code,
           description, spec, size, lot_no, coil_no, original_qty, remaining_qty,
           unit, original_weight_kg, remaining_weight_kg, supplier_date,
           received_date, location, status, raw_payload, received_by_name, received_by_code
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?12, ?13, ?13, ?14, ?15, ?16, 'in_stock', ?17, ?18, ?19)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?13, ?14, ?14, ?15, ?16, ?17, 'in_stock', ?18, ?19, ?20)
       `).bind(
-        receiptNo, supplierCode, barcodeValue, clean(body.packNo, 140), materialCode,
-        clean(body.description, 300), clean(body.spec, 180), clean(body.size, 180),
+        receiptNo, supplierCode, barcodeValue, invoiceNo, packNo, materialCode,
+        description, clean(body.spec, 180), size,
         clean(body.lotNo, 140), clean(body.coilNo, 140), qty,
-        clean(body.unit, 30) || "SHEET", weightKg, isoDate(body.supplierDate),
+        clean(body.unit, 30) || "SHEET", weightKg, supplierDate,
         receivedDate, clean(body.location, 120), rawPayload, user.displayName, user.employeeCode,
       ).run();
       const lotId = Number(lotResult.meta.last_row_id);
@@ -255,6 +263,6 @@ export async function POST(request: Request) {
     return Response.json({ error: "ไม่รู้จักคำสั่ง Mat’s" }, { status: 400 });
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : "บันทึก Mat’s ไม่สำเร็จ";
-    return Response.json({ error: /no such table/i.test(message) ? `${message} กรุณารัน migration 0020 ก่อนใช้งาน` : message }, { status: 500 });
+    return Response.json({ error: /no such (table|column)/i.test(message) ? `${message} กรุณารัน migration ล่าสุดก่อนใช้งาน` : message }, { status: 500 });
   }
 }
