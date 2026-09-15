@@ -1412,9 +1412,15 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           videoElement,
           (result, _error, controls) => {
             if (!result || stopped) return;
+            const scannedValue = result.getText().trim();
+            const isMaterialCamera = cameraPurpose === "material_receive" || cameraPurpose === "material_issue";
+            if (isMaterialCamera && /appdb\.tisi\.go\.th/i.test(scannedValue)) {
+              setCameraError("พบ QR ใบรับรอง มอก. กรุณาเล็งกล้องที่ Data Matrix หรือบาร์โค้ดยาวบนฉลาก กล้องจะสแกนต่ออัตโนมัติ");
+              return;
+            }
             stopped = true;
             controls.stop();
-            handleCameraValue(result.getText());
+            handleCameraValue(scannedValue);
           },
         );
       } catch (caught) {
