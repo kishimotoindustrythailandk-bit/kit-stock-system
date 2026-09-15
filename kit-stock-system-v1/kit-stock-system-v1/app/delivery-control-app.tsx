@@ -191,7 +191,7 @@ type ForecastPreview = {
 type MaterialSupplier = { code: string; name: string; labelFormat: string; active: number };
 type MaterialLot = {
   id: number; receiptNo: string; supplierCode: string; supplierName: string;
-  barcodeValue: string; packNo: string; materialCode: string; description: string;
+  barcodeValue: string; invoiceNo: string; packNo: string; materialCode: string; description: string;
   spec: string; size: string; lotNo: string; coilNo: string;
   originalQty: number; remainingQty: number; unit: string;
   originalWeightKg: number; remainingWeightKg: number; supplierDate: string;
@@ -203,14 +203,14 @@ type MaterialTransaction = {
   qty: number; weightKg: number; qtyBalanceAfter: number; weightBalanceAfter: number;
   jobNo: string; department: string; purpose: string; note: string;
   actorName: string; actorCode: string; createdAt: string; receiptNo: string;
-  packNo: string; materialCode: string; supplierName: string;
+  invoiceNo: string; packNo: string; materialCode: string; supplierName: string;
 };
 type MaterialPayload = {
   suppliers: MaterialSupplier[]; lots: MaterialLot[]; transactions: MaterialTransaction[];
   summary: { lotCount: number; qty: number; weightKg: number; depletedCount: number };
 };
 type MaterialReceiveForm = {
-  supplierCode: string; rawPayload: string; barcodeValue: string; packNo: string;
+  supplierCode: string; rawPayload: string; barcodeValue: string; invoiceNo: string; packNo: string;
   materialCode: string; description: string; spec: string; size: string;
   lotNo: string; coilNo: string; qty: string; unit: string; weightKg: string;
   supplierDate: string; receivedDate: string; location: string; note: string; warning: string;
@@ -984,6 +984,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           supplierCode: parsed.supplierCode || "",
           rawPayload,
           barcodeValue: parsed.barcodeValue || rawPayload,
+          invoiceNo: parsed.invoiceNo || "",
           packNo: parsed.packNo || "",
           materialCode: parsed.materialCode || "",
           description: parsed.description || "",
@@ -3778,7 +3779,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   function renderMaterials() {
     const needle = materialSearch.trim().toLowerCase();
     const visibleLots = materials.lots.filter((item) => !needle || [
-      item.receiptNo, item.supplierName, item.barcodeValue, item.packNo,
+      item.receiptNo, item.supplierName, item.barcodeValue, item.invoiceNo, item.packNo,
       item.materialCode, item.spec, item.size, item.lotNo, item.coilNo, item.location,
     ].some((value) => String(value || "").toLowerCase().includes(needle)));
     const weight = (value: number) => Number(value || 0).toLocaleString("th-TH", { maximumFractionDigits: 3 });
@@ -3824,12 +3825,12 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         </div>
       </Card>}
 
-      {materialMode === "stock" && <Card title="ยอด Mat’s คงเหลือตาม Pack / Coil" action={<div className="material-list-tools"><input value={materialSearch} onChange={(event) => setMaterialSearch(event.target.value)} placeholder="⌕ ค้นหา Material, Supplier, Pack, Coil หรือ Location" /><button className="button secondary" onClick={() => void loadMaterials()}>↻ รีเฟรช</button></div>}>
-        {materialsLoading ? <div className="loading-state"><span /><p>กำลังโหลด Stock Mat’s…</p></div> : visibleLots.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table materials-stock-table"><thead><tr><th>เลขที่รับ / Supplier</th><th>Material / Spec</th><th>Pack / Coil / Lot</th><th>วันที่รับ / Location</th><th className="num">รับเข้า</th><th className="num">คงเหลือ</th><th>สถานะ</th><th>จัดการ</th></tr></thead><tbody>{visibleLots.map((item) => <tr key={item.id}>
-          <td data-label="เลขที่รับ / Supplier"><b>{item.receiptNo}</b><small>{item.supplierName}</small></td>
-          <td data-label="Material / Spec"><b>{item.materialCode}</b><small>{[item.spec, item.size].filter(Boolean).join(" · ") || item.description || "—"}</small></td>
-          <td data-label="Pack / Coil / Lot"><b>{item.packNo || item.barcodeValue}</b><small>{[item.coilNo && `Coil ${item.coilNo}`, item.lotNo && `Lot ${item.lotNo}`].filter(Boolean).join(" · ") || "—"}</small></td>
-          <td data-label="วันที่รับ / Location"><b>{formatDate(item.receivedDate)}</b><small>{item.location || "—"}</small></td>
+      {materialMode === "stock" && <Card title="ยอด Mat’s คงเหลือตาม Packing No." action={<div className="material-list-tools"><input value={materialSearch} onChange={(event) => setMaterialSearch(event.target.value)} placeholder="⌕ ค้นหา Code, Inv No., Supplier หรือ Packing No." /><button className="button secondary" onClick={() => void loadMaterials()}>↻ รีเฟรช</button></div>}>
+        {materialsLoading ? <div className="loading-state"><span /><p>กำลังโหลด Stock Mat’s…</p></div> : visibleLots.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table materials-stock-table"><thead><tr><th>วันที่ / Inv No.</th><th>Code / Description</th><th>Size / Supplier</th><th>Packing No. / Location</th><th className="num">รับเข้า</th><th className="num">คงเหลือ</th><th>สถานะ</th><th>จัดการ</th></tr></thead><tbody>{visibleLots.map((item) => <tr key={item.id}>
+          <td data-label="วันที่ / Inv No."><b>{formatDate(item.supplierDate)}</b><small>Inv {item.invoiceNo || "—"} · {item.receiptNo}</small></td>
+          <td data-label="Code / Description"><b>{item.materialCode}</b><small>{item.description || "—"}</small></td>
+          <td data-label="Size / Supplier"><b>{item.size || "—"}</b><small>{item.supplierName}{item.spec ? ` · ${item.spec}` : ""}</small></td>
+          <td data-label="Packing No. / Location"><b>{item.packNo || item.barcodeValue}</b><small>{item.location || "—"}</small></td>
           <td data-label="รับเข้า" className="num"><b>{fmt(item.originalQty)} {item.unit}</b><small>{weight(item.originalWeightKg)} kg</small></td>
           <td data-label="คงเหลือ" className="num"><b>{fmt(item.remainingQty)} {item.unit}</b><small>{weight(item.remainingWeightKg)} kg</small></td>
           <td data-label="สถานะ"><span className={`material-stock-status ${item.status}`}>{item.status === "in_stock" ? "มีของ" : "เบิกหมด"}</span></td>
@@ -3838,11 +3839,11 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       </Card>}
 
       {materialMode === "history" && <Card title="ประวัติรับเข้า–เบิกออก" action={<div className="material-list-tools"><input value={materialSearch} onChange={(event) => setMaterialSearch(event.target.value)} placeholder="⌕ ค้นหาเลขที่รายการ, Material หรือผู้ดำเนินการ" /><button className="button secondary" onClick={() => void loadMaterials()}>↻ รีเฟรช</button></div>}>
-        {materials.transactions.filter((item) => !needle || [item.transactionNo, item.receiptNo, item.materialCode, item.packNo, item.supplierName, item.actorName, item.jobNo, item.department].join(" ").toLowerCase().includes(needle)).length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>วันและเวลา</th><th>รายการ</th><th>Material / Supplier</th><th>Pack / Coil</th><th className="num">จำนวน</th><th>Job / แผนก</th><th>ผู้ดำเนินการ</th></tr></thead><tbody>{materials.transactions.filter((item) => !needle || [item.transactionNo, item.receiptNo, item.materialCode, item.packNo, item.supplierName, item.actorName, item.jobNo, item.department].join(" ").toLowerCase().includes(needle)).map((item) => <tr key={item.id}>
+        {materials.transactions.filter((item) => !needle || [item.transactionNo, item.receiptNo, item.invoiceNo, item.materialCode, item.packNo, item.supplierName, item.actorName, item.jobNo, item.department].join(" ").toLowerCase().includes(needle)).length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>วันและเวลา</th><th>รายการ</th><th>Code / Supplier</th><th>Inv / Packing No.</th><th className="num">จำนวน</th><th>Job / แผนก</th><th>ผู้ดำเนินการ</th></tr></thead><tbody>{materials.transactions.filter((item) => !needle || [item.transactionNo, item.receiptNo, item.invoiceNo, item.materialCode, item.packNo, item.supplierName, item.actorName, item.jobNo, item.department].join(" ").toLowerCase().includes(needle)).map((item) => <tr key={item.id}>
           <td data-label="วันและเวลา"><b>{formatDateTime(item.createdAt)}</b><small>{item.transactionNo}</small></td>
           <td data-label="รายการ"><span className={`material-transaction-type ${item.type}`}>{item.type === "receive" ? "รับเข้า" : "เบิกออก"}</span></td>
           <td data-label="Material / Supplier"><b>{item.materialCode}</b><small>{item.supplierName}</small></td>
-          <td data-label="Pack / Coil"><b>{item.packNo || "—"}</b><small>{item.receiptNo}</small></td>
+          <td data-label="Inv / Packing No."><b>{item.invoiceNo || "—"}</b><small>{item.packNo || "—"} · {item.receiptNo}</small></td>
           <td data-label="จำนวน" className="num"><b>{item.type === "receive" ? "+" : "-"}{fmt(item.qty)}</b><small>{weight(item.weightKg)} kg · เหลือ {fmt(item.qtyBalanceAfter)}</small></td>
           <td data-label="Job / แผนก"><b>{item.jobNo || "—"}</b><small>{item.department || item.purpose || "—"}</small></td>
           <td data-label="ผู้ดำเนินการ"><b>{item.actorName}</b><small>{item.actorCode}</small></td>
@@ -4168,22 +4169,24 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         <div className="material-barcode-value"><small>ข้อมูลที่สแกนได้</small><b>{materialReceiveForm.rawPayload}</b></div>
         <div className="material-form-grid">
           <label className="wide"><span>Supplier *</span><select required value={materialReceiveForm.supplierCode} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, supplierCode: event.target.value }))}><option value="">เลือก Supplier</option>{materials.suppliers.filter((item) => item.active).map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
-          <label><span>Material / Part No. *</span><input required value={materialReceiveForm.materialCode} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, materialCode: event.target.value.toUpperCase() }))} /></label>
-          <label><span>Pack No.</span><input value={materialReceiveForm.packNo} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, packNo: event.target.value.toUpperCase() }))} /></label>
+          <label><span>Date / วันที่บนเอกสาร *</span><input required type="date" value={materialReceiveForm.supplierDate} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, supplierDate: event.target.value }))} /></label>
+          <label><span>Inv No. *</span><input required value={materialReceiveForm.invoiceNo} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, invoiceNo: event.target.value.toUpperCase() }))} placeholder="เช่น 1-668732" /></label>
+          <label><span>Code / รหัส Mat’s *</span><input required value={materialReceiveForm.materialCode} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, materialCode: event.target.value.toUpperCase() }))} placeholder="เช่น RM-300-MCP" /></label>
+          <label><span>Description *</span><input required value={materialReceiveForm.description} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, description: event.target.value.toUpperCase() }))} placeholder="เช่น VU02D612H74" /></label>
+          <label><span>Size *</span><input required value={materialReceiveForm.size} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, size: event.target.value.toUpperCase() }))} placeholder="เช่น T0.8*96*658.5 MSB-CE-ZC" /></label>
+          <label><span>Packing No. *</span><input required value={materialReceiveForm.packNo} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, packNo: event.target.value.toUpperCase() }))} placeholder="เช่น 1-533931" /></label>
           <label><span>Coil No.</span><input value={materialReceiveForm.coilNo} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, coilNo: event.target.value.toUpperCase() }))} /></label>
           <label><span>Lot No.</span><input value={materialReceiveForm.lotNo} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, lotNo: event.target.value.toUpperCase() }))} /></label>
           <label><span>Spec</span><input value={materialReceiveForm.spec} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, spec: event.target.value.toUpperCase() }))} /></label>
-          <label><span>Size</span><input value={materialReceiveForm.size} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, size: event.target.value }))} /></label>
-          <label><span>จำนวนรับเข้า</span><input type="number" min={0} step={1} inputMode="numeric" value={materialReceiveForm.qty} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, qty: event.target.value.replace(/[^0-9]/g, "") }))} /></label>
+          <label><span>Quantity *</span><input required type="number" min={1} step={1} inputMode="numeric" value={materialReceiveForm.qty} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, qty: event.target.value.replace(/[^0-9]/g, "") }))} placeholder="เช่น 192" /></label>
           <label><span>หน่วย</span><select value={materialReceiveForm.unit} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, unit: event.target.value }))}><option value="SHEET">SHEET / แผ่น</option><option value="PCS">PCS / ชิ้น</option><option value="COIL">COIL</option><option value="KG">KG</option></select></label>
           <label><span>น้ำหนัก (kg)</span><input type="number" min={0} step="0.001" inputMode="decimal" value={materialReceiveForm.weightKg} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, weightKg: event.target.value }))} /></label>
-          <label><span>วันที่บนฉลาก</span><input type="date" value={materialReceiveForm.supplierDate} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, supplierDate: event.target.value }))} /></label>
           <label><span>วันที่รับเข้า *</span><input required type="date" value={materialReceiveForm.receivedDate} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, receivedDate: event.target.value }))} /></label>
           <label><span>Location</span><input value={materialReceiveForm.location} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, location: event.target.value.toUpperCase() }))} placeholder="ตำแหน่งจัดเก็บ" /></label>
-          <label className="wide"><span>รายละเอียด / หมายเหตุ</span><input value={materialReceiveForm.description || materialReceiveForm.note} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, description: event.target.value }))} placeholder="ชื่อ Mat’s หรือรายละเอียดเพิ่มเติม" /></label>
+          <label className="wide"><span>หมายเหตุ</span><input value={materialReceiveForm.note} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, note: event.target.value }))} placeholder="รายละเอียดเพิ่มเติม (ถ้ามี)" /></label>
         </div>
       </div>
-      <footer><button type="button" className="button secondary" onClick={() => setMaterialReceiveForm(null)}>ยกเลิก / สแกนใหม่</button><button className="button primary" disabled={materialSaving || !materialReceiveForm.supplierCode || !materialReceiveForm.materialCode || (!Number(materialReceiveForm.qty) && !Number(materialReceiveForm.weightKg))}>{materialSaving ? "กำลังรับเข้า…" : "✓ ยืนยันรับ Mat’s เข้า"}</button></footer>
+      <footer><button type="button" className="button secondary" onClick={() => setMaterialReceiveForm(null)}>ยกเลิก / สแกนใหม่</button><button className="button primary" disabled={materialSaving || !materialReceiveForm.supplierCode || !materialReceiveForm.supplierDate || !materialReceiveForm.invoiceNo || !materialReceiveForm.materialCode || !materialReceiveForm.description || !materialReceiveForm.size || !materialReceiveForm.packNo || Number(materialReceiveForm.qty) <= 0}>{materialSaving ? "กำลังรับเข้า…" : "✓ ยืนยันรับ Mat’s เข้า"}</button></footer>
     </form></div>}
     {materialIssueLot && <div className="modal-backdrop material-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="material-issue-title"><form className="material-modal material-issue-modal" onSubmit={saveMaterialIssue}>
       <header><div><span>⇧</span><div><small>{materialIssueLot.receiptNo}</small><h3 id="material-issue-title">ตรวจสอบก่อนเบิก Mat’s ออก</h3></div></div><button type="button" onClick={() => setMaterialIssueLot(null)} aria-label="ปิด">×</button></header>
