@@ -76,8 +76,7 @@ function parseBarcode(rawValue: string) {
   }
 
   if (/appdb\.tisi\.go\.th/i.test(raw)) {
-    parsed.supplierCode = "SUMISHO";
-    parsed.warning = "QR นี้เป็นลิงก์ มอก. กรุณาเล็งกล้องที่บาร์โค้ดยาวบนฉลาก หรือกรอกเลข Pack/Part ด้วยตนเอง";
+    parsed.warning = "QR นี้เป็นลิงก์ใบรับรอง มอก. ซึ่งใช้ระบุ Supplier ไม่ได้ กรุณาสแกน Data Matrix หรือบาร์โค้ดยาวบนฉลาก";
     return parsed;
   }
   if (/^W[A-Z0-9-]{6,}$/i.test(raw)) {
