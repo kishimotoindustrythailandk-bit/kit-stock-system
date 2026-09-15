@@ -158,6 +158,7 @@ export const materialLots = sqliteTable("material_lots", {
   receiptNo: text("receipt_no").notNull().unique(),
   supplierCode: text("supplier_code").notNull().references(() => materialSuppliers.code),
   barcodeValue: text("barcode_value").notNull(),
+  invoiceNo: text("invoice_no").notNull().default(""),
   packNo: text("pack_no").notNull().default(""),
   materialCode: text("material_code").notNull(),
   description: text("description").notNull().default(""),
