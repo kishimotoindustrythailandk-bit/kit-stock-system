@@ -4,7 +4,7 @@
 
 import { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
-type PageKey = "dashboard" | "stock" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
+type PageKey = "dashboard" | "stock" | "materials" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
 
 type DueLine = {
   id: number;
@@ -188,6 +188,33 @@ type ForecastPreview = {
   fileName: string; sourceCalculatedAt: string; sourceLabel: string; sourceRowCount: number;
   materialCount: number; totalQty: number; rows: ForecastUploadRow[];
 };
+type MaterialSupplier = { code: string; name: string; labelFormat: string; active: number };
+type MaterialLot = {
+  id: number; receiptNo: string; supplierCode: string; supplierName: string;
+  barcodeValue: string; packNo: string; materialCode: string; description: string;
+  spec: string; size: string; lotNo: string; coilNo: string;
+  originalQty: number; remainingQty: number; unit: string;
+  originalWeightKg: number; remainingWeightKg: number; supplierDate: string;
+  receivedDate: string; location: string; status: string; rawPayload: string;
+  receivedByName: string; receivedByCode: string; createdAt: string; updatedAt: string;
+};
+type MaterialTransaction = {
+  id: number; transactionNo: string; lotId: number; type: "receive" | "issue";
+  qty: number; weightKg: number; qtyBalanceAfter: number; weightBalanceAfter: number;
+  jobNo: string; department: string; purpose: string; note: string;
+  actorName: string; actorCode: string; createdAt: string; receiptNo: string;
+  packNo: string; materialCode: string; supplierName: string;
+};
+type MaterialPayload = {
+  suppliers: MaterialSupplier[]; lots: MaterialLot[]; transactions: MaterialTransaction[];
+  summary: { lotCount: number; qty: number; weightKg: number; depletedCount: number };
+};
+type MaterialReceiveForm = {
+  supplierCode: string; rawPayload: string; barcodeValue: string; packNo: string;
+  materialCode: string; description: string; spec: string; size: string;
+  lotNo: string; coilNo: string; qty: string; unit: string; weightKg: string;
+  supplierDate: string; receivedDate: string; location: string; note: string; warning: string;
+};
 type UserRole = "production" | "stock" | "qc" | "delivery" | "dispatcher" | "inspector";
 type UserForm = { id?: number; employeeCode: string; displayName: string; email: string; role: UserRole; pin: string; active: boolean; permissions: PageKey[] };
 
@@ -205,6 +232,7 @@ const EMPTY_USER: UserForm = { employeeCode: "", displayName: "", email: "", rol
 const NAV: Array<{ key: PageKey; label: string; icon: string }> = [
   { key: "dashboard", label: "หน้าหลัก", icon: "⌂" },
   { key: "stock", label: "Stock", icon: "▦" },
+  { key: "materials", label: "Mat’s รับเข้า–เบิกออก", icon: "▣" },
   { key: "forecast", label: "Forecast Stock", icon: "▧" },
   { key: "parts", label: "ทะเบียน Part", icon: "▦" },
   { key: "tags", label: "พิมพ์ Tag", icon: "▤" },
@@ -248,6 +276,7 @@ function updatePageLocation(next: PageKey, mode: "push" | "replace" = "push") {
 const PERMISSION_HELP: Record<PageKey, string> = {
   dashboard: "ภาพรวม Due และสถานะงาน",
   stock: "รับ Tag เข้า Stock และดูยอดคงเหลือ",
+  materials: "รับเข้า เบิกออก และตรวจยอดคงเหลือ Mat’s ตาม Pack / Coil",
   forecast: "นำเข้า Forecast ลูกค้าและตรวจว่ายอด Stock ส่งได้ถึงวันไหน",
   parts: "ทะเบียน Part และรูปชิ้นงาน",
   tags: "ทะเบียน Part สร้างและพิมพ์ Tag",
@@ -266,6 +295,7 @@ const PERMISSION_HELP: Record<PageKey, string> = {
 const PAGE_SUBTITLE: Record<PageKey, string> = {
   dashboard: "ภาพรวมการส่งงานและสถานะล่าสุด",
   stock: "สแกนรับเข้า ตรวจสอบยอดคงเหลือ และประวัติ Stock",
+  materials: "สแกนฉลาก Supplier เพื่อรับเข้า–เบิกออกและตรวจยอด Mat’s คงเหลือ",
   forecast: "นำเข้า Forecast รายวันและตรวจสอบว่ายอด Stock ส่งได้ถึงวันไหน",
   parts: "เพิ่ม นำเข้า และจัดการรูปชิ้นงานของแต่ละ Part",
   tags: "ทะเบียน Part สร้าง Tag และพิมพ์ Tag รับงานเข้า Stock",
@@ -688,6 +718,16 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [forecastProgress, setForecastProgress] = useState(0);
   const [forecastSearch, setForecastSearch] = useState("");
   const [forecastStatus, setForecastStatus] = useState<"all" | "covered" | "shortage" | "overdue">("all");
+  const [materials, setMaterials] = useState<MaterialPayload>({ suppliers: [], lots: [], transactions: [], summary: { lotCount: 0, qty: 0, weightKg: 0, depletedCount: 0 } });
+  const [materialsLoading, setMaterialsLoading] = useState(false);
+  const [materialMode, setMaterialMode] = useState<"receive" | "issue" | "stock" | "history">("receive");
+  const [materialScan, setMaterialScan] = useState("");
+  const [materialScanning, setMaterialScanning] = useState(false);
+  const [materialReceiveForm, setMaterialReceiveForm] = useState<MaterialReceiveForm | null>(null);
+  const [materialIssueLot, setMaterialIssueLot] = useState<MaterialLot | null>(null);
+  const [materialIssueForm, setMaterialIssueForm] = useState({ qty: "", weightKg: "", jobNo: "", department: "", purpose: "", note: "" });
+  const [materialSaving, setMaterialSaving] = useState(false);
+  const [materialSearch, setMaterialSearch] = useState("");
   const [rawTag, setRawTag] = useState("");
   const [tagPreview, setTagPreview] = useState<TagPreview | null>(null);
   const [dispatchConfirmation, setDispatchConfirmation] = useState<VerifyResult | null>(null);
@@ -711,7 +751,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [query, setQuery] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
-  const [cameraPurpose, setCameraPurpose] = useState<"scan" | "stock">("scan");
+  const [cameraPurpose, setCameraPurpose] = useState<"scan" | "stock" | "material_receive" | "material_issue">("scan");
   const [cameraError, setCameraError] = useState("");
   const [selectedScan, setSelectedScan] = useState<DueScan | null>(null);
   const [settings, setSettings] = useState({ partial: true, confirm: true, sound: true, autoFocus: true });
@@ -899,6 +939,124 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     }
   }
 
+  async function loadMaterials() {
+    setMaterialsLoading(true);
+    try {
+      const response = await fetch("/api/materials", { cache: "no-store" });
+      const data = await response.json() as MaterialPayload & { error?: string };
+      if (!response.ok) throw new Error(data.error || "โหลดข้อมูล Mat’s ไม่สำเร็จ");
+      setMaterials({
+        suppliers: data.suppliers || [],
+        lots: data.lots || [],
+        transactions: data.transactions || [],
+        summary: data.summary || { lotCount: 0, qty: 0, weightKg: 0, depletedCount: 0 },
+      });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "โหลดข้อมูล Mat’s ไม่สำเร็จ" });
+    } finally {
+      setMaterialsLoading(false);
+    }
+  }
+
+  async function previewMaterialScan(rawValue?: string, mode: "receive" | "issue" = materialMode === "issue" ? "issue" : "receive") {
+    const rawPayload = (rawValue ?? materialScan).trim();
+    if (!rawPayload || materialScanning) return;
+    setMaterialScanning(true);
+    try {
+      const response = await fetch("/api/materials", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "preview", rawPayload }),
+      });
+      const data = await response.json() as {
+        parsed?: Omit<MaterialReceiveForm, "rawPayload" | "receivedDate" | "location" | "note"> & { qty: number; weightKg: number };
+        existing?: MaterialLot | null; error?: string;
+      };
+      if (!response.ok || !data.parsed) throw new Error(data.error || "อ่านฉลาก Mat’s ไม่สำเร็จ");
+      setMaterialScan(rawPayload);
+      if (mode === "issue") {
+        if (!data.existing) throw new Error("ยังไม่พบฉลากนี้ใน Stock กรุณารับเข้าก่อนเบิก");
+        if (data.existing.status !== "in_stock") throw new Error("Mat’s รายการนี้ถูกเบิกออกหมดแล้ว");
+        openMaterialIssue(data.existing);
+      } else {
+        if (data.existing) throw new Error(`ฉลากนี้รับเข้าแล้ว เลขที่ ${data.existing.receiptNo}`);
+        const parsed = data.parsed;
+        setMaterialReceiveForm({
+          supplierCode: parsed.supplierCode || "",
+          rawPayload,
+          barcodeValue: parsed.barcodeValue || rawPayload,
+          packNo: parsed.packNo || "",
+          materialCode: parsed.materialCode || "",
+          description: parsed.description || "",
+          spec: parsed.spec || "",
+          size: parsed.size || "",
+          lotNo: parsed.lotNo || "",
+          coilNo: parsed.coilNo || "",
+          qty: parsed.qty ? String(parsed.qty) : "",
+          unit: parsed.unit || "SHEET",
+          weightKg: parsed.weightKg ? String(parsed.weightKg) : "",
+          supplierDate: parsed.supplierDate || "",
+          receivedDate: bangkokDateTimeKey().slice(0, 10),
+          location: "",
+          note: "",
+          warning: parsed.warning || "",
+        });
+      }
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "อ่านฉลาก Mat’s ไม่สำเร็จ" });
+    } finally {
+      setMaterialScanning(false);
+    }
+  }
+
+  function openMaterialIssue(lot: MaterialLot) {
+    setMaterialIssueLot(lot);
+    setMaterialIssueForm({ qty: "", weightKg: "", jobNo: "", department: "", purpose: "", note: "" });
+  }
+
+  async function saveMaterialReceipt(event: FormEvent) {
+    event.preventDefault();
+    if (!materialReceiveForm || materialSaving) return;
+    setMaterialSaving(true);
+    try {
+      const response = await fetch("/api/materials", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "receive", ...materialReceiveForm }),
+      });
+      const data = await response.json() as { lot?: MaterialLot; error?: string };
+      if (!response.ok) throw new Error(data.error || "รับ Mat’s เข้าไม่สำเร็จ");
+      setMaterialReceiveForm(null);
+      setMaterialScan("");
+      setNotice({ type: "success", text: `รับ Mat’s ${data.lot?.materialCode || ""} เข้าแล้ว เลขที่ ${data.lot?.receiptNo || ""}` });
+      await loadMaterials();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "รับ Mat’s เข้าไม่สำเร็จ" });
+    } finally {
+      setMaterialSaving(false);
+    }
+  }
+
+  async function saveMaterialIssue(event: FormEvent) {
+    event.preventDefault();
+    if (!materialIssueLot || materialSaving) return;
+    setMaterialSaving(true);
+    try {
+      const response = await fetch("/api/materials", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "issue", lotId: materialIssueLot.id, ...materialIssueForm }),
+      });
+      const data = await response.json() as { transactionNo?: string; qtyAfter?: number; weightAfter?: number; error?: string };
+      if (!response.ok) throw new Error(data.error || "เบิก Mat’s ไม่สำเร็จ");
+      setMaterialIssueLot(null);
+      setMaterialScan("");
+      setNotice({ type: "success", text: `เบิก Mat’s สำเร็จ เลขที่ ${data.transactionNo || ""} · คงเหลือ ${fmt(data.qtyAfter || 0)} ${materialIssueLot.unit}` });
+      await loadMaterials();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "เบิก Mat’s ไม่สำเร็จ" });
+    } finally {
+      setMaterialSaving(false);
+    }
+  }
+
   async function selectForecastFile(event: ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0] || null;
     setForecastFile(selected);
@@ -1003,6 +1161,12 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   useEffect(() => {
     if (page !== "forecast") return;
     const timer = window.setTimeout(() => void loadForecast(), 0);
+    return () => window.clearTimeout(timer);
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== "materials") return;
+    const timer = window.setTimeout(() => void loadMaterials(), 0);
     return () => window.clearTimeout(timer);
   }, [page]);
 
@@ -1199,60 +1363,60 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
 
   useEffect(() => {
     if (!cameraOpen) return;
-    let stream: MediaStream | null = null;
+    const videoElement = videoRef.current;
     let stopped = false;
-    let timer = 0;
+    let scannerControls: { stop(): void } | null = null;
+    const handleCameraValue = (value: string) => {
+      setCameraOpen(false);
+      if (cameraPurpose === "material_receive" || cameraPurpose === "material_issue") {
+        setMaterialScan(value);
+        void previewMaterialScan(value, cameraPurpose === "material_issue" ? "issue" : "receive");
+        return;
+      }
+      if (cameraPurpose === "stock") {
+        setStockScan(value);
+        void receiveStockTag(value);
+        return;
+      }
+      if (page === "verify") {
+        setVerifyRaw(value);
+        setVerifyResult(null);
+        void verifyTag(value);
+        return;
+      }
+      if (page === "replacement") {
+        setReplacementTag(value);
+        setReplacementPreview(null);
+        void previewReplacementIssue(value);
+        return;
+      }
+      if (page === "arrange") {
+        setArrangeTag(value);
+        setArrangementPreview(null);
+        void stageStockTag(value);
+      } else {
+        setRawTag(value);
+        setTagPreview(null);
+        void previewDispatchTag(value);
+      }
+    };
     async function start() {
       try {
         setCameraError("");
-        if (!navigator.mediaDevices?.getUserMedia) throw new Error("อุปกรณ์นี้ไม่รองรับการเปิดกล้อง");
-        const Detector = (window as unknown as { BarcodeDetector?: new (options: { formats: string[] }) => { detect(source: HTMLVideoElement): Promise<Array<{ rawValue?: string }>> } }).BarcodeDetector;
-        if (!Detector) throw new Error("เบราว์เซอร์นี้ยังไม่รองรับ QR ผ่านกล้อง กรุณาใช้เครื่องยิงหรือ Chrome บน Android");
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
-        if (!videoRef.current || stopped) return;
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-        const detector = new Detector({ formats: ["qr_code"] });
-        const detect = async () => {
-          if (stopped || !videoRef.current) return;
-          try {
-            const codes = await detector.detect(videoRef.current);
-            const value = codes[0]?.rawValue;
-            if (value) {
-              setCameraOpen(false);
-              if (cameraPurpose === "stock") {
-                setStockScan(value);
-                void receiveStockTag(value);
-                return;
-              }
-              if (page === "verify") {
-                setVerifyRaw(value);
-                setVerifyResult(null);
-                void verifyTag(value);
-                return;
-              }
-              if (page === "replacement") {
-                setReplacementTag(value);
-                setReplacementPreview(null);
-                void previewReplacementIssue(value);
-                return;
-              }
-              const arrangeMode = page === "arrange";
-              if (arrangeMode) {
-                setArrangeTag(value);
-                setArrangementPreview(null);
-                void stageStockTag(value);
-              } else {
-                setRawTag(value);
-                setTagPreview(null);
-                void previewDispatchTag(value);
-              }
-              return;
-            }
-          } catch { /* keep scanning */ }
-          timer = window.setTimeout(detect, 350);
-        };
-        void detect();
+        if (!navigator.mediaDevices?.getUserMedia || !videoElement) throw new Error("อุปกรณ์นี้ไม่รองรับการเปิดกล้อง");
+        const { BrowserMultiFormatReader } = await import("@zxing/browser");
+        if (stopped) return;
+        const reader = new BrowserMultiFormatReader(undefined, { delayBetweenScanAttempts: 250, delayBetweenScanSuccess: 800 });
+        scannerControls = await reader.decodeFromConstraints(
+          { video: { facingMode: { ideal: "environment" } }, audio: false },
+          videoElement,
+          (result, _error, controls) => {
+            if (!result || stopped) return;
+            stopped = true;
+            controls.stop();
+            handleCameraValue(result.getText());
+          },
+        );
       } catch (caught) {
         setCameraError(caught instanceof Error ? caught.message : "เปิดกล้องไม่สำเร็จ");
       }
@@ -1260,8 +1424,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     void start();
     return () => {
       stopped = true;
-      window.clearTimeout(timer);
-      stream?.getTracks().forEach((track) => track.stop());
+      scannerControls?.stop();
+      const stream = videoElement?.srcObject;
+      if (stream instanceof MediaStream) stream.getTracks().forEach((track) => track.stop());
     };
   }, [cameraOpen, cameraPurpose, page]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -3597,6 +3762,82 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     </div>;
   }
 
+  function renderMaterials() {
+    const needle = materialSearch.trim().toLowerCase();
+    const visibleLots = materials.lots.filter((item) => !needle || [
+      item.receiptNo, item.supplierName, item.barcodeValue, item.packNo,
+      item.materialCode, item.spec, item.size, item.lotNo, item.coilNo, item.location,
+    ].some((value) => String(value || "").toLowerCase().includes(needle)));
+    const weight = (value: number) => Number(value || 0).toLocaleString("th-TH", { maximumFractionDigits: 3 });
+    const tabs = [
+      { key: "receive" as const, label: "รับ Mat’s เข้า", icon: "⇩" },
+      { key: "issue" as const, label: "เบิก Mat’s ออก", icon: "⇧" },
+      { key: "stock" as const, label: "ยอดคงเหลือ", icon: "▣" },
+      { key: "history" as const, label: "ประวัติ", icon: "◷" },
+    ];
+    const scanPanel = (mode: "receive" | "issue") => <div className={`material-scan-panel ${mode}`}>
+      <button type="button" className="material-camera-zone" disabled={materialScanning} onClick={() => { setCameraPurpose(mode === "receive" ? "material_receive" : "material_issue"); setCameraOpen(true); }}>
+        <span>{mode === "receive" ? "⇩" : "⇧"}</span>
+        <b>{materialScanning ? "กำลังอ่านฉลาก…" : mode === "receive" ? "แตะเพื่อสแกนรับ Mat’s เข้า" : "แตะเพื่อสแกนฉลากที่ต้องการเบิก"}</b>
+        <small>รองรับ QR, Data Matrix, Code 128 และ Code 39 ผ่านกล้องมือถือ</small>
+      </button>
+      <form onSubmit={(event) => { event.preventDefault(); void previewMaterialScan(undefined, mode); }}>
+        <input value={materialScan} onChange={(event) => setMaterialScan(event.target.value)} placeholder="หรือกรอกรหัส Pack / Coil / Barcode" autoComplete="off" />
+        <button className="button primary" disabled={!materialScan.trim() || materialScanning}>ตรวจสอบ</button>
+      </form>
+    </div>;
+
+    return <div className="materials-page">
+      <div className="materials-summary">
+        <article className="material-summary-card blue"><span>▣</span><div><small>Pack / Coil คงเหลือ</small><b>{fmt(materials.summary.lotCount)}</b><em>รายการ</em></div></article>
+        <article className="material-summary-card green"><span>▤</span><div><small>จำนวนคงเหลือ</small><b>{fmt(materials.summary.qty)}</b><em>แผ่น / ชิ้น</em></div></article>
+        <article className="material-summary-card purple"><span>◆</span><div><small>น้ำหนักคงเหลือ</small><b>{weight(materials.summary.weightKg)}</b><em>kg</em></div></article>
+        <article className="material-summary-card orange"><span>✓</span><div><small>เบิกออกหมดแล้ว</small><b>{fmt(materials.summary.depletedCount)}</b><em>Pack / Coil</em></div></article>
+      </div>
+      <div className="materials-tabs">{tabs.map((tab) => <button type="button" key={tab.key} className={materialMode === tab.key ? "active" : ""} onClick={() => { setMaterialMode(tab.key); setMaterialScan(""); }}><span>{tab.icon}</span>{tab.label}</button>)}</div>
+
+      {materialMode === "receive" && <Card className="materials-work-card" title="สแกนฉลาก Supplier เพื่อรับเข้า">
+        {scanPanel("receive")}
+        <div className="material-supplier-formats"><b>ฉลาก Supplier ที่รองรับ</b><div>{materials.suppliers.map((supplier) => <span key={supplier.code}><strong>{supplier.name}</strong><small>{supplier.labelFormat}</small></span>)}</div></div>
+        <div className="material-work-note"><span>!</span><p><b>ตรวจข้อมูลก่อนบันทึกทุกครั้ง</b><small>หาก Barcode มีเพียง Pack/Coil ระบบจะให้กรอก Part, จำนวน และน้ำหนักเพิ่มเติมในหน้าตรวจรับ</small></p></div>
+      </Card>}
+
+      {materialMode === "issue" && <Card className="materials-work-card" title="สแกนหรือเลือกรายการเพื่อเบิกออก">
+        {scanPanel("issue")}
+        <div className="material-or"><span>หรือเลือกจาก Stock ที่มีอยู่</span></div>
+        <div className="material-quick-lots">
+          {materials.lots.filter((item) => item.status === "in_stock").slice(0, 8).map((item) => <button type="button" key={item.id} onClick={() => openMaterialIssue(item)}><span><b>{item.materialCode}</b><small>{item.supplierName}</small></span><span><b>{item.packNo || item.barcodeValue}</b><small>{item.location || "ยังไม่ระบุ Location"}</small></span><strong>{fmt(item.remainingQty)} {item.unit}<small>{weight(item.remainingWeightKg)} kg</small></strong><i>เบิก →</i></button>)}
+          {!materials.lots.some((item) => item.status === "in_stock") && <Empty title="ยังไม่มี Mat’s พร้อมเบิก" text="สแกนรับ Mat’s เข้าก่อน แล้วรายการจะปรากฏที่นี่" />}
+        </div>
+      </Card>}
+
+      {materialMode === "stock" && <Card title="ยอด Mat’s คงเหลือตาม Pack / Coil" action={<div className="material-list-tools"><input value={materialSearch} onChange={(event) => setMaterialSearch(event.target.value)} placeholder="⌕ ค้นหา Material, Supplier, Pack, Coil หรือ Location" /><button className="button secondary" onClick={() => void loadMaterials()}>↻ รีเฟรช</button></div>}>
+        {materialsLoading ? <div className="loading-state"><span /><p>กำลังโหลด Stock Mat’s…</p></div> : visibleLots.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table materials-stock-table"><thead><tr><th>เลขที่รับ / Supplier</th><th>Material / Spec</th><th>Pack / Coil / Lot</th><th>วันที่รับ / Location</th><th className="num">รับเข้า</th><th className="num">คงเหลือ</th><th>สถานะ</th><th>จัดการ</th></tr></thead><tbody>{visibleLots.map((item) => <tr key={item.id}>
+          <td data-label="เลขที่รับ / Supplier"><b>{item.receiptNo}</b><small>{item.supplierName}</small></td>
+          <td data-label="Material / Spec"><b>{item.materialCode}</b><small>{[item.spec, item.size].filter(Boolean).join(" · ") || item.description || "—"}</small></td>
+          <td data-label="Pack / Coil / Lot"><b>{item.packNo || item.barcodeValue}</b><small>{[item.coilNo && `Coil ${item.coilNo}`, item.lotNo && `Lot ${item.lotNo}`].filter(Boolean).join(" · ") || "—"}</small></td>
+          <td data-label="วันที่รับ / Location"><b>{formatDate(item.receivedDate)}</b><small>{item.location || "—"}</small></td>
+          <td data-label="รับเข้า" className="num"><b>{fmt(item.originalQty)} {item.unit}</b><small>{weight(item.originalWeightKg)} kg</small></td>
+          <td data-label="คงเหลือ" className="num"><b>{fmt(item.remainingQty)} {item.unit}</b><small>{weight(item.remainingWeightKg)} kg</small></td>
+          <td data-label="สถานะ"><span className={`material-stock-status ${item.status}`}>{item.status === "in_stock" ? "มีของ" : "เบิกหมด"}</span></td>
+          <td data-label="จัดการ">{item.status === "in_stock" ? <button className="tiny-button" onClick={() => openMaterialIssue(item)}>เบิกออก</button> : "—"}</td>
+        </tr>)}</tbody></table></div> : <Empty title={materialSearch ? "ไม่พบรายการที่ค้นหา" : "ยังไม่มี Stock Mat’s"} text={materialSearch ? "ลองเปลี่ยนคำค้นหา" : "สแกนรับ Mat’s เข้าแล้วรายการจะแสดงที่นี่"} />}
+      </Card>}
+
+      {materialMode === "history" && <Card title="ประวัติรับเข้า–เบิกออก" action={<div className="material-list-tools"><input value={materialSearch} onChange={(event) => setMaterialSearch(event.target.value)} placeholder="⌕ ค้นหาเลขที่รายการ, Material หรือผู้ดำเนินการ" /><button className="button secondary" onClick={() => void loadMaterials()}>↻ รีเฟรช</button></div>}>
+        {materials.transactions.filter((item) => !needle || [item.transactionNo, item.receiptNo, item.materialCode, item.packNo, item.supplierName, item.actorName, item.jobNo, item.department].join(" ").toLowerCase().includes(needle)).length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>วันและเวลา</th><th>รายการ</th><th>Material / Supplier</th><th>Pack / Coil</th><th className="num">จำนวน</th><th>Job / แผนก</th><th>ผู้ดำเนินการ</th></tr></thead><tbody>{materials.transactions.filter((item) => !needle || [item.transactionNo, item.receiptNo, item.materialCode, item.packNo, item.supplierName, item.actorName, item.jobNo, item.department].join(" ").toLowerCase().includes(needle)).map((item) => <tr key={item.id}>
+          <td data-label="วันและเวลา"><b>{formatDateTime(item.createdAt)}</b><small>{item.transactionNo}</small></td>
+          <td data-label="รายการ"><span className={`material-transaction-type ${item.type}`}>{item.type === "receive" ? "รับเข้า" : "เบิกออก"}</span></td>
+          <td data-label="Material / Supplier"><b>{item.materialCode}</b><small>{item.supplierName}</small></td>
+          <td data-label="Pack / Coil"><b>{item.packNo || "—"}</b><small>{item.receiptNo}</small></td>
+          <td data-label="จำนวน" className="num"><b>{item.type === "receive" ? "+" : "-"}{fmt(item.qty)}</b><small>{weight(item.weightKg)} kg · เหลือ {fmt(item.qtyBalanceAfter)}</small></td>
+          <td data-label="Job / แผนก"><b>{item.jobNo || "—"}</b><small>{item.department || item.purpose || "—"}</small></td>
+          <td data-label="ผู้ดำเนินการ"><b>{item.actorName}</b><small>{item.actorCode}</small></td>
+        </tr>)}</tbody></table></div> : <Empty title="ยังไม่มีประวัติ Mat’s" text="รายการรับเข้าและเบิกออกจะแสดงที่นี่" />}
+      </Card>}
+    </div>;
+  }
+
   function renderForecast() {
     const summaryData = forecast.summary || { materialCount: 0, stockQty: 0, outstandingQty: 0, overdueQty: 0, totalShortage: 0, coveredMaterials: 0, shortageMaterials: 0 };
     const needle = forecastSearch.trim().toLowerCase();
@@ -3823,7 +4064,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     </>;
   }
 
-  const pageContent: Record<PageKey, () => ReactNode> = { dashboard: renderDashboard, stock: renderStock, forecast: renderForecast, parts: renderParts, tags: renderTags, plan: renderPlan, arrange: () => renderScan("arrange"), replacement: renderReplacement, verify: renderVerify, dispatch: () => renderScan("dispatch"), exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
+  const pageContent: Record<PageKey, () => ReactNode> = { dashboard: renderDashboard, stock: renderStock, materials: renderMaterials, forecast: renderForecast, parts: renderParts, tags: renderTags, plan: renderPlan, arrange: () => renderScan("arrange"), replacement: renderReplacement, verify: renderVerify, dispatch: () => renderScan("dispatch"), exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
   const activeNav = NAV.find((item) => item.key === page) || NAV.find((item) => item.key === firstAllowedPage) || NAV[0];
 
   return <div className="control-shell">
@@ -3907,7 +4148,46 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       </div>
       {(dispatchConfirmation.verdict === "ready" || dispatchConfirmation.verdict === "ready_noimg") ? <footer><button type="button" className="button secondary" onClick={() => setDispatchConfirmation(null)}>ยกเลิก / ตรวจใหม่</button><button type="button" className="button confirm-dispatch-button" disabled={checkingTag} onClick={() => void confirmDispatch()}>{checkingTag ? "กำลังขายออก…" : "✓ ยืนยันขายออกและตัดยอด"}</button></footer> : <footer className="dispatch-confirm-blocked"><p>ไม่สามารถขายออกได้: {dispatchConfirmation.message || "ข้อมูลไม่พร้อมขายออก"}</p><button type="button" className="button secondary" onClick={() => setDispatchConfirmation(null)}>ปิดและตรวจใหม่</button></footer>}
     </div></div>}
-    {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>{cameraPurpose === "stock" ? "สแกน Tag รับงานเข้า Stock" : "สแกน QR Tag ด้วยกล้อง"}</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className="camera-view"><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div>{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
+    {materialReceiveForm && <div className="modal-backdrop material-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="material-receive-title"><form className="material-modal" onSubmit={saveMaterialReceipt}>
+      <header><div><span>⇩</span><div><small>ตรวจพบฉลาก Supplier</small><h3 id="material-receive-title">ตรวจสอบก่อนรับ Mat’s เข้า</h3></div></div><button type="button" onClick={() => setMaterialReceiveForm(null)} aria-label="ปิด">×</button></header>
+      <div className="material-modal-body">
+        {materialReceiveForm.warning && <p className="material-warning">! {materialReceiveForm.warning}</p>}
+        <div className="material-barcode-value"><small>ข้อมูลที่สแกนได้</small><b>{materialReceiveForm.rawPayload}</b></div>
+        <div className="material-form-grid">
+          <label className="wide"><span>Supplier *</span><select required value={materialReceiveForm.supplierCode} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, supplierCode: event.target.value }))}><option value="">เลือก Supplier</option>{materials.suppliers.filter((item) => item.active).map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
+          <label><span>Material / Part No. *</span><input required value={materialReceiveForm.materialCode} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, materialCode: event.target.value.toUpperCase() }))} /></label>
+          <label><span>Pack No.</span><input value={materialReceiveForm.packNo} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, packNo: event.target.value.toUpperCase() }))} /></label>
+          <label><span>Coil No.</span><input value={materialReceiveForm.coilNo} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, coilNo: event.target.value.toUpperCase() }))} /></label>
+          <label><span>Lot No.</span><input value={materialReceiveForm.lotNo} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, lotNo: event.target.value.toUpperCase() }))} /></label>
+          <label><span>Spec</span><input value={materialReceiveForm.spec} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, spec: event.target.value.toUpperCase() }))} /></label>
+          <label><span>Size</span><input value={materialReceiveForm.size} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, size: event.target.value }))} /></label>
+          <label><span>จำนวนรับเข้า</span><input type="number" min={0} step={1} inputMode="numeric" value={materialReceiveForm.qty} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, qty: event.target.value.replace(/[^0-9]/g, "") }))} /></label>
+          <label><span>หน่วย</span><select value={materialReceiveForm.unit} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, unit: event.target.value }))}><option value="SHEET">SHEET / แผ่น</option><option value="PCS">PCS / ชิ้น</option><option value="COIL">COIL</option><option value="KG">KG</option></select></label>
+          <label><span>น้ำหนัก (kg)</span><input type="number" min={0} step="0.001" inputMode="decimal" value={materialReceiveForm.weightKg} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, weightKg: event.target.value }))} /></label>
+          <label><span>วันที่บนฉลาก</span><input type="date" value={materialReceiveForm.supplierDate} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, supplierDate: event.target.value }))} /></label>
+          <label><span>วันที่รับเข้า *</span><input required type="date" value={materialReceiveForm.receivedDate} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, receivedDate: event.target.value }))} /></label>
+          <label><span>Location</span><input value={materialReceiveForm.location} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, location: event.target.value.toUpperCase() }))} placeholder="ตำแหน่งจัดเก็บ" /></label>
+          <label className="wide"><span>รายละเอียด / หมายเหตุ</span><input value={materialReceiveForm.description || materialReceiveForm.note} onChange={(event) => setMaterialReceiveForm((current) => current && ({ ...current, description: event.target.value }))} placeholder="ชื่อ Mat’s หรือรายละเอียดเพิ่มเติม" /></label>
+        </div>
+      </div>
+      <footer><button type="button" className="button secondary" onClick={() => setMaterialReceiveForm(null)}>ยกเลิก / สแกนใหม่</button><button className="button primary" disabled={materialSaving || !materialReceiveForm.supplierCode || !materialReceiveForm.materialCode || (!Number(materialReceiveForm.qty) && !Number(materialReceiveForm.weightKg))}>{materialSaving ? "กำลังรับเข้า…" : "✓ ยืนยันรับ Mat’s เข้า"}</button></footer>
+    </form></div>}
+    {materialIssueLot && <div className="modal-backdrop material-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="material-issue-title"><form className="material-modal material-issue-modal" onSubmit={saveMaterialIssue}>
+      <header><div><span>⇧</span><div><small>{materialIssueLot.receiptNo}</small><h3 id="material-issue-title">ตรวจสอบก่อนเบิก Mat’s ออก</h3></div></div><button type="button" onClick={() => setMaterialIssueLot(null)} aria-label="ปิด">×</button></header>
+      <div className="material-modal-body">
+        <section className="material-issue-summary"><div><small>Material</small><b>{materialIssueLot.materialCode}</b><span>{materialIssueLot.spec || materialIssueLot.description}</span></div><div><small>Supplier / Pack</small><b>{materialIssueLot.supplierName}</b><span>{materialIssueLot.packNo || materialIssueLot.barcodeValue}</span></div><div><small>คงเหลือ</small><b>{fmt(materialIssueLot.remainingQty)} {materialIssueLot.unit}</b><span>{Number(materialIssueLot.remainingWeightKg || 0).toLocaleString("th-TH", { maximumFractionDigits: 3 })} kg</span></div></section>
+        <div className="material-form-grid">
+          <label><span>จำนวนเบิก</span><input type="number" min={0} max={materialIssueLot.remainingQty} step={1} inputMode="numeric" value={materialIssueForm.qty} onChange={(event) => setMaterialIssueForm((current) => ({ ...current, qty: event.target.value.replace(/[^0-9]/g, "") }))} placeholder={`สูงสุด ${fmt(materialIssueLot.remainingQty)}`} /></label>
+          <label><span>น้ำหนักที่เบิก (kg)</span><input type="number" min={0} max={materialIssueLot.remainingWeightKg} step="0.001" inputMode="decimal" value={materialIssueForm.weightKg} onChange={(event) => setMaterialIssueForm((current) => ({ ...current, weightKg: event.target.value }))} placeholder={`สูงสุด ${materialIssueLot.remainingWeightKg}`} /></label>
+          <label><span>Job / ใบเบิก *</span><input required value={materialIssueForm.jobNo} onChange={(event) => setMaterialIssueForm((current) => ({ ...current, jobNo: event.target.value.toUpperCase() }))} placeholder="เลขที่ Job หรือใบเบิก" /></label>
+          <label><span>แผนก / ผู้ขอเบิก *</span><input required value={materialIssueForm.department} onChange={(event) => setMaterialIssueForm((current) => ({ ...current, department: event.target.value }))} /></label>
+          <label className="wide"><span>นำไปใช้กับงาน / วัตถุประสงค์</span><input value={materialIssueForm.purpose} onChange={(event) => setMaterialIssueForm((current) => ({ ...current, purpose: event.target.value }))} /></label>
+          <label className="wide"><span>หมายเหตุ</span><input value={materialIssueForm.note} onChange={(event) => setMaterialIssueForm((current) => ({ ...current, note: event.target.value }))} /></label>
+        </div>
+      </div>
+      <footer><button type="button" className="button secondary" onClick={() => setMaterialIssueLot(null)}>ยกเลิก</button><button className="button material-issue-confirm" disabled={materialSaving || (!Number(materialIssueForm.qty) && !Number(materialIssueForm.weightKg)) || Number(materialIssueForm.qty) > materialIssueLot.remainingQty || Number(materialIssueForm.weightKg) > materialIssueLot.remainingWeightKg}>{materialSaving ? "กำลังเบิก…" : "✓ ยืนยันเบิกและตัดยอด"}</button></footer>
+    </form></div>}
+    {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>{cameraPurpose === "stock" ? "สแกน Tag รับงานเข้า Stock" : cameraPurpose === "material_receive" ? "สแกนฉลากรับ Mat’s เข้า" : cameraPurpose === "material_issue" ? "สแกนฉลากเพื่อเบิก Mat’s" : "สแกน Tag ด้วยกล้อง"}</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className="camera-view"><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div><p className="camera-format-hint">รองรับ QR · Data Matrix · Code 128 · Code 39</p>{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
     {userEditorOpen && <div className="modal-backdrop"><form className="user-modal permission-modal" onSubmit={saveUser}>
       <header><div><h3>{userForm.id ? "แก้ไขผู้ใช้งานและสิทธิ์" : "เพิ่มผู้ใช้งาน"}</h3><p>เลือกบทบาทและกำหนดหน้าที่แต่ละคนสามารถเปิดใช้งานได้</p></div><button type="button" onClick={() => setUserEditorOpen(false)}>×</button></header>
       <div className="user-form-grid">
