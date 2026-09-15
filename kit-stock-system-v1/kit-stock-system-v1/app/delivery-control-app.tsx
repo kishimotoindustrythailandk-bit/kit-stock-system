@@ -1404,9 +1404,16 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       try {
         setCameraError("");
         if (!navigator.mediaDevices?.getUserMedia || !videoElement) throw new Error("อุปกรณ์นี้ไม่รองรับการเปิดกล้อง");
-        const { BrowserMultiFormatReader } = await import("@zxing/browser");
+        const [{ BrowserMultiFormatReader, BarcodeFormat }, { DecodeHintType }] = await Promise.all([
+          import("@zxing/browser"),
+          import("@zxing/library"),
+        ]);
         if (stopped) return;
-        const reader = new BrowserMultiFormatReader(undefined, { delayBetweenScanAttempts: 250, delayBetweenScanSuccess: 800 });
+        const isMaterialCamera = cameraPurpose === "material_receive" || cameraPurpose === "material_issue";
+        const materialHints = new Map();
+        materialHints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.DATA_MATRIX, BarcodeFormat.CODE_128, BarcodeFormat.CODE_39]);
+        materialHints.set(DecodeHintType.TRY_HARDER, true);
+        const reader = new BrowserMultiFormatReader(isMaterialCamera ? materialHints : undefined, { delayBetweenScanAttempts: 250, delayBetweenScanSuccess: 800 });
         scannerControls = await reader.decodeFromConstraints(
           { video: { facingMode: { ideal: "environment" } }, audio: false },
           videoElement,
@@ -4193,7 +4200,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       </div>
       <footer><button type="button" className="button secondary" onClick={() => setMaterialIssueLot(null)}>ยกเลิก</button><button className="button material-issue-confirm" disabled={materialSaving || (!Number(materialIssueForm.qty) && !Number(materialIssueForm.weightKg)) || Number(materialIssueForm.qty) > materialIssueLot.remainingQty || Number(materialIssueForm.weightKg) > materialIssueLot.remainingWeightKg}>{materialSaving ? "กำลังเบิก…" : "✓ ยืนยันเบิกและตัดยอด"}</button></footer>
     </form></div>}
-    {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>{cameraPurpose === "stock" ? "สแกน Tag รับงานเข้า Stock" : cameraPurpose === "material_receive" ? "สแกนฉลากรับ Mat’s เข้า" : cameraPurpose === "material_issue" ? "สแกนฉลากเพื่อเบิก Mat’s" : "สแกน Tag ด้วยกล้อง"}</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className="camera-view"><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div><p className="camera-format-hint">รองรับ QR · Data Matrix · Code 128 · Code 39</p>{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
+    {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>{cameraPurpose === "stock" ? "สแกน Tag รับงานเข้า Stock" : cameraPurpose === "material_receive" ? "สแกนฉลากรับ Mat’s เข้า" : cameraPurpose === "material_issue" ? "สแกนฉลากเพื่อเบิก Mat’s" : "สแกน Tag ด้วยกล้อง"}</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className="camera-view"><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div><p className="camera-format-hint">{cameraPurpose === "material_receive" || cameraPurpose === "material_issue" ? "โหมด Mat’s อ่าน Data Matrix · Code 128 · Code 39 (ข้าม QR มอก.)" : "รองรับ QR · Data Matrix · Code 128 · Code 39"}</p>{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
     {userEditorOpen && <div className="modal-backdrop"><form className="user-modal permission-modal" onSubmit={saveUser}>
       <header><div><h3>{userForm.id ? "แก้ไขผู้ใช้งานและสิทธิ์" : "เพิ่มผู้ใช้งาน"}</h3><p>เลือกบทบาทและกำหนดหน้าที่แต่ละคนสามารถเปิดใช้งานได้</p></div><button type="button" onClick={() => setUserEditorOpen(false)}>×</button></header>
       <div className="user-form-grid">
