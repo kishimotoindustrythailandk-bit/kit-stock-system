@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const parts = sqliteTable("parts", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -144,65 +144,6 @@ export const forecastLines = sqliteTable("forecast_lines", {
   importSourceKey: uniqueIndex("idx_forecast_lines_import_source").on(table.importId, table.sourceKey),
   importMaterialDate: index("idx_forecast_lines_import_material_date").on(table.importId, table.materialCode, table.deliveryDate, table.deliveryTime),
 }));
-
-export const materialSuppliers = sqliteTable("material_suppliers", {
-  code: text("code").primaryKey(),
-  name: text("name").notNull(),
-  labelFormat: text("label_format").notNull().default(""),
-  active: integer("active", { mode: "boolean" }).notNull().default(true),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
-
-export const materialLots = sqliteTable("material_lots", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  receiptNo: text("receipt_no").notNull().unique(),
-  supplierCode: text("supplier_code").notNull().references(() => materialSuppliers.code),
-  barcodeValue: text("barcode_value").notNull(),
-  invoiceNo: text("invoice_no").notNull().default(""),
-  packNo: text("pack_no").notNull().default(""),
-  materialCode: text("material_code").notNull(),
-  description: text("description").notNull().default(""),
-  spec: text("spec").notNull().default(""),
-  size: text("size").notNull().default(""),
-  lotNo: text("lot_no").notNull().default(""),
-  coilNo: text("coil_no").notNull().default(""),
-  originalQty: integer("original_qty").notNull().default(0),
-  remainingQty: integer("remaining_qty").notNull().default(0),
-  unit: text("unit").notNull().default("SHEET"),
-  originalWeightKg: real("original_weight_kg").notNull().default(0),
-  remainingWeightKg: real("remaining_weight_kg").notNull().default(0),
-  supplierDate: text("supplier_date").notNull().default(""),
-  receivedDate: text("received_date").notNull(),
-  location: text("location").notNull().default(""),
-  status: text("status").notNull().default("in_stock"),
-  labelImageKey: text("label_image_key").notNull().default(""),
-  rawPayload: text("raw_payload").notNull(),
-  receivedByName: text("received_by_name").notNull(),
-  receivedByCode: text("received_by_code").notNull(),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-}, (table) => ({
-  supplierBarcode: uniqueIndex("idx_material_lots_supplier_barcode").on(table.supplierCode, table.barcodeValue),
-  materialStatus: index("idx_material_lots_material_status").on(table.materialCode, table.status),
-}));
-
-export const materialTransactions = sqliteTable("material_transactions", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  transactionNo: text("transaction_no").notNull().unique(),
-  lotId: integer("lot_id").notNull().references(() => materialLots.id, { onDelete: "restrict" }),
-  type: text("type").notNull(),
-  qty: integer("qty").notNull().default(0),
-  weightKg: real("weight_kg").notNull().default(0),
-  qtyBalanceAfter: integer("qty_balance_after").notNull().default(0),
-  weightBalanceAfter: real("weight_balance_after").notNull().default(0),
-  jobNo: text("job_no").notNull().default(""),
-  department: text("department").notNull().default(""),
-  purpose: text("purpose").notNull().default(""),
-  note: text("note").notNull().default(""),
-  actorName: text("actor_name").notNull(),
-  actorCode: text("actor_code").notNull(),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
 
 export const partImages = sqliteTable("part_images", {
   materialCode: text("material_code").primaryKey(),
