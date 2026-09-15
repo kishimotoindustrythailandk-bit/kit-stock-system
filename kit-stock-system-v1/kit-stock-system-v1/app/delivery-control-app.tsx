@@ -691,21 +691,31 @@ function parseLabelFields(text: string, overallConfidence = 100): { fields: Part
   return { fields, flags };
 }
 
-// ย่อรูปเป็น data URL (ใช้ทั้งพรีวิวและส่งเข้า OCR) — ฉลากใหญ่ย่อไม่เกิน maxEdge px
-async function fileToScaledDataUrl(file: File, maxEdge: number, quality = 0.85): Promise<string> {
-  const bmp = typeof window.createImageBitmap === "function" ? await createImageBitmap(file).catch(() => null) : null;
-  const width = bmp ? bmp.width : 0;
-  const height = bmp ? bmp.height : 0;
-  if (!bmp || !width || !height) {
-    return await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(file); });
+// ย่อรูปฉลากให้เล็กลงตั้งแต่ตอน decode เพื่อกันมือถือแรมน้อยหน่วยความจำไม่พอ (OOM)
+// คืนทั้ง dataUrl (พรีวิว/ป้อน OCR) และ blob เล็ก (ใช้อัปโหลดแทนไฟล์ต้นฉบับหลาย MB)
+async function scaleImageForOcr(file: File, maxEdge: number, quality = 0.7): Promise<{ dataUrl: string; blob: Blob }> {
+  let bmp: ImageBitmap | null = null;
+  if (typeof window.createImageBitmap === "function") {
+    // resizeWidth ช่วยให้เบราว์เซอร์ย่อระหว่าง decode ไม่ต้องกางบิตแมปเต็มความละเอียดในแรม
+    bmp = await createImageBitmap(file, { resizeWidth: maxEdge, resizeQuality: "medium" }).catch(() => null);
+    if (!bmp) bmp = await createImageBitmap(file).catch(() => null);
   }
-  const scale = Math.min(1, maxEdge / Math.max(width, height));
+  if (!bmp || !bmp.width || !bmp.height) {
+    const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(file); });
+    return { dataUrl, blob: file };
+  }
+  const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(width * scale));
-  canvas.height = Math.max(1, Math.round(height * scale));
+  canvas.width = Math.max(1, Math.round(bmp.width * scale));
+  canvas.height = Math.max(1, Math.round(bmp.height * scale));
   const ctx = canvas.getContext("2d");
   if (ctx) ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL("image/jpeg", quality);
+  if (typeof bmp.close === "function") bmp.close();
+  const dataUrl = canvas.toDataURL("image/jpeg", quality);
+  const blob = await fetch(dataUrl).then((response) => response.blob()).catch(() => file as Blob);
+  canvas.width = 0;
+  canvas.height = 0;
+  return { dataUrl, blob };
 }
 
 function PartImage({ materialCode, compact = false, version, slot = "master", strict = false }: { materialCode: string; compact?: boolean; version?: string; slot?: "master" | "actual"; strict?: boolean }) {
@@ -1123,41 +1133,60 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     if (materialOcrRunning) return;
     setMaterialOcrRunning(true);
     setNotice(null);
+
+    // ย่อรูปก่อน ถ้าย่อไม่ได้ (เครื่องแรมน้อยมาก) ก็ใช้ไฟล์เดิมแต่ยังเปิด popup ให้กรอกมือได้
+    let dataUrl = "";
+    let uploadFile: File = file;
     try {
-      const preview = await fileToScaledDataUrl(file, 1400, 0.85);
-      setMaterialLabelImage(preview);
-      setMaterialLabelFile(file);
+      const scaled = await scaleImageForOcr(file, 1100, 0.7);
+      dataUrl = scaled.dataUrl;
+      uploadFile = new File([scaled.blob], "label.jpg", { type: "image/jpeg" });
+    } catch { /* ปล่อยให้ไปต่อด้วยไฟล์เดิม */ }
+    setMaterialLabelImage(dataUrl || null);
+    setMaterialLabelFile(uploadFile);
+
+    let fields: Partial<Record<LabelField, string>> = {};
+    let flags: Partial<Record<LabelField, "low" | "none">> = {};
+    let ocrFailed = false;
+    try {
       const Tesseract = (await import("tesseract.js")).default;
-      const { data } = await Tesseract.recognize(preview, "eng");
+      const source: string | File = dataUrl || file;
+      const { data } = await Tesseract.recognize(source, "eng");
       const overall = Number(data?.confidence ?? 0);
-      const { fields, flags } = parseLabelFields(String(data?.text || ""), overall);
-      setMaterialOcrFlags(flags);
-      setMaterialReceiveForm({
-        supplierCode: "",
-        rawPayload: fields.packNo ? `OCR:${fields.packNo}` : `OCR:${Date.now()}`,
-        barcodeValue: fields.packNo || `OCR-${Date.now()}`,
-        invoiceNo: fields.invoiceNo || "",
-        packNo: fields.packNo || "",
-        materialCode: fields.materialCode || "",
-        description: fields.description || "",
-        spec: "",
-        size: fields.size || "",
-        lotNo: "",
-        coilNo: "",
-        qty: fields.qty || "",
-        unit: "SHEET",
-        weightKg: "",
-        supplierDate: fields.supplierDate || "",
-        receivedDate: bangkokDateTimeKey().slice(0, 10),
-        location: "",
-        note: "",
-        warning: "อ่านจากรูปฉลากด้วย OCR — กรุณาตรวจช่องที่เน้นสีเหลือง (ไม่มั่นใจ) และสีแดง (อ่านไม่ได้/ยังว่าง) ก่อนยืนยัน",
-      });
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? `อ่านฉลากไม่สำเร็จ: ${caught.message}` : "อ่านฉลากไม่สำเร็จ" });
-    } finally {
-      setMaterialOcrRunning(false);
+      const parsed = parseLabelFields(String(data?.text || ""), overall);
+      fields = parsed.fields;
+      flags = parsed.flags;
+    } catch {
+      // OCR ล้ม (มักเพราะหน่วยความจำไม่พอบนมือถือ) — ยังให้กรอกเองได้ รูปเก็บไว้แล้ว
+      ocrFailed = true;
+      flags = parseLabelFields("", 0).flags;
     }
+
+    setMaterialOcrFlags(flags);
+    setMaterialReceiveForm({
+      supplierCode: "",
+      rawPayload: fields.packNo ? `OCR:${fields.packNo}` : `OCR:${Date.now()}`,
+      barcodeValue: fields.packNo || `OCR-${Date.now()}`,
+      invoiceNo: fields.invoiceNo || "",
+      packNo: fields.packNo || "",
+      materialCode: fields.materialCode || "",
+      description: fields.description || "",
+      spec: "",
+      size: fields.size || "",
+      lotNo: "",
+      coilNo: "",
+      qty: fields.qty || "",
+      unit: "SHEET",
+      weightKg: "",
+      supplierDate: fields.supplierDate || "",
+      receivedDate: bangkokDateTimeKey().slice(0, 10),
+      location: "",
+      note: "",
+      warning: ocrFailed
+        ? "อ่านอัตโนมัติไม่สำเร็จบนเครื่องนี้ (หน่วยความจำไม่พอ) — รูปฉลากถูกเก็บให้แล้ว กรุณากรอกข้อมูลเอง หรือถ่ายใหม่ให้ชัดขึ้น/ปิดแอปอื่นก่อน"
+        : "อ่านจากรูปฉลากด้วย OCR — กรุณาตรวจช่องที่เน้นสีเหลือง (ไม่มั่นใจ) และสีแดง (อ่านไม่ได้/ยังว่าง) ก่อนยืนยัน",
+    });
+    setMaterialOcrRunning(false);
   }
 
   // ระบายสีช่องตามผล OCR: แดง = จำเป็นแต่ยังว่าง/อ่านไม่ได้, เหลือง = อ่านได้แต่ไม่มั่นใจ
