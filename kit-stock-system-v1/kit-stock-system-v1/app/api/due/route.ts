@@ -137,7 +137,7 @@ async function verifyCustomerTag(rawPayload: string) {
 
   const part = await DB.prepare("SELECT part_name AS partName, customer FROM stock_parts WHERE material_code = ?1 LIMIT 1")
     .bind(tag.materialCode).first<{ partName: string; customer: string }>();
-  const image = await DB.prepare("SELECT 1 AS ok FROM part_images WHERE material_code = ?1 LIMIT 1")
+  const image = await DB.prepare("SELECT 1 AS ok FROM part_master_images WHERE material_code = ?1 LIMIT 1")
     .bind(tag.materialCode).first<{ ok: number }>();
   const master = { materialCode: tag.materialCode, partName: part?.partName || "", customer: part?.customer || "", hasImage: !!image };
 
