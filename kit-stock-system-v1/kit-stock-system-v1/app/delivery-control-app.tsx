@@ -3180,6 +3180,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
 
   function renderStock() {
     const receivedStockTags = stock.tags.filter((item) => item.status === "in_stock" || item.status === "depleted");
+    const activeStockParts = stock.parts.filter((part) => part.active).sort((left, right) => left.materialCode.localeCompare(right.materialCode));
     const onHand = receivedStockTags.reduce((sum, item) => sum + Number(item.remainingQty), 0);
     const reserved = receivedStockTags.reduce((sum, item) => sum + Number(item.reservedQty), 0);
     const available = Math.max(onHand - reserved, 0);
@@ -3227,7 +3228,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <form className="stock-management-panel manual" onSubmit={saveManualStockReceipt}>
             <header><span>＋</span><div><b>รับงานเข้า Stock แบบคีย์เอง</b><small>สำหรับงานที่ไม่มี KIT Tag ระบบจะสร้าง Tag ภายในให้อัตโนมัติ</small></div></header>
             <div className="stock-management-fields">
-              <label><span>Part / Material *</span><select required value={manualStockForm.materialCode} onChange={(event) => setManualStockForm((current) => ({ ...current, materialCode: event.target.value }))}><option value="">เลือก Part</option>{stock.parts.filter((part) => part.active).map((part) => <option key={part.materialCode} value={part.materialCode}>{part.materialCode} · {part.partName}</option>)}</select></label>
+              <label><span>Part / Material *</span><input required list="manual-stock-part-options" value={manualStockForm.materialCode} onChange={(event) => setManualStockForm((current) => ({ ...current, materialCode: event.target.value.toUpperCase() }))} placeholder="พิมพ์รหัส/ชื่อ หรือเลือก Part" autoComplete="off" spellCheck={false} /><datalist id="manual-stock-part-options">{activeStockParts.map((part) => <option key={part.materialCode} value={part.materialCode}>{part.partName}{part.customer ? ` · ${part.customer}` : ""}</option>)}</datalist></label>
               <label><span>จำนวนรับเข้า *</span><input required type="number" min={1} step={1} inputMode="numeric" value={manualStockForm.qty} onChange={(event) => setManualStockForm((current) => ({ ...current, qty: event.target.value.replace(/[^0-9]/g, "") }))} placeholder="จำนวนชิ้น" /></label>
               <label><span>Job / เอกสารอ้างอิง *</span><input required value={manualStockForm.jobNo} onChange={(event) => setManualStockForm((current) => ({ ...current, jobNo: event.target.value }))} placeholder="เช่น JOB-260904-001" /></label>
               <label><span>วันที่ผลิต *</span><input required type="date" value={manualStockForm.productionDate} onChange={(event) => setManualStockForm((current) => ({ ...current, productionDate: event.target.value }))} /></label>
@@ -3239,7 +3240,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           {user.role === "admin" ? <form className="stock-management-panel count" onSubmit={previewStockCount}>
             <header><span>≋</span><div><b>ตรวจนับและปรับยอดสิ้นเดือน</b><small>ยอดลดจะไล่ตัดจาก KIT Tag ที่มีอยู่จริง โดยไม่แตะงานที่จัดรอขาย</small></div></header>
             <div className="stock-management-fields">
-              <label><span>Part / Material *</span><select required value={stockCountForm.materialCode} onChange={(event) => setStockCountForm((current) => ({ ...current, materialCode: event.target.value }))}><option value="">เลือก Part</option>{stock.parts.filter((part) => part.active).map((part) => <option key={part.materialCode} value={part.materialCode}>{part.materialCode} · {part.partName}</option>)}</select></label>
+              <label><span>Part / Material *</span><input required list="stock-count-part-options" value={stockCountForm.materialCode} onChange={(event) => setStockCountForm((current) => ({ ...current, materialCode: event.target.value.toUpperCase() }))} placeholder="พิมพ์รหัส/ชื่อ หรือเลือก Part" autoComplete="off" spellCheck={false} /><datalist id="stock-count-part-options">{activeStockParts.map((part) => <option key={part.materialCode} value={part.materialCode}>{part.partName}{part.customer ? ` · ${part.customer}` : ""}</option>)}</datalist></label>
               <label><span>ยอดนับจริง *</span><input required type="number" min={0} step={1} inputMode="numeric" value={stockCountForm.countedQty} onChange={(event) => setStockCountForm((current) => ({ ...current, countedQty: event.target.value.replace(/[^0-9]/g, "") }))} placeholder="รวมทุก Tag" /></label>
               <label><span>วันที่ตรวจนับ *</span><input required type="date" value={stockCountForm.countDate} onChange={(event) => setStockCountForm((current) => ({ ...current, countDate: event.target.value }))} /></label>
               <label className="wide"><span>สาเหตุการปรับยอด *</span><input required value={stockCountForm.reason} onChange={(event) => setStockCountForm((current) => ({ ...current, reason: event.target.value }))} placeholder="เช่น ตรวจนับสิ้นเดือน / พบยอดคลาดเคลื่อน" /></label>
