@@ -602,7 +602,7 @@ function PartImage({ materialCode, compact = false, version, slot = "master", st
   return <div className={`part-photo ${compact ? "compact" : ""}`}><img src={source} alt={`${imageLabel} ${materialCode}`} loading="lazy" decoding="async" onError={() => setFailedKey(key)} /></div>;
 }
 
-const EFFECTIVE_IMAGE_PROJECTION_VERSION = "effective-slots-v3";
+const EFFECTIVE_IMAGE_PROJECTION_VERSION = "separate-image-slots-v4";
 
 /**
  * โชว์รูปคู่กันตามตำแหน่งที่ผู้ใช้งานคุ้นเคย: รูปชิ้นงานอยู่ซ้าย และรูปตัวอย่างอยู่ขวา
