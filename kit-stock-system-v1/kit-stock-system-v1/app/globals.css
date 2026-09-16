@@ -2090,3 +2090,97 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
   .topbar-settings-banner .settings-hero-title { flex-basis: 210px; }
   .topbar-settings-banner .settings-hero-copy { min-width: 280px; }
 }
+
+/* Users page */
+.control-topbar.users-banner-topbar { color: #fff; border-bottom-color: #77bcef; background: linear-gradient(115deg, #0879e8 0%, #2d87ee 36%, #bde7ff 100%); }
+.control-topbar.users-banner-topbar::before { opacity: .34; background: radial-gradient(circle at 28% 125%, rgba(255,255,255,.35) 0 12%, transparent 12.5%), linear-gradient(120deg, transparent 38%, rgba(255,255,255,.42) 38% 54%, transparent 54%); }
+.topbar-users-banner { color: #fff; }
+.users-hero-title { display: flex; align-items: center; gap: 13px; flex: 0 0 245px; }
+.users-hero-title > span { display: grid; place-items: center; width: 53px; height: 53px; color: #fff; font-size: 50px; line-height: 1; filter: drop-shadow(0 5px 5px rgba(0, 67, 150, .25)); }
+.users-hero-title h2 { margin: 0; color: #fff; font-size: 25px; line-height: 1.1; }
+.users-hero-title p { margin: 5px 0 0; color: rgba(255,255,255,.9); font-size: 10px; }
+.users-hero-title p b { padding: 0 8px; }
+.users-hero-copy { flex: 1 1 300px; min-width: 230px; color: #073d9f; font-style: italic; transform: rotate(-5deg); }
+.users-hero-copy b, .users-hero-copy span { display: block; font-size: 17px; line-height: 1.05; }
+.users-hero-art { flex: 0 0 310px; display: flex; align-items: center; justify-content: flex-end; gap: 7px; color: #0753c2; }
+.users-hero-art > span, .users-hero-art > i { display: grid; place-items: center; width: 64px; height: 48px; color: #fff; border: 3px solid rgba(255,255,255,.78); border-radius: 8px; background: #1475d5; font-size: 27px; font-style: normal; }
+.users-hero-art > i { width: 43px; color: #183b63; background: #f3ae33; }
+.users-hero-art strong { margin-left: 9px; font-size: 13px; font-style: italic; text-align: right; }
+.users-banner-topbar .top-user b, .users-banner-topbar .top-user small, .users-banner-topbar .top-user a { color: #113971; }
+
+.users-page-redesign { display: grid; gap: 16px; }
+.users-overview-card, .users-list-card, .users-security-grid > section { overflow: hidden; border: 1px solid #dbe8f6; border-radius: 16px; background: #fff; box-shadow: 0 8px 24px rgba(30, 74, 128, .07); }
+.users-overview-card > header, .users-list-card > header { min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 17px; }
+.users-overview-card > header > div:first-child, .users-list-card > header > div:first-child, .users-security-grid section > header { display: flex; align-items: center; gap: 12px; }
+.users-overview-card > header > div:first-child > span, .users-list-card > header > div:first-child > span, .users-security-grid section > header > span { display: grid; place-items: center; width: 42px; height: 42px; flex: 0 0 42px; color: #0870df; border-radius: 11px; background: #eaf4ff; font-size: 22px; }
+.users-overview-card h3, .users-overview-card p, .users-list-card h3, .users-list-card p, .users-security-grid h3, .users-security-grid p { margin: 0; }
+.users-overview-card h3, .users-list-card h3, .users-security-grid h3 { color: #102e63; font-size: 17px; }
+.users-overview-card header p, .users-list-card header p, .users-security-grid header p { margin-top: 2px; color: #7186a3; font-size: 10px; }
+.users-overview-actions { display: flex; align-items: center; gap: 15px; }
+.users-overview-actions small { color: #7085a1; font-size: 9px; line-height: 1.6; }
+.users-stat-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 11px; padding: 0 17px 17px; }
+.users-stat { position: relative; min-height: 112px; display: flex; align-items: flex-start; gap: 11px; overflow: hidden; padding: 16px 13px; border: 1px solid; border-radius: 13px; }
+.users-stat > span { position: relative; z-index: 1; display: grid; place-items: center; width: 41px; height: 41px; flex: 0 0 41px; color: #fff; border-radius: 50%; background: currentColor; box-shadow: 0 5px 12px rgba(28, 79, 155, .2); font-size: 20px; }
+.users-stat > div { position: relative; z-index: 1; }
+.users-stat small, .users-stat b, .users-stat em { display: block; }
+.users-stat small { color: #173668; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.users-stat b { margin-top: 3px; color: #0c2250; font-size: 25px; line-height: 1; }
+.users-stat em { margin-top: 5px; color: #56718f; font-size: 9px; font-style: normal; }
+.users-stat > i { position: absolute; right: 9px; bottom: 4px; color: currentColor; font-size: 44px; font-style: normal; opacity: .2; }
+.users-stat.blue { color: #2782ef; border-color: #9bc9ff; background: linear-gradient(135deg, #eff7ff, #cfe7ff); }
+.users-stat.green { color: #36c66c; border-color: #8be4ac; background: linear-gradient(135deg, #effff4, #c9f4d8); }
+.users-stat.purple { color: #7644e9; border-color: #c5a9ff; background: linear-gradient(135deg, #f6f1ff, #ddccff); }
+.users-stat.orange { color: #ff8b31; border-color: #ffc377; background: linear-gradient(135deg, #fff7e9, #ffe0ad); }
+.users-stat.pink { color: #ee4d9d; border-color: #f7a2cf; background: linear-gradient(135deg, #fff1f8, #ffd3e9); }
+.users-stat.teal { color: #11afb6; border-color: #81dfe0; background: linear-gradient(135deg, #edffff, #c9f2ef); }
+
+.users-list-card > header { border-bottom: 1px solid #e0ebf6; }
+.users-list-card > header > div:first-child > span { color: #fff; background: linear-gradient(135deg, #4ba5ff, #1766db); }
+.users-list-tools { display: flex; align-items: center; gap: 9px; }
+.users-list-tools label { min-width: 285px; display: flex; align-items: center; gap: 7px; padding: 0 11px; border: 1px solid #d7e3f1; border-radius: 9px; background: #fff; }
+.users-list-tools label span { color: #52739d; font-size: 19px; }
+.users-list-tools input { width: 100%; min-height: 40px; padding: 0; border: 0; outline: 0; }
+.users-excel-button { color: #fff; background: linear-gradient(135deg, #24bb6f, #139b55); }
+.users-modern-table thead th { color: #224a79; background: #eaf6ff; }
+.users-modern-table td { vertical-align: middle; }
+.users-modern-table td > small { display: block; margin-top: 3px; color: #7386a0; font-size: 9px; }
+.users-modern-table .user-cell span { width: 38px; height: 38px; background: linear-gradient(135deg, #2185ef, #155bc6); }
+.users-modern-table .role-pill { font-size: 10px; }
+.role-pill.role-stock { color: #075ed0; background: #dceeff; }
+.role-pill.role-production { color: #6338d0; background: #eee7ff; }
+.role-pill.role-qc { color: #c52d75; background: #ffe2f0; }
+.role-pill.role-delivery { color: #08858b; background: #dff8f6; }
+.users-list-card > footer { display: flex; justify-content: flex-end; padding: 10px 16px; color: #657b98; border-top: 1px solid #e1ebf5; font-size: 9px; }
+.users-security-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.users-security-grid section > header { min-height: 62px; padding: 11px 16px; }
+.users-security-grid section:nth-child(2) > header > span { color: #7043df; background: #eee8ff; }
+.users-security-grid section > div { display: flex; align-items: center; gap: 12px; margin: 0 13px 13px; padding: 13px; border-radius: 10px; background: #eef6ff; }
+.users-security-grid section > div > span { display: grid; place-items: center; width: 36px; height: 36px; flex: 0 0 36px; color: #7444e0; border-radius: 10px; background: #e4d9ff; font-size: 19px; }
+.users-security-grid section > div p { display: grid; gap: 2px; }
+.users-security-grid section > div b { color: #274773; }
+.users-security-grid section > div small { color: #6e83a0; font-size: 9px; }
+
+@media (max-width: 1380px) {
+  .users-hero-art { display: none; }
+  .users-stat-grid { grid-template-columns: repeat(3, 1fr); }
+  .users-list-card > header { align-items: flex-start; flex-direction: column; }
+  .users-list-tools { width: 100%; }
+  .users-list-tools label { flex: 1; }
+}
+
+@media (max-width: 720px) {
+  .topbar-users-banner .users-hero-copy, .topbar-users-banner .users-hero-art { display: none; }
+  .users-hero-title > span { width: 42px; height: 42px; font-size: 38px; }
+  .users-hero-title h2 { font-size: 21px; }
+  .users-overview-card > header, .users-list-card > header { align-items: stretch; flex-direction: column; padding: 12px; }
+  .users-overview-actions { align-items: stretch; flex-direction: column; }
+  .users-overview-actions small { display: none; }
+  .users-stat-grid { grid-template-columns: 1fr 1fr; padding: 0 12px 12px; }
+  .users-stat { min-height: 102px; padding: 13px 10px; }
+  .users-stat > span { width: 35px; height: 35px; flex-basis: 35px; }
+  .users-stat small { white-space: normal; }
+  .users-list-tools { align-items: stretch; flex-direction: column; }
+  .users-list-tools label { width: 100%; min-width: 0; }
+  .users-list-tools .button { width: 100%; }
+  .users-security-grid { grid-template-columns: 1fr; }
+}
