@@ -190,6 +190,12 @@ type ForecastPreview = {
 };
 type UserRole = "production" | "stock" | "qc" | "delivery" | "dispatcher" | "inspector";
 type UserForm = { id?: number; employeeCode: string; displayName: string; email: string; role: UserRole; pin: string; active: boolean; permissions: PageKey[] };
+type AuditLog = {
+  id: number; moduleKey: string; moduleLabel: string; actionKey: string; actionLabel: string;
+  entityType: string; entityId: string; summary: string; detailJson: string;
+  beforeJson: string; afterJson: string; actorCode: string; actorName: string;
+  actorEmail: string; actorRole: string; ipAddress: string; createdAt: string;
+};
 
 const ROLE_LABELS: Record<string, string> = {
   admin: "ผู้ดูแลระบบ",
@@ -770,6 +776,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [historyDate, setHistoryDate] = useState("");
   const [historyDateTo, setHistoryDateTo] = useState("");
   const [historyType, setHistoryType] = useState("all");
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [auditLogsLoading, setAuditLogsLoading] = useState(false);
   const [partPage, setPartPage] = useState(1);
   const [partPageSize, setPartPageSize] = useState(10);
   const [tagSearch, setTagSearch] = useState("");
@@ -900,6 +908,20 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     }
   }
 
+  async function loadAuditLogs() {
+    setAuditLogsLoading(true);
+    try {
+      const response = await fetch("/api/audit-logs?limit=2000", { cache: "no-store" });
+      const data = await response.json() as { logs?: AuditLog[]; error?: string };
+      if (!response.ok) throw new Error(data.error || "โหลดประวัติการดำเนินการไม่สำเร็จ");
+      setAuditLogs(data.logs || []);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "โหลดประวัติการดำเนินการไม่สำเร็จ" });
+    } finally {
+      setAuditLogsLoading(false);
+    }
+  }
+
   async function selectForecastFile(event: ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0] || null;
     setForecastFile(selected);
@@ -1012,6 +1034,12 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const timer = window.setTimeout(() => void loadReplacements(), 0);
     return () => window.clearTimeout(timer);
   }, [page]);
+
+  useEffect(() => {
+    if (page !== "history" || !allowedPages.has("history")) return;
+    const timer = window.setTimeout(() => void loadAuditLogs(), 0);
+    return () => window.clearTimeout(timer);
+  }, [page, allowedPages]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (page !== "users" || user.role !== "admin" || !allowedPages.has("users")) return;
@@ -2493,6 +2521,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     anchor.download = reportFileName("csv");
     anchor.click();
     URL.revokeObjectURL(url);
+    void recordClientAudit("export_report_csv", `ส่งออกรายงาน CSV ${filtered.length} รายการ`, { itemCount: filtered.length, filterDate, filterFact, filterTime });
     setNotice({ type: "success", text: `ส่งออกรายงาน CSV แล้ว ${fmt(filtered.length)} รายการ` });
   }
 
@@ -2523,6 +2552,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       xlsx.utils.book_append_sheet(workbook, detailSheet, "รายละเอียด Due");
       xlsx.utils.book_append_sheet(workbook, traceSheet, "Job Traceability");
       xlsx.writeFile(workbook, reportFileName("xlsx"));
+      void recordClientAudit("export_report_excel", `ส่งออกรายงาน Excel ${filtered.length} รายการ`, { itemCount: filtered.length, filterDate, filterFact, filterTime });
       setNotice({ type: "success", text: `ส่งออกรายงาน Excel แล้ว ${fmt(filtered.length)} รายการ` });
     } catch (caught) {
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ส่งออก Excel ไม่สำเร็จ" });
@@ -2536,10 +2566,19 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const rows = filtered.map((due) => `<tr><td>${escape(formatDate(due.deliveryDate))}</td><td>${escape(due.deliveryTime)}</td><td>${escape(due.fact)} / ${escape(due.line || "—")}</td><td>${escape(due.materialCode)}<small>${escape(due.materialDescription)}</small></td><td>${fmt(due.reqQty)}</td><td>${fmt(due.scannedQty)}</td><td>${fmt(Math.max(due.reqQty - due.scannedQty, 0))}</td><td>${escape(stateLabel(due))}</td></tr>`).join("");
     popup.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>KIT Delivery Report</title><style>@page{size:A4 landscape;margin:12mm}body{font:12px Arial,sans-serif;color:#132647}header{display:flex;justify-content:space-between;border-bottom:3px solid #075fd7;padding-bottom:12px}h1{margin:0;color:#075fd7}.scope{color:#64748b}.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:14px 0}.metrics div{padding:10px;border:1px solid #dbe5f2;border-radius:8px}.metrics b{display:block;font-size:20px}table{width:100%;border-collapse:collapse}th{background:#eaf3ff;color:#123765}th,td{padding:7px;border:1px solid #dbe3ed;text-align:left}td:nth-last-child(-n+4){text-align:right}small{display:block;color:#718096;margin-top:3px}footer{margin-top:10px;color:#718096;text-align:right}@media print{button{display:none}}</style></head><body><header><div><h1>KIT Delivery Due Control</h1><b>รายงานสถานะการส่งงาน</b></div><div class="scope">วันที่ ${escape(filterDate ? formatDate(filterDate) : "ทุกวันที่")} · FAC ${escape(filterFact === "ALL" ? "ทั้งหมด" : filterFact)} · เวลา ${escape(filterTime === "ALL" ? "ทั้งหมด" : filterTime)}</div></header><section class="metrics"><div>รายการทั้งหมด<b>${fmt(summary.items)}</b></div><div>แผนทั้งหมด<b>${fmt(summary.plan)}</b></div><div>ส่งแล้ว<b>${fmt(summary.sent)}</b></div><div>ครบตามแผน<b>${fmt(summary.completed)}</b></div><div>คงเหลือ<b>${fmt(summary.partial + summary.pending)}</b></div></section><table><thead><tr><th>วันที่</th><th>เวลา</th><th>FAC / Line</th><th>Material / Part No.</th><th>แผน</th><th>ส่งแล้ว</th><th>คงเหลือ</th><th>สถานะ</th></tr></thead><tbody>${rows || '<tr><td colspan="8">ไม่พบข้อมูลตามตัวกรอง</td></tr>'}</tbody></table><footer>สร้างรายงาน ${escape(new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date()))}</footer><script>window.onload=()=>setTimeout(()=>window.print(),300)<\/script></body></html>`);
     popup.document.close();
+    void recordClientAudit("export_report_pdf", `พิมพ์หรือส่งออกรายงาน PDF ${filtered.length} รายการ`, { itemCount: filtered.length, filterDate, filterFact, filterTime });
+  }
+
+  async function recordClientAudit(action: string, summary: string, details?: Record<string, unknown>) {
+    await fetch("/api/audit-logs", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action, summary, details }),
+    }).catch(() => undefined);
   }
 
   function saveSettings() {
     window.localStorage.setItem("kit-due-settings", JSON.stringify(settings));
+    void recordClientAudit("save_settings", "บันทึกการตั้งค่าการตัดยอดและการสแกนบนอุปกรณ์นี้", settings);
     setNotice({ type: "success", text: "บันทึกการตั้งค่าบนอุปกรณ์นี้แล้ว" });
   }
 
@@ -3730,6 +3769,32 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       detail: item.tagId + " · " + item.materialCode + " · " + fmt(item.qty) + " " + item.unit,
       actor: item.scannedByName || "—", tone: "red", kind: "dispatch",
     }));
+    const auditKind = (action: string) => {
+      if (/delete|remove|clear|cancel/.test(action)) return "delete";
+      if (/permission|role|user_access/.test(action)) return "permission";
+      if (/import/.test(action)) return "import";
+      if (/login|logout|pin/.test(action)) return "security";
+      if (/create|add|print|receive|stage|dispatch|issue/.test(action)) return "create";
+      return "update";
+    };
+    const auditTone = (kind: string) => kind === "delete" ? "red" : kind === "permission" ? "purple" : kind === "import" ? "blue" : kind === "security" ? "orange" : kind === "create" ? "green" : "blue";
+    const auditActivities = auditLogs.map((item) => {
+      const kind = auditKind(item.actionKey);
+      const identity = item.entityId ? ` · ${item.entityId}` : "";
+      return {
+        id: `audit-${item.id}`, createdAt: item.createdAt, action: item.actionLabel,
+        detail: `${item.moduleLabel}${identity} · ${item.summary}`,
+        actor: item.actorName ? `${item.actorName}${item.actorCode ? ` (${item.actorCode})` : ""}` : "ระบบ",
+        tone: auditTone(kind), kind,
+      };
+    });
+    if (auditActivities.length) {
+      const oldestAudit = auditActivities.reduce((oldest, item) => item.createdAt < oldest ? item.createdAt : oldest, auditActivities[0].createdAt);
+      const legacyActivities = activities.filter((item) => item.createdAt < oldestAudit);
+      legacyActivities.forEach((item) => { if (item.kind !== "import") item.kind = "create"; });
+      activities.length = 0;
+      activities.push(...auditActivities, ...legacyActivities);
+    } else activities.forEach((item) => { if (item.kind !== "import") item.kind = "create"; });
     activities.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     const historyNeedle = historyQuery.trim().toLowerCase();
     const activityLocalDate = (value: string) => {
@@ -3748,11 +3813,12 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     );
     const historyTabs = [
       { key: "all", label: "ทั้งหมด", count: activities.length },
-      { key: "import", label: "นำเข้าแผน", count: activities.filter((item) => item.kind === "import").length },
-      { key: "tag", label: "พิมพ์ Tag", count: activities.filter((item) => item.kind === "tag").length },
-      { key: "receive", label: "รับเข้า Stock", count: activities.filter((item) => item.kind === "receive").length },
-      { key: "arrange", label: "จัดงาน", count: activities.filter((item) => item.kind === "arrange").length },
-      { key: "dispatch", label: "ตรวจและขายออก", count: activities.filter((item) => item.kind === "dispatch").length },
+      { key: "create", label: "เพิ่ม / ทำรายการ", count: activities.filter((item) => item.kind === "create").length },
+      { key: "import", label: "นำเข้าไฟล์", count: activities.filter((item) => item.kind === "import").length },
+      { key: "update", label: "แก้ไขข้อมูล", count: activities.filter((item) => item.kind === "update").length },
+      { key: "delete", label: "ลบข้อมูล", count: activities.filter((item) => item.kind === "delete").length },
+      { key: "permission", label: "สิทธิ์ผู้ใช้", count: activities.filter((item) => item.kind === "permission").length },
+      { key: "security", label: "เข้าสู่ระบบ / PIN", count: activities.filter((item) => item.kind === "security").length },
     ];
     const shownActivities = filteredActivities.slice(0, 250);
     async function exportHistoryExcel() {
@@ -3767,22 +3833,23 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         const workbook = xlsx.utils.book_new();
         xlsx.utils.book_append_sheet(workbook, sheet, "ประวัติการดำเนินการ");
         xlsx.writeFile(workbook, `KIT-history-${new Date().toISOString().slice(0, 10)}.xlsx`);
+        void recordClientAudit("export_history", `ส่งออกประวัติ Excel ${filteredActivities.length} รายการ`, { itemCount: filteredActivities.length, historyType, historyDate, historyDateTo });
         setNotice({ type: "success", text: `ส่งออกประวัติแล้ว ${fmt(filteredActivities.length)} รายการ` });
       } catch (caught) {
         setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ส่งออกประวัติไม่สำเร็จ" });
       }
     }
     const summaryCards = [
-      { tone: "purple", icon: "⇧", label: "นำเข้าแผน", value: payload.imports.length, suffix: "ครั้ง", art: "▤" },
-      { tone: "blue", icon: "◆", label: "พิมพ์ Tag", value: stock.tags.length, suffix: "ใบ", art: "▥" },
-      { tone: "green", icon: "⇩", label: "รับเข้า Stock", value: stock.tags.filter((item) => item.receivedAt).length, suffix: "ใบ", art: "□" },
-      { tone: "orange", icon: "→", label: "จัดงาน", value: stock.picks.length, suffix: "รายการ", art: "▣" },
-      { tone: "red", icon: "☑", label: "ตรวจและขายออก", value: payload.scans.length, suffix: "รายการ", art: "▰" },
+      { tone: "purple", icon: "◎", label: "ประวัติทั้งหมด", value: activities.length, suffix: "รายการ", art: "▤" },
+      { tone: "blue", icon: "⇧", label: "นำเข้าไฟล์", value: activities.filter((item) => item.kind === "import").length, suffix: "ครั้ง", art: "▥" },
+      { tone: "green", icon: "+", label: "เพิ่ม / ทำรายการ", value: activities.filter((item) => item.kind === "create").length, suffix: "รายการ", art: "□" },
+      { tone: "orange", icon: "✎", label: "แก้ไข / สิทธิ์", value: activities.filter((item) => item.kind === "update" || item.kind === "permission").length, suffix: "รายการ", art: "▣" },
+      { tone: "red", icon: "×", label: "ลบข้อมูล", value: activities.filter((item) => item.kind === "delete").length, suffix: "รายการ", art: "▰" },
     ];
     return <div className="history-page-redesign">
       <div className="history-summary-grid">{summaryCards.map((item) => <article className={`history-summary-card ${item.tone}`} key={item.label}><span>{item.icon}</span><div><small>{item.label}</small><b>{fmt(item.value)}</b><em>{item.suffix}</em></div><i>{item.art}</i></article>)}</div>
       <section className="history-log-card">
-        <header><div><span>▤</span><div><h3>ประวัติการดำเนินการ</h3><p>ค้นหาและตรวจสอบประวัติการทำงานของทุกเมนูในระบบ</p></div></div><div><button className="button secondary" onClick={() => void Promise.all([loadDue(), loadStock()])}>↻ รีเฟรช</button><button className="button history-excel-button" onClick={() => void exportHistoryExcel()}>▦ ส่งออก Excel</button></div></header>
+        <header><div><span>▤</span><div><h3>ประวัติการดำเนินการ</h3><p>บันทึกการเพิ่ม แก้ไข ลบ นำเข้าไฟล์ เปลี่ยนสิทธิ์ และกิจกรรมสำคัญจากทุกหน้า</p></div></div><div><button className="button secondary" disabled={auditLogsLoading} onClick={() => void Promise.all([loadDue(), loadStock(), loadAuditLogs()])}>↻ {auditLogsLoading ? "กำลังโหลด" : "รีเฟรช"}</button><button className="button history-excel-button" onClick={() => void exportHistoryExcel()}>▦ ส่งออก Excel</button></div></header>
         <div className="audit-history-controls history-redesign-controls">
           <div className="audit-history-tabs">{historyTabs.map((tab) => <button type="button" key={tab.key} className={historyType === tab.key ? "active" : ""} onClick={() => setHistoryType(tab.key)}><span>{tab.label}</span><b>{fmt(tab.count)}</b></button>)}</div>
           <div className="history-filter-line">
