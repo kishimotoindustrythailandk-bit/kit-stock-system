@@ -831,7 +831,6 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       const nextPage = requestedPage && allowedPages.has(requestedPage) ? requestedPage : firstAllowedPage;
       window.localStorage.setItem("kit-current-page", nextPage);
       setPage(nextPage);
-      if (nextPage === "users") void loadUsers();
       if (nextPage === "parts" || nextPage === "settings") void loadPartImages();
       setMenuOpen(false);
       window.scrollTo({ top: 0 });
@@ -1012,6 +1011,12 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const timer = window.setTimeout(() => void loadReplacements(), 0);
     return () => window.clearTimeout(timer);
   }, [page]);
+
+  useEffect(() => {
+    if (page !== "users" || user.role !== "admin" || !allowedPages.has("users")) return;
+    const timer = window.setTimeout(() => void loadUsers(), 0);
+    return () => window.clearTimeout(timer);
+  }, [page, user.role, allowedPages]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -2412,7 +2417,6 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     }
     setPage(next);
     updatePageLocation(next);
-    if (next === "users") void loadUsers();
     if (next === "parts" || next === "settings") void loadPartImages();
     if (next === "replacement") void loadReplacements();
     setMenuOpen(false);
@@ -3897,7 +3901,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         </div> : page === "users" ? <div className="topbar-settings-banner topbar-users-banner">
           <div className="users-hero-title"><span>♟</span><div><h2>ผู้ใช้งาน</h2><p>หน้าหลัก <b>›</b> ผู้ใช้งาน</p></div></div>
           <div className="users-hero-copy"><b>People Drive</b><span>Better Operations</span></div>
-          <div className="users-hero-art"><span>▥</span><i>▣</i><strong>“ทีมที่ดี<br />สร้างงานที่ดีขึ้นได้เสมอ”</strong></div>
+          <div className="users-hero-art"><strong>“ทีมที่ดี<br />สร้างงานที่ดีขึ้นได้เสมอ”</strong></div>
         </div> : <div><h1>{activeNav.label}</h1><p>หน้าหลัก <span>›</span> {PAGE_SUBTITLE[page]}</p></div>}
         <div className="top-user"><button type="button" className={`notification overdue-sound-shortcut ${overdueSoundEnabled ? "enabled" : ""}`} onClick={() => void toggleOverdueSound()} aria-label={overdueSoundEnabled ? "ปิดเสียงแจ้งเตือนงานเกิน Due" : "เปิดเสียงแจ้งเตือนงานเกิน Due"} aria-pressed={overdueSoundEnabled}>{overdueSoundEnabled ? "🔔" : "🔕"}</button><button className="notification" onClick={showOverduePlan} disabled={!overdueDues.length || !allowedPages.has("plan")} aria-label={`งานเกินดิวจัดส่ง ${overdueDues.length} รายการ`}>♧<i>{fmt(overdueDues.length)}</i></button><span className="user-avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div><b>{user.displayName}</b><small>{ROLE_LABELS[user.role] || user.role}</small></div><a href={signOutPath} onClick={signOut}>ออกจากระบบ</a></div>
       </header>
