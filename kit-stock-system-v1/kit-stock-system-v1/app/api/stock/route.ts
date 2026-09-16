@@ -566,7 +566,7 @@ export async function POST(request: Request) {
         SELECT part_name AS partName, customer, location
         FROM stock_parts WHERE material_code = ?1 LIMIT 1
       `).bind(tag.materialCode).first<{ partName: string; customer: string; location: string }>();
-      const image = await runtimeDb.prepare("SELECT 1 AS ok FROM part_images WHERE material_code = ?1 LIMIT 1")
+      const image = await runtimeDb.prepare("SELECT 1 AS ok FROM part_master_images WHERE material_code = ?1 LIMIT 1")
         .bind(tag.materialCode).first<{ ok: number }>();
 
       if (clean(body.mode, 20) === "preview") {
