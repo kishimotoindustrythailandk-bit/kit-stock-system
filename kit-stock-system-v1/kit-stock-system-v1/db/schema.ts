@@ -154,6 +154,15 @@ export const partImages = sqliteTable("part_images", {
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+export const partMasterImages = sqliteTable("part_master_images", {
+  materialCode: text("material_code").primaryKey(),
+  objectKey: text("object_key").notNull(),
+  originalName: text("original_name").notNull().default(""),
+  contentType: text("content_type").notNull().default("image/jpeg"),
+  updatedByName: text("updated_by_name").notNull().default(""),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
 export const partActualImages = sqliteTable("part_actual_images", {
   materialCode: text("material_code").primaryKey(),
   objectKey: text("object_key").notNull(),
