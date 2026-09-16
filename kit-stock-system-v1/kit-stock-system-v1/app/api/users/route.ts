@@ -4,6 +4,7 @@ import { hashPin } from "../../pin-security";
 import { getDb } from "../../../db";
 import { appSessions, appUsers } from "../../../db/schema";
 import { getRuntimeEnv } from "../../../runtime/env";
+import { writeAuditLog } from "../../audit-log";
 
 const CANONICAL_ROLES = new Set(["production", "stock", "qc", "delivery"]);
 const LEGACY_ROLES = new Set(["dispatcher", "inspector"]);
@@ -109,6 +110,12 @@ export async function POST(request: Request) {
       id: appUsers.id, employeeCode: appUsers.employeeCode, displayName: appUsers.displayName, email: appUsers.email, role: appUsers.role, active: appUsers.active,
     });
     await replacePermissions(created.id, permissions);
+    await writeAuditLog(auth.user, {
+      module: "users", moduleLabel: "ผู้ใช้งาน", action: "create_user", actionLabel: "เพิ่มผู้ใช้งาน",
+      entityType: "app_user", entityId: created.id,
+      summary: `เพิ่มผู้ใช้ ${created.displayName} (${created.employeeCode}) บทบาท ${created.role}`,
+      after: { ...created, permissions },
+    }, request);
     return Response.json({ user: { ...created, permissions } }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "เพิ่มผู้ใช้งานไม่สำเร็จ";
@@ -172,6 +179,16 @@ export async function PATCH(request: Request) {
         ? normalizePermissions(stored.get(id), updated.role)
         : defaultPermissions(updated.role);
     }
+    const changedAccess = body.permissions !== undefined || role !== target.role || body.active !== undefined;
+    await writeAuditLog(auth.user, {
+      module: "users", moduleLabel: "ผู้ใช้งาน",
+      action: changedAccess ? "permission_update" : "update_user",
+      actionLabel: changedAccess ? "แก้ไขสิทธิ์ผู้ใช้งาน" : pin ? "รีเซ็ต PIN ผู้ใช้งาน" : "แก้ไขผู้ใช้งาน",
+      entityType: "app_user", entityId: updated.id,
+      summary: `${changedAccess ? "แก้ไขสิทธิ์/สถานะ" : pin ? "รีเซ็ต PIN" : "แก้ไขข้อมูล"} ${updated.displayName} (${updated.employeeCode})`,
+      before: { id: target.id, employeeCode: target.employeeCode, displayName: target.displayName, email: target.email, role: target.role, active: target.active },
+      after: { ...updated, permissions: effectivePermissions, pinReset: Boolean(pin) },
+    }, request);
     return Response.json({ user: { ...updated, permissions: effectivePermissions } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "บันทึกผู้ใช้งานไม่สำเร็จ";
