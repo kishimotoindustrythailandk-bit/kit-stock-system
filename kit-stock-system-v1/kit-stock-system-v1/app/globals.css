@@ -57,6 +57,16 @@ button { cursor: pointer; }
 .control-topbar.settings-topbar .top-user a { color: #174b87; }
 .control-topbar.settings-topbar .top-user a:hover { color: #075fcf; background: rgba(255,255,255,.58); }
 .control-topbar.settings-topbar .notification { background: rgba(255,255,255,.72); border-color: #bedcf1; }
+.control-topbar.settings-banner-topbar { min-height: 126px; overflow: hidden; padding-top: 12px; padding-bottom: 12px; background: linear-gradient(120deg, #dff4ff 0%, #c8eaff 48%, #a9dcff 100%); }
+.control-topbar.settings-banner-topbar::before { content: ""; position: absolute; inset: 0; opacity: .28; pointer-events: none; background: radial-gradient(circle at 25% 125%, rgba(255,255,255,.7) 0 9%, transparent 9.5%), linear-gradient(120deg, transparent 35%, rgba(255,255,255,.42) 35% 50%, transparent 50%); }
+.topbar-settings-banner { position: relative; z-index: 1; min-width: 0; flex: 1; display: grid; grid-template-columns: 260px minmax(330px, 1fr) 245px; align-items: center; gap: 20px; }
+.settings-banner-topbar .top-user { position: relative; z-index: 2; margin-left: 22px; }
+.settings-banner-topbar .settings-hero-title > span { width: 60px; height: 60px; font-size: 51px; }
+.settings-banner-topbar .settings-hero-title h2 { font-size: 27px; }
+.settings-banner-topbar .settings-hero-copy > b, .settings-banner-topbar .settings-hero-copy > span { font-size: 14px; }
+.settings-banner-topbar .settings-hero-art strong { font-size: 17px; }
+.settings-banner-topbar .settings-hero-art span { right: 8px; width: 66px; height: 47px; font-size: 27px; }
+.settings-banner-topbar .settings-hero-art i { right: -7px; width: 35px; height: 44px; font-size: 18px; }
 .top-user { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 .top-user .notification { position: relative; width: 42px; height: 42px; margin-right: 10px; color: #3a4e70; border: 1px solid var(--line); border-radius: 50%; background: #fff; }
 .notification i { position: absolute; top: -4px; right: -3px; min-width: 17px; height: 17px; padding: 0 4px; color: #fff; background: var(--red); border: 2px solid #fff; border-radius: 12px; font-size: 9px; line-height: 13px; font-style: normal; }
@@ -2016,6 +2026,8 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .settings-footer { display: flex; justify-content: space-between; gap: 15px; color: #547198; font-size: 9px; }
 
 @media (max-width: 1180px) {
+  .topbar-settings-banner { grid-template-columns: 230px 1fr; }
+  .topbar-settings-banner .settings-hero-art { display: none; }
   .settings-hero-banner { grid-template-columns: 270px 1fr; }
   .settings-hero-art { display: none; }
   .settings-system-block .system-card { grid-template-columns: 170px 1fr; }
@@ -2025,6 +2037,14 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 }
 
 @media (max-width: 720px) {
+  .control-topbar.settings-banner-topbar { min-height: 88px; padding-top: 8px; padding-bottom: 8px; }
+  .topbar-settings-banner { display: block; }
+  .topbar-settings-banner .settings-hero-copy, .topbar-settings-banner .settings-hero-art { display: none; }
+  .settings-banner-topbar .settings-hero-title { gap: 9px; }
+  .settings-banner-topbar .settings-hero-title > span { width: 42px; height: 42px; font-size: 37px; }
+  .settings-banner-topbar .settings-hero-title h2 { font-size: 21px; }
+  .settings-banner-topbar .settings-hero-title p { margin-top: 3px; font-size: 9px; }
+  .settings-banner-topbar .top-user { margin-left: auto; }
   .settings-page-redesign { gap: 12px; }
   .settings-hero-banner { min-height: 170px; grid-template-columns: 1fr; gap: 13px; padding: 17px; border-radius: 15px; }
   .settings-hero-title > span { width: 52px; height: 52px; font-size: 45px; }
