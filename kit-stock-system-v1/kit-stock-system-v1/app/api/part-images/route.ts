@@ -15,17 +15,17 @@ const ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_BYTES = 5 * 1024 * 1024;
 
 // รูปชิ้นงานมี 2 ช่อง (slot): master = รูปตัวอย่าง, actual = รูปชิ้นงานที่อยู่ในกล่อง
-// เก็บคนละตารางเพื่อไม่ต้อง rebuild ตาราง part_images เดิม และ R2 ใช้ prefix แยกกัน
+// part_images เป็นตาราง legacy ที่เคยเก็บรูปในกล่อง จึงห้ามนำมาใช้เป็น Master อีก
 type Slot = "master" | "actual";
 function resolveSlot(value: unknown): Slot {
   return String(value ?? "").trim().toLowerCase() === "actual" ? "actual" : "master";
 }
 function tableForSlot(slot: Slot) {
   // ค่า slot ถูกจำกัดไว้แค่ 2 ค่า จึงปลอดภัยที่จะนำมาต่อเป็นชื่อตาราง
-  return slot === "actual" ? "part_actual_images" : "part_images";
+  return slot === "actual" ? "part_actual_images" : "part_master_images";
 }
 function keyPrefixForSlot(slot: Slot) {
-  return slot === "actual" ? "part-actual-images" : "part-images";
+  return slot === "actual" ? "part-actual-images" : "part-master-images";
 }
 
 async function requireUser(adminOnly = false) {
@@ -51,8 +51,8 @@ export async function GET(request: Request) {
     const materialCode = cleanMaterialCode(url.searchParams.get("materialCode"));
     if (!materialCode) {
       if (!auth.user || (!hasPermission(auth.user, "parts") && !hasPermission(auth.user, "settings"))) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ดูทะเบียนรูปชิ้นงาน" }, { status: 403 });
-      // Legacy part_images เดิมคือรูปชิ้นงานในกล่อง จนกว่าจะมี Actual ที่ระบุชัดเจน
-      // สำหรับ Part นั้น การ resolve ทั้งสอง list ใน SQL ครั้งเดียวป้องกัน N+1 เมื่อข้อมูลเยอะ
+      // Legacy part_images เดิมคือรูปชิ้นงานในกล่องเท่านั้น Master อ่านจาก
+      // part_master_images เสมอ เพื่อป้องกันรูปในกล่องไปแสดงซ้ำที่ช่อง Master
       const result = strictSlots
         ? await DB.prepare(`
           SELECT p.material_code AS materialCode, p.object_key AS objectKey,
@@ -92,8 +92,7 @@ export async function GET(request: Request) {
             p.original_name AS originalName, p.content_type AS contentType,
             p.updated_by_name AS updatedByName, p.updated_at AS updatedAt,
             COALESCE(MAX(d.material_description), '') AS materialDescription
-          FROM part_images p
-          INNER JOIN part_actual_images explicit_actual ON explicit_actual.material_code = p.material_code
+          FROM part_master_images p
           LEFT JOIN delivery_due_lines d ON d.material_code = p.material_code
           GROUP BY p.material_code, p.object_key, p.original_name, p.content_type, p.updated_by_name, p.updated_at
           ORDER BY p.updated_at DESC
@@ -133,8 +132,7 @@ export async function GET(request: Request) {
         SELECT p.material_code AS materialCode, p.object_key AS objectKey,
           p.original_name AS originalName, p.content_type AS contentType,
           p.updated_by_name AS updatedByName, p.updated_at AS updatedAt
-        FROM part_images p
-        INNER JOIN part_actual_images explicit_actual ON explicit_actual.material_code = p.material_code
+        FROM part_master_images p
         WHERE p.material_code = ?1 LIMIT 1
       `).bind(materialCode).first<ImageRow>();
     if (!row) return Response.json({ error: "ยังไม่มีรูปชิ้นงาน" }, { status: 404 });
