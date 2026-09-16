@@ -2066,3 +2066,27 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
   .settings-danger-strip .button { grid-column: 1 / -1; width: 100%; }
   .settings-footer { flex-direction: column; padding: 0 3px; }
 }
+
+@media (min-width: 721px) {
+  .control-topbar.settings-banner-topbar { min-height: 102px; height: 102px; padding: 8px 26px; }
+  .control-topbar.settings-banner-topbar .topbar-settings-banner { width: 100%; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: clamp(22px, 3vw, 62px); }
+  .topbar-settings-banner .settings-hero-title { flex: 0 0 235px; }
+  .topbar-settings-banner .settings-hero-copy { flex: 1 1 390px; min-width: 320px; }
+  .topbar-settings-banner .settings-hero-art { flex: 0 0 230px; min-height: 70px; display: flex; }
+  .settings-banner-topbar .settings-hero-title > span { width: 48px; height: 48px; font-size: 41px; }
+  .settings-banner-topbar .settings-hero-title h2 { font-size: 23px; }
+  .settings-banner-topbar .settings-hero-title p { margin-top: 4px; font-size: 10px; }
+  .settings-banner-topbar .settings-hero-copy > b, .settings-banner-topbar .settings-hero-copy > span { font-size: 12px; }
+  .settings-banner-topbar .settings-hero-copy > div { margin-top: 7px; }
+  .settings-banner-topbar .settings-hero-copy em { padding: 4px 11px; font-size: 9px; }
+  .settings-banner-topbar .settings-hero-art strong { font-size: 15px; }
+  .settings-banner-topbar .settings-hero-art span { width: 58px; height: 39px; font-size: 23px; }
+  .settings-banner-topbar .settings-hero-art i { width: 31px; height: 37px; font-size: 16px; }
+  .settings-banner-topbar .top-user { flex: 0 0 auto; margin-left: clamp(18px, 2vw, 36px); }
+}
+
+@media (min-width: 721px) and (max-width: 1380px) {
+  .topbar-settings-banner .settings-hero-art { display: none; }
+  .topbar-settings-banner .settings-hero-title { flex-basis: 210px; }
+  .topbar-settings-banner .settings-hero-copy { min-width: 280px; }
+}
