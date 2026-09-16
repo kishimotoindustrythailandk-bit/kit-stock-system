@@ -3775,12 +3775,6 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     // แบบมีเงื่อนไข ไม่ใช่คอมโพเนนต์ การเรียก hook ในนี้จะผิดกฎ Hooks
     const Toggle = ({ keyName, title, text: description, icon }: { keyName: keyof typeof settings; title: string; text: string; icon: string }) => <label className="setting-row"><span className="setting-row-icon">{icon}</span><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
     return <div className="settings-page-redesign">
-      <section className="settings-hero-banner">
-        <div className="settings-hero-title"><span>⚙</span><div><h2>ตั้งค่า</h2><p>หน้าหลัก <b>›</b> ตั้งค่า</p></div></div>
-        <div className="settings-hero-copy"><b>ตั้งค่าระบบให้ทำงานได้เต็มประสิทธิภาพ</b><span>เพื่อการส่งมอบที่ตรงเวลา</span><div><em>🚀 เร็วขึ้น</em><em>◎ แม่นยำ</em><em>◆ เชื่อถือได้</em></div></div>
-        <div className="settings-hero-art"><strong>Control Today</strong><strong>Deliver Tomorrow</strong><span>▥</span><i>▣</i></div>
-      </section>
-
       <section className="settings-block settings-system-block">
         <header><span>▤</span><h3>ข้อมูลระบบ</h3></header>
         <div className="system-card">
@@ -3867,7 +3861,15 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
-      <header className="control-topbar settings-topbar"><button className="menu-button" onClick={() => setMenuOpen(true)}>☰</button><div><h1>{activeNav.label}</h1><p>หน้าหลัก <span>›</span> {PAGE_SUBTITLE[page]}</p></div><div className="top-user"><button type="button" className={`notification overdue-sound-shortcut ${overdueSoundEnabled ? "enabled" : ""}`} onClick={() => void toggleOverdueSound()} aria-label={overdueSoundEnabled ? "ปิดเสียงแจ้งเตือนงานเกิน Due" : "เปิดเสียงแจ้งเตือนงานเกิน Due"} aria-pressed={overdueSoundEnabled}>{overdueSoundEnabled ? "🔔" : "🔕"}</button><button className="notification" onClick={showOverduePlan} disabled={!overdueDues.length || !allowedPages.has("plan")} aria-label={`งานเกินดิวจัดส่ง ${overdueDues.length} รายการ`}>♧<i>{fmt(overdueDues.length)}</i></button><span className="user-avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div><b>{user.displayName}</b><small>{ROLE_LABELS[user.role] || user.role}</small></div><a href={signOutPath} onClick={signOut}>ออกจากระบบ</a></div></header>
+      <header className={`control-topbar settings-topbar ${page === "settings" ? "settings-banner-topbar" : ""}`}>
+        <button className="menu-button" onClick={() => setMenuOpen(true)}>☰</button>
+        {page === "settings" ? <div className="topbar-settings-banner">
+          <div className="settings-hero-title"><span>⚙</span><div><h2>ตั้งค่า</h2><p>หน้าหลัก <b>›</b> ตั้งค่า</p></div></div>
+          <div className="settings-hero-copy"><b>ตั้งค่าระบบให้ทำงานได้เต็มประสิทธิภาพ</b><span>เพื่อการส่งมอบที่ตรงเวลา</span><div><em>🚀 เร็วขึ้น</em><em>◎ แม่นยำ</em><em>◆ เชื่อถือได้</em></div></div>
+          <div className="settings-hero-art"><strong>Control Today</strong><strong>Deliver Tomorrow</strong><span>▥</span><i>▣</i></div>
+        </div> : <div><h1>{activeNav.label}</h1><p>หน้าหลัก <span>›</span> {PAGE_SUBTITLE[page]}</p></div>}
+        <div className="top-user"><button type="button" className={`notification overdue-sound-shortcut ${overdueSoundEnabled ? "enabled" : ""}`} onClick={() => void toggleOverdueSound()} aria-label={overdueSoundEnabled ? "ปิดเสียงแจ้งเตือนงานเกิน Due" : "เปิดเสียงแจ้งเตือนงานเกิน Due"} aria-pressed={overdueSoundEnabled}>{overdueSoundEnabled ? "🔔" : "🔕"}</button><button className="notification" onClick={showOverduePlan} disabled={!overdueDues.length || !allowedPages.has("plan")} aria-label={`งานเกินดิวจัดส่ง ${overdueDues.length} รายการ`}>♧<i>{fmt(overdueDues.length)}</i></button><span className="user-avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div><b>{user.displayName}</b><small>{ROLE_LABELS[user.role] || user.role}</small></div><a href={signOutPath} onClick={signOut}>ออกจากระบบ</a></div>
+      </header>
       <div className="control-content">
         {notice && <div className={`toast ${notice.type} auto-dismiss`}><span>{notice.type === "success" ? "✓" : "!"}</span><p>{notice.text}</p><button onClick={() => setNotice(null)}>×</button></div>}
         {error && <div className="toast error"><span>!</span><p>{error}</p><button onClick={() => void loadDue()}>ลองใหม่</button></div>}
