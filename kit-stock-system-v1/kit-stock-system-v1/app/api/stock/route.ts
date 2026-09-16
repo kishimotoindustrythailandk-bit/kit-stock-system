@@ -3,6 +3,7 @@ import { getCurrentUser, hasPermission } from "../../cloudflare-auth";
 import { getDb } from "../../../db";
 import { stockAllocations, stockParts, stockTags } from "../../../db/schema";
 import { getRuntimeEnv } from "../../../runtime/env";
+import { writeAuditLog } from "../../audit-log";
 
 function clean(value: unknown, max = 160) {
   return String(value ?? "").trim().slice(0, max);
@@ -231,6 +232,8 @@ export async function POST(request: Request) {
       if (!materialCode || !partName || !Number.isInteger(standardQty) || standardQty <= 0) {
         return Response.json({ error: "กรุณาระบุ Part No., ชื่อชิ้นงาน และจำนวนสูงสุดต่อกล่องอย่างน้อย 1 ชิ้น" }, { status: 400 });
       }
+      const previousPart = await runtimeDb.prepare(`SELECT material_code AS materialCode, part_name AS partName, customer, location, standard_qty AS standardQty FROM stock_parts WHERE material_code = ?1 LIMIT 1`)
+        .bind(materialCode).first();
       await runtimeDb.prepare(`
         INSERT INTO stock_parts (material_code, part_name, customer, location, standard_qty, active, created_at, updated_at)
         VALUES (?1, ?2, ?3, ?4, ?5, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -238,6 +241,12 @@ export async function POST(request: Request) {
           part_name = excluded.part_name, customer = excluded.customer, location = excluded.location,
           standard_qty = excluded.standard_qty, active = 1, updated_at = CURRENT_TIMESTAMP
       `).bind(materialCode, partName, customer, location, standardQty).run();
+      await writeAuditLog(user, {
+        module: "parts", moduleLabel: "ทะเบียน Part", action: previousPart ? "update_part" : "create_part",
+        actionLabel: previousPart ? "แก้ไข Part" : "เพิ่ม Part", entityType: "stock_part", entityId: materialCode,
+        summary: `${previousPart ? "แก้ไข" : "เพิ่ม"} Part ${materialCode} · ${partName}`,
+        before: previousPart, after: { materialCode, partName, customer, location, standardQty },
+      }, request);
       return Response.json({ success: true, materialCode });
     }
 
@@ -283,6 +292,11 @@ export async function POST(request: Request) {
           else skippedMaterialCodes.push(materialCode);
         });
       }
+      await writeAuditLog(user, {
+        module: "parts", moduleLabel: "ทะเบียน Part", action: "import_parts", actionLabel: "นำเข้าไฟล์ Part",
+        entityType: "stock_part_import", summary: `นำเข้า Part สำเร็จ ${insertedMaterialCodes.length} รายการ ข้ามรายการเดิม ${skippedMaterialCodes.length} รายการ`,
+        details: { imported: insertedMaterialCodes.length, skipped: skippedMaterialCodes.length, insertedMaterialCodes, skippedMaterialCodes },
+      }, request);
       return Response.json({
         success: true,
         importContract: "preserve_existing_v1",
@@ -307,6 +321,11 @@ export async function POST(request: Request) {
           active = 1,
           updated_at = CURRENT_TIMESTAMP
       `).run();
+      await writeAuditLog(user, {
+        module: "parts", moduleLabel: "ทะเบียน Part", action: "import_due_parts", actionLabel: "นำเข้า Part จาก Due",
+        entityType: "stock_part", summary: `ซิงก์ทะเบียน Part จาก Due เปลี่ยนแปลง ${Number(result.meta.changes || 0)} รายการ`,
+        details: { changed: Number(result.meta.changes || 0) },
+      }, request);
       return Response.json({ success: true, changed: result.meta.changes });
     }
 
@@ -323,6 +342,10 @@ export async function POST(request: Request) {
       }
       const deleted = await db.delete(stockParts).where(eq(stockParts.materialCode, materialCode)).returning();
       if (!deleted.length) return Response.json({ error: "ไม่พบ Part ที่ต้องการลบ" }, { status: 404 });
+      await writeAuditLog(user, {
+        module: "parts", moduleLabel: "ทะเบียน Part", action: "delete_part", actionLabel: "ลบ Part",
+        entityType: "stock_part", entityId: materialCode, summary: `ลบ Part ${materialCode}`, before: deleted[0],
+      }, request);
       return Response.json({ success: true, deleted: 1, materialCode });
     }
 
@@ -337,6 +360,10 @@ export async function POST(request: Request) {
           WHERE stock_tags.material_code = stock_parts.material_code
         )
       `).run();
+      await writeAuditLog(user, {
+        module: "parts", moduleLabel: "ทะเบียน Part", action: "delete_unused_parts", actionLabel: "ลบ Part ที่ไม่ได้ใช้งาน",
+        entityType: "stock_part", summary: `ลบ Part ที่ไม่มี Tag ${Number(result.meta.changes || 0)} รายการ`, details: { deleted: Number(result.meta.changes || 0) },
+      }, request);
       return Response.json({ success: true, deleted: result.meta.changes });
     }
 
@@ -355,17 +382,18 @@ export async function POST(request: Request) {
         DB.prepare("DELETE FROM stock_picks"),
         DB.prepare("DELETE FROM stock_tags"),
       ]);
+      const deletedCounts = {
+        countAdjustmentLines: results[0].meta.changes, countAdjustments: results[1].meta.changes,
+        manualReceipts: results[2].meta.changes, dispatchLinks: results[3].meta.changes,
+        allocations: results[4].meta.changes, picks: results[5].meta.changes, tags: results[6].meta.changes,
+      };
+      await writeAuditLog(user, {
+        module: "stock", moduleLabel: "Stock", action: "clear_test_stock", actionLabel: "ล้างข้อมูล Stock ทดลอง",
+        entityType: "stock", summary: `ล้างข้อมูล Stock ทดลองทั้งหมด ${Object.values(deletedCounts).reduce((sum, value) => sum + Number(value || 0), 0)} รายการ`, details: deletedCounts,
+      }, request);
       return Response.json({
         success: true,
-        deleted: {
-          countAdjustmentLines: results[0].meta.changes,
-          countAdjustments: results[1].meta.changes,
-          manualReceipts: results[2].meta.changes,
-          dispatchLinks: results[3].meta.changes,
-          allocations: results[4].meta.changes,
-          picks: results[5].meta.changes,
-          tags: results[6].meta.changes,
-        },
+        deleted: deletedCounts,
       });
     }
 
@@ -397,6 +425,10 @@ export async function POST(request: Request) {
           error: "Tag นี้มีประวัติรับเข้า จัดงาน หรือขายออกแล้ว จึงลบไม่ได้ เพื่อรักษาข้อมูลย้อนหลัง",
         }, { status: 409 });
       }
+      await writeAuditLog(user, {
+        module: "tags", moduleLabel: "พิมพ์ Tag", action: "delete_tag", actionLabel: "ลบ Tag",
+        entityType: "stock_tag", entityId: tag.tagId, summary: `ลบ Tag ${tag.tagId} ที่ยังไม่รับเข้า Stock`, before: tag,
+      }, request);
       return Response.json({ success: true, deleted: 1, tagId: tag.tagId });
     }
 
@@ -443,6 +475,12 @@ export async function POST(request: Request) {
           payload: `KITSTOCK|${tagId}|${materialCode}|${boxQty}|${jobNo}|${productionDate}`,
         });
       }
+      await writeAuditLog(user, {
+        module: "tags", moduleLabel: "พิมพ์ Tag", action: "create_tags", actionLabel: "สร้างและพิมพ์ Tag",
+        entityType: "stock_tag_batch", entityId: batchCode,
+        summary: `สร้าง Tag ${boxCount} ใบ · Part ${materialCode} · Job ${jobNo} · รวม ${totalQty} ชิ้น`,
+        details: { materialCode, jobNo, totalQty, packQty, boxCount, tagIds: tags.map((item) => item.tagId) },
+      }, request);
       return Response.json({
         tags,
         totalQty,
@@ -486,6 +524,12 @@ export async function POST(request: Request) {
           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
         `).bind(jobNo, materialCode, Number(summary.totalQty), Number(summary.receivedQty), Number(summary.ngQty), Number(summary.ngTagCount), reason, user.displayName, user.employeeCode),
       ]);
+      await writeAuditLog(user, {
+        module: "stock", moduleLabel: "Stock", action: "close_job", actionLabel: "ปิดรับเข้า Job",
+        entityType: "stock_job", entityId: `${jobNo}|${materialCode}`,
+        summary: `ปิดรับเข้า Job ${jobNo} · ${materialCode} เป็น NG ${Number(summary.ngQty)} ชิ้น`,
+        details: { jobNo, materialCode, reason, ...summary },
+      }, request);
       return Response.json({ success: true, jobNo, materialCode, ...summary });
     }
 
@@ -503,6 +547,11 @@ export async function POST(request: Request) {
         WHERE job_no = ?1 AND material_code = ?2 AND status = 'ng'
       `).bind(jobNo, materialCode).run();
       if (!result.meta.changes) return Response.json({ error: "ไม่พบ Tag NG ของ Job นี้" }, { status: 404 });
+      await writeAuditLog(user, {
+        module: "stock", moduleLabel: "Stock", action: "reopen_job", actionLabel: "เปิด Job คืน",
+        entityType: "stock_job", entityId: `${jobNo}|${materialCode}`,
+        summary: `เปิด Job ${jobNo} · ${materialCode} คืน ${Number(result.meta.changes)} Tag`, details: { jobNo, materialCode, reopenedTags: Number(result.meta.changes) },
+      }, request);
       return Response.json({ success: true, reopenedTags: result.meta.changes });
     }
 
@@ -555,6 +604,12 @@ export async function POST(request: Request) {
            received_by_name, received_by_code, received_at)
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)
       `).bind(tag.id, tag.tagId, tag.qty, receivedQty, ngQty, user.displayName, user.employeeCode).run();
+      await writeAuditLog(user, {
+        module: "stock", moduleLabel: "Stock", action: "receive_stock", actionLabel: "รับงานเข้า Stock",
+        entityType: "stock_tag", entityId: tag.tagId,
+        summary: `รับ Tag ${tag.tagId} · ${tag.materialCode} จำนวน ${receivedQty} ชิ้น${ngQty ? ` · NG ${ngQty} ชิ้น` : ""}`,
+        details: { tagId: tag.tagId, materialCode: tag.materialCode, jobNo: tag.jobNo, productionDate, originalQty: tag.qty, receivedQty, ngQty },
+      }, request);
       return Response.json({ action: "received", tag: { ...updated, partName: part?.partName || "", customer: part?.customer || "", receivedQty, ngQty }, receivedQty, ngQty }, { status: 201 });
     }
 
@@ -599,6 +654,12 @@ export async function POST(request: Request) {
           VALUES (?1, ?2, ?3, ?3, 0, ?4, ?5, CURRENT_TIMESTAMP)
         `).bind(stockTagId, tagId, qty, user.displayName, user.employeeCode),
       ]);
+      await writeAuditLog(user, {
+        module: "stock", moduleLabel: "Stock", action: "manual_receive_stock", actionLabel: "คีย์รับงานเข้า Stock",
+        entityType: "stock_tag", entityId: tagId,
+        summary: `คีย์รับ ${materialCode} จำนวน ${qty} ชิ้น · Job ${jobNo}`,
+        details: { tagId, materialCode, qty, jobNo, productionDate, referenceNo, note },
+      }, request);
       return Response.json({
         success: true,
         tag: { id: stockTagId, tagId, materialCode, partName: part.partName, customer: part.customer,
@@ -706,6 +767,13 @@ export async function POST(request: Request) {
         );
       }
       await runtimeDb.batch(statements);
+      await writeAuditLog(user, {
+        module: "stock", moduleLabel: "Stock", action: "stock_count_adjustment", actionLabel: "ปรับยอดตรวจนับ Stock",
+        entityType: "stock_count_adjustment", entityId: adjustmentNo,
+        summary: `ปรับยอด ${materialCode} จาก ${snapshot.systemQty} เป็น ${countedQty} ชิ้น (${difference >= 0 ? "+" : ""}${difference})`,
+        details: { adjustmentNo, materialCode, countDate, systemQty: snapshot.systemQty, countedQty, difference, reason, affectedTagCount: difference > 0 ? 1 : deductionLines.length },
+        before: { materialCode, qty: snapshot.systemQty }, after: { materialCode, qty: countedQty },
+      }, request);
       return Response.json({
         success: true, action: "stock_count_adjusted", adjustmentNo,
         materialCode, partName: part.partName, countDate,
@@ -785,6 +853,12 @@ export async function POST(request: Request) {
            picked_by_name, picked_by_code, picked_at, updated_at)
         VALUES (?1, ?2, ?3, 0, 'staged', ?4, ?5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       `).bind(due.id, tag.id, pickedQty, user.displayName, user.employeeCode).run();
+      await writeAuditLog(user, {
+        module: "arrange", moduleLabel: "จัดงาน", action: "stage_stock", actionLabel: "จัดงานเข้า Due",
+        entityType: "stock_pick", entityId: Number(result.meta.last_row_id || 0),
+        summary: `จัด Tag ${tag.tagId} · ${tag.materialCode} จำนวน ${pickedQty} ชิ้น เข้า Due ${due.deliveryDate}`,
+        details: { stockTagCode: tag.tagId, materialCode: tag.materialCode, jobNo: tag.jobNo, dueLineId: due.id, deliveryDate: due.deliveryDate, pickedQty },
+      }, request);
       return Response.json({
         action: "staged",
         pick: { id: result.meta.last_row_id, dueLineId: due.id, pickedQty, dispatchedQty: 0,
