@@ -1,5 +1,6 @@
 import { getCurrentUser, hasPermission } from "../../cloudflare-auth";
 import { getRuntimeEnv } from "../../../runtime/env";
+import { writeAuditLog } from "../../audit-log";
 
 type ForecastRow = {
   sourceKey: string;
@@ -313,6 +314,14 @@ export async function POST(request: Request) {
             total_qty = ?4, activated_at = CURRENT_TIMESTAMP WHERE id = ?1 AND status = 'uploading'
         `).bind(importId, Number(counts.rowCount), Number(counts.materialCount), Number(counts.totalQty)),
       ]);
+      const importedFile = await DB.prepare("SELECT file_name AS fileName FROM forecast_imports WHERE id = ?1 LIMIT 1")
+        .bind(importId).first<{ fileName: string }>();
+      await writeAuditLog(user, {
+        module: "forecast", moduleLabel: "Forecast Stock", action: "import_forecast", actionLabel: "นำเข้าไฟล์ Forecast",
+        entityType: "forecast_import", entityId: importId,
+        summary: `นำเข้า ${importedFile?.fileName || `Forecast #${importId}`} จำนวน ${Number(counts.rowCount)} รายการ ${Number(counts.materialCount)} Part`,
+        details: { fileName: importedFile?.fileName || "", rowCount: Number(counts.rowCount), materialCount: Number(counts.materialCount), totalQty: Number(counts.totalQty) },
+      }, request);
       return Response.json({ success: true, rowCount: Number(counts.rowCount), materialCount: Number(counts.materialCount), totalQty: Number(counts.totalQty) });
     }
 
