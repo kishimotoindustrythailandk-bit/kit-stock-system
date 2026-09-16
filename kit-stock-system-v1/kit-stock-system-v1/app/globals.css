@@ -2133,6 +2133,12 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .users-stat.orange { color: #ff8b31; border-color: #ffc377; background: linear-gradient(135deg, #fff7e9, #ffe0ad); }
 .users-stat.pink { color: #ee4d9d; border-color: #f7a2cf; background: linear-gradient(135deg, #fff1f8, #ffd3e9); }
 .users-stat.teal { color: #11afb6; border-color: #81dfe0; background: linear-gradient(135deg, #edffff, #c9f2ef); }
+.users-stat.blue > span { background: #2782ef; }
+.users-stat.green > span { background: #36c66c; }
+.users-stat.purple > span { background: #7644e9; }
+.users-stat.orange > span { background: #ff8b31; }
+.users-stat.pink > span { background: #ee4d9d; }
+.users-stat.teal > span { background: #11afb6; }
 
 .users-list-card > header { border-bottom: 1px solid #e0ebf6; }
 .users-list-card > header > div:first-child > span { color: #fff; background: linear-gradient(135deg, #4ba5ff, #1766db); }
