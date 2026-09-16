@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { getCurrentUser, SESSION_COOKIE } from "../../../cloudflare-auth";
 import { hashPin, verifyHashedPin } from "../../../pin-security";
 import { getRuntimeEnv } from "../../../../runtime/env";
+import { writeAuditLog } from "../../../audit-log";
 
 /**
  * เปลี่ยน PIN ของบัญชีตัวเอง ใช้ได้กับทุก role รวมถึง admin
@@ -60,6 +61,11 @@ export async function POST(request: Request) {
     } catch (error) {
       console.error("change-pin: ล้างตัวนับ login ไม่สำเร็จ", error);
     }
+
+    await writeAuditLog(user, {
+      module: "security", moduleLabel: "ความปลอดภัย", action: "change_pin", actionLabel: "เปลี่ยน PIN",
+      entityType: "app_user", entityId: user.id, summary: `เปลี่ยน PIN ของบัญชี ${user.displayName} (${user.employeeCode})`,
+    }, request);
 
     return Response.json({ ok: true });
   } catch (error) {
