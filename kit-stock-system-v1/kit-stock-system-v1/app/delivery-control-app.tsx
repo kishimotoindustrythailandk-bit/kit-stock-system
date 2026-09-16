@@ -716,6 +716,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [selectedScan, setSelectedScan] = useState<DueScan | null>(null);
   const [settings, setSettings] = useState({ partial: true, confirm: true, sound: true, autoFocus: true });
   const [systemUsers, setSystemUsers] = useState<SystemUser[]>([]);
+  const [userSearch, setUserSearch] = useState("");
   const [usersLoading, setUsersLoading] = useState(false);
   const [userSaving, setUserSaving] = useState(false);
   const [userForm, setUserForm] = useState<UserForm>(EMPTY_USER);
@@ -3817,36 +3818,62 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const stockUsers = systemUsers.filter((item) => item.role === "stock").length;
     const qcUsers = systemUsers.filter((item) => item.role === "qc").length;
     const deliveryUsers = systemUsers.filter((item) => item.role === "delivery").length;
-    return <>
-      <Card title="ภาพรวมผู้ใช้งาน" action={<button className="button primary" onClick={() => { setUserForm({ ...EMPTY_USER, permissions: [...EMPTY_USER.permissions] }); setUserEditorOpen(true); }}>＋ เพิ่มผู้ใช้งาน</button>}>
-        <div className="metrics four compact">
-          <MetricCard tone="blue" icon="♙" label="ผู้ใช้งานทั้งหมด" value={fmt(systemUsers.length)} suffix="คน" />
-          <MetricCard tone="green" icon="✓" label="ใช้งานปกติ" value={fmt(active)} suffix="คน" />
-          <MetricCard tone="purple" icon="▤" label="Production" value={fmt(productionUsers)} suffix="คน" />
-          <MetricCard tone="blue" icon="▦" label="Stock" value={fmt(stockUsers)} suffix="คน" />
-          <MetricCard tone="orange" icon="◇" label="QC" value={fmt(qcUsers)} suffix="คน" />
-          <MetricCard tone="green" icon="⌗" label="Delivery" value={fmt(deliveryUsers)} suffix="คน" />
-        </div>
-      </Card>
-      <Card title="ผู้ใช้งานระบบ" action={<button className="button secondary" onClick={() => void loadUsers()}>↻ รีเฟรช</button>}>
-        {usersLoading ? <div className="loading-state"><span /><p>กำลังโหลดผู้ใช้งาน…</p></div> : <div className="table-wrap mobile-table-wrap">
-          <table className="mobile-card-table"><thead><tr><th>รหัส / ผู้ใช้งาน</th><th>อีเมล</th><th>บทบาท</th><th>สิทธิ์หน้า</th><th>สถานะ</th><th>จัดการ</th></tr></thead>
-            <tbody>{systemUsers.map((item) => <tr key={item.id}>
-              <td data-label="ผู้ใช้งาน"><div className="user-cell"><span>{item.displayName.slice(0, 1).toUpperCase()}</span><div><b>{item.displayName}</b><small>{item.employeeCode}</small></div></div></td>
-              <td data-label="อีเมล">{item.email || "—"}</td>
-              <td data-label="บทบาท"><span className="role-pill">{ROLE_LABELS[item.role] || item.role}</span></td>
+    const needle = userSearch.trim().toLowerCase();
+    const visibleUsers = systemUsers.filter((item) => !needle || [item.employeeCode, item.displayName, item.email, item.role, ROLE_LABELS[item.role], ...(item.permissions || [])].join(" ").toLowerCase().includes(needle));
+    async function exportUsersExcel() {
+      try {
+        const xlsx = await import("xlsx");
+        const rows = [
+          ["รหัสพนักงาน", "ชื่อผู้ใช้งาน", "อีเมล", "บทบาท", "สิทธิ์หน้า", "สถานะ"],
+          ...visibleUsers.map((item) => [item.employeeCode, item.displayName, item.email || "", ROLE_LABELS[item.role] || item.role, (item.role === "admin" ? NAV.map((nav) => nav.label) : (item.permissions || []).map((key) => NAV.find((nav) => nav.key === key)?.label || key)).join(", "), item.active ? "ใช้งานปกติ" : "ระงับ"]),
+        ];
+        const sheet = xlsx.utils.aoa_to_sheet(rows);
+        sheet["!cols"] = [16, 26, 30, 18, 70, 15].map((wch) => ({ wch }));
+        const workbook = xlsx.utils.book_new();
+        xlsx.utils.book_append_sheet(workbook, sheet, "ผู้ใช้งาน");
+        xlsx.writeFile(workbook, `KIT-users-${new Date().toISOString().slice(0, 10)}.xlsx`);
+        setNotice({ type: "success", text: `ส่งออกข้อมูลผู้ใช้งานแล้ว ${fmt(visibleUsers.length)} รายการ` });
+      } catch (caught) {
+        setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ส่งออกข้อมูลผู้ใช้งานไม่สำเร็จ" });
+      }
+    }
+    const stats = [
+      { tone: "blue", icon: "♟", label: "ผู้ใช้งานทั้งหมด", value: systemUsers.length, art: "♟" },
+      { tone: "green", icon: "✓", label: "ใช้งานปกติ", value: active, art: "▥" },
+      { tone: "purple", icon: "▤", label: "Production", value: productionUsers, art: "▦" },
+      { tone: "orange", icon: "◇", label: "Stock", value: stockUsers, art: "□" },
+      { tone: "pink", icon: "◈", label: "QC", value: qcUsers, art: "◆" },
+      { tone: "teal", icon: "▣", label: "Delivery", value: deliveryUsers, art: "▰" },
+    ];
+    return <div className="users-page-redesign">
+      <section className="users-overview-card">
+        <header><div><span>▥</span><div><h3>ภาพรวมผู้ใช้งาน</h3><p>จำนวนผู้ใช้งานในแต่ละหน่วยงาน</p></div></div><div className="users-overview-actions"><small>▦ อัปเดตล่าสุด<br />{new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date())}</small><button className="button primary" onClick={() => { setUserForm({ ...EMPTY_USER, permissions: [...EMPTY_USER.permissions] }); setUserEditorOpen(true); }}>＋ เพิ่มผู้ใช้งาน</button></div></header>
+        <div className="users-stat-grid">{stats.map((item) => <article className={`users-stat ${item.tone}`} key={item.label}><span>{item.icon}</span><div><small>{item.label}</small><b>{fmt(item.value)}</b><em>คน</em></div><i>{item.art}</i></article>)}</div>
+      </section>
+
+      <section className="users-list-card">
+        <header><div><span>♟</span><div><h3>ผู้ใช้งานระบบ</h3><p>จัดการบัญชีผู้ใช้งาน กำหนดสิทธิ์ และสถานะการใช้งาน</p></div></div><div className="users-list-tools"><label><span>⌕</span><input value={userSearch} onChange={(event) => setUserSearch(event.target.value)} placeholder="ค้นหาชื่อ, รหัส, อีเมล หรือบทบาท..." /></label><button className="button secondary" onClick={() => void loadUsers()}>↻ รีเฟรช</button><button className="button users-excel-button" onClick={() => void exportUsersExcel()}>▦ ส่งออก Excel</button></div></header>
+        {usersLoading ? <div className="loading-state"><span /><p>กำลังโหลดผู้ใช้งาน…</p></div> : visibleUsers.length ? <div className="table-wrap mobile-table-wrap users-table-wrap">
+          <table className="mobile-card-table users-modern-table"><thead><tr><th>รหัส / ผู้ใช้งาน</th><th>ชื่อ–นามสกุล / อีเมล</th><th>บทบาท</th><th>สิทธิ์หน้า</th><th>สถานะ</th><th>จัดการ</th></tr></thead>
+            <tbody>{visibleUsers.map((item) => <tr key={item.id}>
+              <td data-label="รหัส / ผู้ใช้งาน"><div className="user-cell"><span>{item.displayName.slice(0, 1).toUpperCase()}</span><div><b>{item.displayName}</b><small>{item.employeeCode}</small></div></div></td>
+              <td data-label="ชื่อ–นามสกุล / อีเมล"><b>{item.displayName}</b><small>{item.email || "—"}</small></td>
+              <td data-label="บทบาท"><span className={`role-pill role-${item.role}`}>{ROLE_LABELS[item.role] || item.role}</span></td>
               <td data-label="สิทธิ์หน้า"><div className="permission-summary">{(item.role === "admin" ? NAV.map((nav) => nav.key) : item.permissions || []).map((key) => <span key={key}>{NAV.find((nav) => nav.key === key)?.label || key}</span>)}</div></td>
               <td data-label="สถานะ"><span className={`status ${item.active ? "completed" : "over"}`}>{item.active ? "ใช้งานปกติ" : "ระงับ"}</span></td>
-              <td data-label="จัดการ">{item.role === "admin" ? <span className="muted">บัญชีหลัก</span> : <div className="user-actions"><button className="tiny-button" onClick={() => editUser(item)}>แก้ไข / สิทธิ์ / PIN</button><button className={`tiny-button ${item.active ? "danger-outline" : ""}`} onClick={() => void toggleUser(item)}>{item.active ? "ระงับ" : "เปิดใช้"}</button></div>}</td>
+              <td data-label="จัดการ">{item.role === "admin" ? <span className="muted">บัญชีหลัก</span> : <div className="user-actions"><button className="tiny-button" onClick={() => editUser(item)}>✎ แก้ไข</button><button className="tiny-button" onClick={() => editUser(item)}>⚿ สิทธิ์ / PIN</button><button className={`tiny-button ${item.active ? "danger-outline" : ""}`} onClick={() => void toggleUser(item)}>{item.active ? "▧ ระงับ" : "✓ เปิดใช้"}</button></div>}</td>
             </tr>)}</tbody>
           </table>
-        </div>}
-      </Card>
-      <div className="split-grid">
-        <Card title="สิทธิ์รายบุคคล"><div className="permission-note"><span>◆</span><div><b>Admin กำหนดสิทธิ์ทุกหน้า</b><p>บทบาทใช้ระบุทีมงาน ส่วนสิทธิ์เข้าแต่ละหน้ารวมถึงหน้าหลักต้องเลือกให้ผู้ใช้แต่ละคนอย่างน้อย 1 หน้า</p></div></div></Card>
-        <Card title="ความปลอดภัย"><div className="permission-note"><span>◆</span><div><b>ป้องกันทั้งเมนูและ API</b><p>หน้าที่ไม่ได้รับสิทธิ์จะไม่แสดงในเมนู และระบบจะปฏิเสธการเปิดหรือเรียกใช้งานโดยตรง</p></div></div></Card>
+        </div> : <Empty title="ไม่พบผู้ใช้งาน" text="ลองเปลี่ยนคำค้นหา หรือกดเพิ่มผู้ใช้งานใหม่" />}
+        <footer><span>แสดง {fmt(visibleUsers.length)} จาก {fmt(systemUsers.length)} รายการ</span></footer>
+      </section>
+
+      <div className="users-security-grid">
+        <section><header><span>◇</span><div><h3>สิทธิ์รายบุคคล</h3><p>กำหนดสิทธิ์การเข้าถึงของแต่ละผู้ใช้งาน</p></div></header><div><span>⚙</span><p><b>Admin กำหนดสิทธิ์ทุกหน้า</b><small>บทบาทใช้ระบุทีมงาน ส่วนสิทธิ์หน้าแต่ละหน้าต้องเลือกให้ผู้ใช้แต่ละคนอย่างน้อย 1 หน้า</small></p></div></section>
+        <section><header><span>▣</span><div><h3>ความปลอดภัย</h3><p>ตั้งค่าความปลอดภัยของผู้ใช้งานและการเข้าถึงระบบ</p></div></header><div><span>◆</span><p><b>ป้องกันทั้งเมนูและ API</b><small>หน้าที่ไม่ได้รับสิทธิ์จะไม่แสดงในเมนู และระบบจะปฏิเสธการเปิดหรือเรียกใช้งานโดยตรง</small></p></div></section>
       </div>
-    </>;
+      <footer className="settings-footer"><span>© 2026 KIT Delivery Due Control. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
+    </div>;
   }
 
   const pageContent: Record<PageKey, () => ReactNode> = { dashboard: renderDashboard, stock: renderStock, forecast: renderForecast, parts: renderParts, tags: renderTags, plan: renderPlan, arrange: () => renderScan("arrange"), replacement: renderReplacement, verify: renderVerify, dispatch: () => renderScan("dispatch"), exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
@@ -3861,12 +3888,16 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
-      <header className={`control-topbar settings-topbar ${page === "settings" ? "settings-banner-topbar" : ""}`}>
+      <header className={`control-topbar settings-topbar ${page === "settings" || page === "users" ? "settings-banner-topbar" : ""} ${page === "users" ? "users-banner-topbar" : ""}`}>
         <button className="menu-button" onClick={() => setMenuOpen(true)}>☰</button>
         {page === "settings" ? <div className="topbar-settings-banner">
           <div className="settings-hero-title"><span>⚙</span><div><h2>ตั้งค่า</h2><p>หน้าหลัก <b>›</b> ตั้งค่า</p></div></div>
           <div className="settings-hero-copy"><b>ตั้งค่าระบบให้ทำงานได้เต็มประสิทธิภาพ</b><span>เพื่อการส่งมอบที่ตรงเวลา</span><div><em>🚀 เร็วขึ้น</em><em>◎ แม่นยำ</em><em>◆ เชื่อถือได้</em></div></div>
           <div className="settings-hero-art"><strong>Control Today</strong><strong>Deliver Tomorrow</strong><span>▥</span><i>▣</i></div>
+        </div> : page === "users" ? <div className="topbar-settings-banner topbar-users-banner">
+          <div className="users-hero-title"><span>♟</span><div><h2>ผู้ใช้งาน</h2><p>หน้าหลัก <b>›</b> ผู้ใช้งาน</p></div></div>
+          <div className="users-hero-copy"><b>People Drive</b><span>Better Operations</span></div>
+          <div className="users-hero-art"><span>▥</span><i>▣</i><strong>“ทีมที่ดี<br />สร้างงานที่ดีขึ้นได้เสมอ”</strong></div>
         </div> : <div><h1>{activeNav.label}</h1><p>หน้าหลัก <span>›</span> {PAGE_SUBTITLE[page]}</p></div>}
         <div className="top-user"><button type="button" className={`notification overdue-sound-shortcut ${overdueSoundEnabled ? "enabled" : ""}`} onClick={() => void toggleOverdueSound()} aria-label={overdueSoundEnabled ? "ปิดเสียงแจ้งเตือนงานเกิน Due" : "เปิดเสียงแจ้งเตือนงานเกิน Due"} aria-pressed={overdueSoundEnabled}>{overdueSoundEnabled ? "🔔" : "🔕"}</button><button className="notification" onClick={showOverduePlan} disabled={!overdueDues.length || !allowedPages.has("plan")} aria-label={`งานเกินดิวจัดส่ง ${overdueDues.length} รายการ`}>♧<i>{fmt(overdueDues.length)}</i></button><span className="user-avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div><b>{user.displayName}</b><small>{ROLE_LABELS[user.role] || user.role}</small></div><a href={signOutPath} onClick={signOut}>ออกจากระบบ</a></div>
       </header>
