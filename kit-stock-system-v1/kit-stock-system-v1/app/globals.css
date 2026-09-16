@@ -1933,13 +1933,13 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 
 /* Settings page — visual treatment based on the approved KIT control-room mockup. */
 .settings-page-redesign { display: grid; gap: 16px; }
-.settings-hero-banner { position: relative; min-height: 126px; display: grid; grid-template-columns: 330px 1fr 330px; align-items: center; gap: 22px; overflow: hidden; padding: 18px 26px; color: #fff; border-radius: 18px; background: linear-gradient(120deg, #086ee3 0%, #2588ef 42%, #97d6ff 100%); box-shadow: 0 13px 30px rgba(24, 113, 218, .22); }
+.settings-hero-banner { position: relative; min-height: 126px; display: grid; grid-template-columns: 330px 1fr 330px; align-items: center; gap: 22px; overflow: hidden; padding: 18px 26px; color: #103f83; border: 1px solid #b9dffc; border-radius: 18px; background: linear-gradient(120deg, #dff4ff 0%, #c8eaff 42%, #a9dcff 100%); box-shadow: 0 13px 30px rgba(72, 151, 211, .18); }
 .settings-hero-banner::before { content: ""; position: absolute; inset: 0; opacity: .32; background: radial-gradient(circle at 22% 120%, rgba(255,255,255,.45) 0 9%, transparent 9.5%), linear-gradient(120deg, transparent 38%, rgba(255,255,255,.18) 38% 53%, transparent 53%); }
 .settings-hero-title, .settings-hero-copy, .settings-hero-art { position: relative; z-index: 1; }
 .settings-hero-title { display: flex; align-items: center; gap: 18px; }
-.settings-hero-title > span { display: grid; place-items: center; width: 68px; height: 68px; color: #e9f5ff; font-size: 58px; line-height: 1; filter: drop-shadow(0 6px 4px rgba(0, 73, 163, .25)); }
+.settings-hero-title > span { display: grid; place-items: center; width: 68px; height: 68px; color: #fff; font-size: 58px; line-height: 1; filter: drop-shadow(0 6px 4px rgba(0, 73, 163, .18)); }
 .settings-hero-title h2 { margin: 0; font-size: 30px; line-height: 1.1; }
-.settings-hero-title p { margin: 8px 0 0; color: rgba(255,255,255,.9); }
+.settings-hero-title p { margin: 8px 0 0; color: #3970aa; }
 .settings-hero-title p b { padding: 0 9px; }
 .settings-hero-copy > b, .settings-hero-copy > span { display: block; font-size: 16px; font-style: italic; }
 .settings-hero-copy > span { margin-top: 2px; }
