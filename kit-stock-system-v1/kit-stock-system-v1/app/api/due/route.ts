@@ -3,6 +3,7 @@ import { getCurrentUser, hasPermission } from "../../cloudflare-auth";
 import { getDb } from "../../../db";
 import { deliveryDueLines, deliveryImports, deliveryTagReceipts, deliveryTagScans } from "../../../db/schema";
 import { getRuntimeEnv } from "../../../runtime/env";
+import { writeAuditLog } from "../../audit-log";
 
 const DUE_READ_PERMISSIONS = ["dashboard", "plan", "arrange", "dispatch", "exports", "reports", "history"] as const;
 
@@ -373,6 +374,12 @@ export async function POST(request: Request) {
         .bind(due.id, tag.tagId, tag.rawPayload, tag.qty, tag.unit, tag.location, user.displayName, user.email),
       DB.prepare("UPDATE delivery_due_lines SET status = ?1 WHERE id = ?2").bind(status, due.id),
     ]);
+    await writeAuditLog(user, {
+      module: "dispatch", moduleLabel: "ตรวจและขายออก", action: "dispatch_stock", actionLabel: "ตรวจและขายออก",
+      entityType: "customer_tag", entityId: tag.tagId,
+      summary: `ขายออก Tag ${tag.tagId} · ${tag.materialCode} จำนวน ${tag.qty} ${tag.unit}`,
+      details: { customerTagId: tag.tagId, materialCode: tag.materialCode, qty: tag.qty, unit: tag.unit, dueLineId: due.id, deliveryDate: due.deliveryDate, stockTags: consumed.map((item) => ({ tagId: item.stockTagCode, qty: item.qty })) },
+    }, request);
     return Response.json({
       action: "dispatched", tag,
       stockAllocations: consumed.map((item) => ({
