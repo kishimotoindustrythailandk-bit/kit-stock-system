@@ -3773,13 +3773,48 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   function renderSettings() {
     // ตัวแปรธรรมดา ไม่ใช่ useMemo เพราะ renderSettings() เป็นฟังก์ชันที่ถูกเรียก
     // แบบมีเงื่อนไข ไม่ใช่คอมโพเนนต์ การเรียก hook ในนี้จะผิดกฎ Hooks
-    const Toggle = ({ keyName, title, text: description }: { keyName: keyof typeof settings; title: string; text: string }) => <label className="setting-row"><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
-    return <>
-      <Card title="ข้อมูลระบบ"><div className="system-card"><div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div><dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.23.0</dd></div><div><dt>เขตเวลา</dt><dd>Bangkok, Thailand</dd></div><div><dt>ผู้ดูแล</dt><dd>{user.displayName}</dd></div></dl><div className="system-stats"><p><span>▤</span><b>{fmt(payload.dues.length)}</b><small>Due ทั้งหมด</small></p><p><span>▣</span><b>{fmt(partImages.length)}</b><small>รูปชิ้นงาน</small></p></div></div></Card>
-      <div className="settings-grid"><Card title="ตั้งค่าการตัดยอด"><Toggle keyName="partial" title="อนุญาตให้ตัดยอดบางส่วน" text="Tag หนึ่งใบสามารถตัดยอดไม่ครบ Due ได้" /><Toggle keyName="confirm" title="ยืนยันก่อนตัดยอดทุกครั้ง" text="แสดงยอดก่อนและหลังให้ตรวจสอบก่อนบันทึก" /></Card><Card title="ตั้งค่าการสแกน"><Toggle keyName="autoFocus" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" title="เสียงแจ้งเตือนเมื่อสำเร็จ" text="เปิดเสียงยืนยันหลังตัดยอดเรียบร้อย" /></Card></div>
-      <Card title="รูปแบบการแสดงผล"><div className="form-grid"><label><span>ภาษา</span><select><option>ภาษาไทย</option></select></label><label><span>เขตเวลา</span><select><option>(GMT+07:00) Bangkok, Thailand</option></select></label><label><span>รูปแบบวันที่</span><select><option>DD/MM/YYYY</option></select></label><label><span>หน่วยเริ่มต้น</span><select><option>ชิ้น (PC)</option></select></label></div><div className="save-row"><button className="button primary" onClick={saveSettings}>▣ บันทึกการตั้งค่า</button></div></Card>
-      {user.role === "admin" && <Card title="ล้างข้อมูลทดลอง"><div className="permission-note"><span>!</span><div><b>ล้างเฉพาะรายการ Stock</b><p>ลบ Tag Stock และประวัติการจัด/ขายออกทั้งหมด โดยเก็บทะเบียน Part รูปชิ้นงาน แผน Due และผู้ใช้งานไว้</p></div></div><div className="save-row"><button className="button danger" disabled={clearingTestStock || stock.tags.length === 0} onClick={() => void clearTestStock()}>{clearingTestStock ? "กำลังล้างข้อมูล…" : `ล้าง Stock ทดลอง ${fmt(stock.tags.length)} Tag`}</button></div></Card>}
-    </>;
+    const Toggle = ({ keyName, title, text: description, icon }: { keyName: keyof typeof settings; title: string; text: string; icon: string }) => <label className="setting-row"><span className="setting-row-icon">{icon}</span><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
+    return <div className="settings-page-redesign">
+      <section className="settings-hero-banner">
+        <div className="settings-hero-title"><span>⚙</span><div><h2>ตั้งค่า</h2><p>หน้าหลัก <b>›</b> ตั้งค่า</p></div></div>
+        <div className="settings-hero-copy"><b>ตั้งค่าระบบให้ทำงานได้เต็มประสิทธิภาพ</b><span>เพื่อการส่งมอบที่ตรงเวลา</span><div><em>🚀 เร็วขึ้น</em><em>◎ แม่นยำ</em><em>◆ เชื่อถือได้</em></div></div>
+        <div className="settings-hero-art"><strong>Control Today</strong><strong>Deliver Tomorrow</strong><span>▥</span><i>▣</i></div>
+      </section>
+
+      <section className="settings-block settings-system-block">
+        <header><span>▤</span><h3>ข้อมูลระบบ</h3></header>
+        <div className="system-card">
+          <div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div>
+          <dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.23.0</dd></div><div><dt>เขตเวลา</dt><dd>(GMT+07:00) Bangkok, Thailand</dd></div><div><dt>ที่ตั้ง</dt><dd>● Bangkok, Thailand</dd></div><div><dt>ผู้ดูแลระบบ</dt><dd>♟ {user.displayName}</dd></div></dl>
+          <div className="system-stats"><p className="blue"><span>▤</span><b>{fmt(payload.dues.length)}</b><strong>Due ทั้งหมด</strong><small>รายการ</small></p><p className="purple"><span>◇</span><b>{fmt(partImages.length)}</b><strong>รูปชิ้นงาน</strong><small>รายการ</small></p></div>
+        </div>
+      </section>
+
+      <div className="settings-grid settings-feature-grid">
+        <section className="settings-block settings-option-card teal">
+          <header><span>▤</span><h3>ตั้งค่าการตัดยอด</h3><i>▰▱▱▱▰</i></header>
+          <div><Toggle keyName="partial" icon="◆" title="อนุญาตให้ตัดยอดตามช่อง" text="Tag ที่ยังไม่สามารถตัดยอดในรอบ Due ได้" /><Toggle keyName="confirm" icon="⟳" title="ยืนยันก่อนตัดยอดทุกครั้ง" text="แสดงข้อความเตือนและให้ตรวจสอบก่อนบันทึก" /></div>
+        </section>
+        <section className="settings-block settings-option-card violet">
+          <header><span>▣</span><h3>ตั้งค่าการสแกน</h3><i>▥▥▥</i></header>
+          <div><Toggle keyName="autoFocus" icon="▥" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" icon="♟" title="เสียงแจ้งเตือนเมื่อสำเร็จ" text="เปิดเสียงยืนยันหลังตัดยอดหรือบันทึกเรียบร้อย" /></div>
+        </section>
+      </div>
+
+      <section className="settings-block settings-display-block">
+        <header><span>▣</span><h3>รูปแบบการแสดงผล</h3><div>Simple Setting<br /><b>Greater Productivity</b></div></header>
+        <div className="settings-display-form">
+          <label><span><i>●</i> ภาษา</span><select><option>ภาษาไทย</option></select></label>
+          <label><span><i>◷</i> เขตเวลา</span><select><option>(GMT+07:00) Bangkok, Thailand</option></select></label>
+          <label><span><i>▦</i> รูปแบบวันที่</span><select><option>DD/MM/YYYY</option></select></label>
+          <label><span><i>◇</i> หน่วยเริ่มต้น</span><select><option>ชิ้น (PC)</option></select></label>
+        </div>
+        <div className="save-row"><button className="button primary settings-save-button" onClick={saveSettings}>▣ บันทึกการตั้งค่า</button></div>
+      </section>
+
+      {user.role === "admin" && <section className="settings-danger-strip"><span>◆</span><div><b>ล้างข้อมูลทดลอง</b><p>ลบ Tag Stock และประวัติการเข้า/ออกที่ทดลอง โดยไม่กระทบข้อมูล Part รูปชิ้นงาน แผน Due และผู้ใช้งานจริง</p></div><button className="button danger" disabled={clearingTestStock || stock.tags.length === 0} onClick={() => void clearTestStock()}>{clearingTestStock ? "กำลังล้างข้อมูล…" : `▧ ล้าง Stock ทดลอง ${fmt(stock.tags.length)} Tag`}</button></section>}
+      <footer className="settings-footer"><span>© 2026 KIT Delivery Due Control. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
+    </div>;
   }
 
   function renderUsers() {
