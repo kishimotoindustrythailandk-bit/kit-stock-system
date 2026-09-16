@@ -28,6 +28,15 @@ function createTagId(batchCode: string, boxNo: number, boxCount: number) {
   return `${batchCode}-B${String(boxNo).padStart(width, "0")}OF${String(boxCount).padStart(width, "0")}`;
 }
 
+async function findExistingStockJob(DB: D1Database, jobNo: string) {
+  return DB.prepare(`
+    SELECT tag_id AS tagId, material_code AS materialCode
+    FROM stock_tags
+    WHERE upper(trim(job_no)) = ?1
+    ORDER BY id ASC LIMIT 1
+  `).bind(jobNo.trim().toUpperCase()).first<{ tagId: string; materialCode: string }>();
+}
+
 /**
  * เดิมไฟล์นี้มี ensureStockManagementTables() ที่ยิง CREATE TABLE / CREATE INDEX
  * 6 คำสั่งผ่าน DB.batch() ทุกครั้งที่ GET หรือ POST เข้ามา บวกกับ CREATE TABLE
@@ -442,6 +451,12 @@ export async function POST(request: Request) {
       if (!materialCode || !jobNo || !Number.isInteger(totalQty) || totalQty <= 0) {
         return Response.json({ error: "กรุณาระบุ Part, จำนวนงานรวม และ Job ให้ครบ" }, { status: 400 });
       }
+      const existingJob = await findExistingStockJob(runtimeDb, jobNo);
+      if (existingJob) {
+        return Response.json({
+          error: `Job ${jobNo} ถูกใช้แล้วกับ Part ${existingJob.materialCode} (Tag ${existingJob.tagId}) ไม่สามารถสร้างซ้ำได้`,
+        }, { status: 409 });
+      }
       const [part] = await db.select().from(stockParts).where(and(eq(stockParts.materialCode, materialCode), eq(stockParts.active, true))).limit(1);
       if (!part) return Response.json({ error: "ยังไม่มี Part นี้ในทะเบียน Stock กรุณาให้ Admin เพิ่ม Part ก่อน" }, { status: 404 });
       const packQty = Number(part.standardQty);
@@ -620,51 +635,87 @@ export async function POST(request: Request) {
       }
       const materialCode = clean(body.materialCode, 100).toUpperCase();
       const qty = Number(body.qty || 0);
-      const jobNo = clean(body.jobNo, 160);
+      const jobNo = clean(body.jobNo, 160).toUpperCase();
       const productionDate = clean(body.productionDate, 10);
       const referenceNo = clean(body.referenceNo, 160);
       const note = clean(body.note, 500);
       if (!materialCode || !Number.isInteger(qty) || qty <= 0 || !jobNo || !/^\d{4}-\d{2}-\d{2}$/.test(productionDate)) {
         return Response.json({ error: "กรุณาเลือก Part ระบุจำนวน Job/เอกสารอ้างอิง และวันที่ผลิตให้ครบ" }, { status: 400 });
       }
+      const existingJob = await findExistingStockJob(runtimeDb, jobNo);
+      if (existingJob) {
+        return Response.json({
+          error: `Job ${jobNo} มีอยู่ในระบบแล้วกับ Part ${existingJob.materialCode} (Tag ${existingJob.tagId}) กรุณาตรวจสอบ Job ก่อนบันทึก`,
+        }, { status: 409 });
+      }
       const part = await runtimeDb.prepare(`
-        SELECT material_code AS materialCode, part_name AS partName, customer
+        SELECT material_code AS materialCode, part_name AS partName, customer,
+          standard_qty AS standardQty
         FROM stock_parts WHERE material_code = ?1 AND active = 1 LIMIT 1
-      `).bind(materialCode).first<{ materialCode: string; partName: string; customer: string }>();
+      `).bind(materialCode).first<{ materialCode: string; partName: string; customer: string; standardQty: number }>();
       if (!part) return Response.json({ error: "ไม่พบ Part นี้ในทะเบียน หรือ Part ถูกยกเลิก" }, { status: 404 });
-      const tagId = createTagId(createTagBatchCode(), 1, 1);
+      const packQty = Number(part.standardQty || 0);
+      if (!Number.isInteger(packQty) || packQty <= 0) {
+        return Response.json({
+          error: `Part ${materialCode} ยังไม่ได้กำหนดจำนวนสูงสุดต่อกล่อง กรุณาแก้ไขทะเบียน Part ก่อน`,
+        }, { status: 409 });
+      }
+      const boxCount = Math.ceil(qty / packQty);
+      if (boxCount > 200) {
+        return Response.json({
+          error: `จำนวน ${qty} ชิ้นต้องสร้าง ${boxCount} Tag เกินขีดจำกัด 200 Tag ต่อครั้ง กรุณาแบ่งรับเข้าเป็นคนละ Job`,
+        }, { status: 400 });
+      }
+      const batchCode = createTagBatchCode();
+      const tagIds: string[] = [];
+      const statements: D1PreparedStatement[] = [];
+      for (let boxNo = 1; boxNo <= boxCount; boxNo += 1) {
+        const boxQty = boxNo < boxCount ? packQty : qty - (packQty * (boxCount - 1));
+        const tagId = createTagId(batchCode, boxNo, boxCount);
+        tagIds.push(tagId);
+        statements.push(
+          runtimeDb.prepare(`
+            INSERT INTO stock_tags
+              (tag_id, material_code, qty, remaining_qty, job_no, production_date, status,
+               printed_by_name, received_by_name, received_by_code, received_at, created_at)
+            VALUES (?1, ?2, ?3, ?3, ?4, ?5, 'in_stock', ?6, ?6, ?7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          `).bind(tagId, materialCode, boxQty, jobNo, productionDate, user.displayName, user.employeeCode),
+          runtimeDb.prepare(`
+            INSERT INTO stock_manual_receipts
+              (stock_tag_id, tag_id, material_code, qty, job_no, production_date,
+               reference_no, note, received_by_name, received_by_code, received_at)
+            SELECT id, tag_id, material_code, qty, job_no, production_date,
+              ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP
+            FROM stock_tags WHERE tag_id = ?1
+          `).bind(tagId, referenceNo, note, user.displayName, user.employeeCode),
+          runtimeDb.prepare(`
+            INSERT INTO stock_receipt_adjustments
+              (stock_tag_id, tag_id, original_qty, received_qty, ng_qty,
+               received_by_name, received_by_code, received_at)
+            SELECT id, tag_id, qty, qty, 0, ?2, ?3, CURRENT_TIMESTAMP
+            FROM stock_tags WHERE tag_id = ?1
+          `).bind(tagId, user.displayName, user.employeeCode),
+        );
+      }
+      await runtimeDb.batch(statements);
       const inserted = await runtimeDb.prepare(`
-        INSERT INTO stock_tags
-          (tag_id, material_code, qty, remaining_qty, job_no, production_date, status,
-           printed_by_name, received_by_name, received_by_code, received_at, created_at)
-        VALUES (?1, ?2, ?3, ?3, ?4, ?5, 'in_stock', ?6, ?6, ?7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `).bind(tagId, materialCode, qty, jobNo, productionDate, user.displayName, user.employeeCode).run();
-      const stockTagId = Number(inserted.meta.last_row_id || 0);
-      await runtimeDb.batch([
-        runtimeDb.prepare(`
-          INSERT INTO stock_manual_receipts
-            (stock_tag_id, tag_id, material_code, qty, job_no, production_date,
-             reference_no, note, received_by_name, received_by_code, received_at)
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, CURRENT_TIMESTAMP)
-        `).bind(stockTagId, tagId, materialCode, qty, jobNo, productionDate, referenceNo, note, user.displayName, user.employeeCode),
-        runtimeDb.prepare(`
-          INSERT INTO stock_receipt_adjustments
-            (stock_tag_id, tag_id, original_qty, received_qty, ng_qty,
-             received_by_name, received_by_code, received_at)
-          VALUES (?1, ?2, ?3, ?3, 0, ?4, ?5, CURRENT_TIMESTAMP)
-        `).bind(stockTagId, tagId, qty, user.displayName, user.employeeCode),
-      ]);
+        SELECT id, tag_id AS tagId, material_code AS materialCode, qty, remaining_qty AS remainingQty,
+          job_no AS jobNo, production_date AS productionDate, status, printed_by_name AS printedByName,
+          received_by_name AS receivedByName, received_at AS receivedAt, created_at AS createdAt
+        FROM stock_tags WHERE tag_id LIKE ?1 ORDER BY id ASC
+      `).bind(`${batchCode}-%`).all();
+      const tags = (inserted.results || []).map((tag) => ({
+        ...tag, partName: part.partName, customer: part.customer, reservedQty: 0,
+        receivedQty: Number(tag.qty), ngQty: 0,
+      }));
       await writeAuditLog(user, {
         module: "stock", moduleLabel: "Stock", action: "manual_receive_stock", actionLabel: "คีย์รับงานเข้า Stock",
-        entityType: "stock_tag", entityId: tagId,
-        summary: `คีย์รับ ${materialCode} จำนวน ${qty} ชิ้น · Job ${jobNo}`,
-        details: { tagId, materialCode, qty, jobNo, productionDate, referenceNo, note },
+        entityType: "stock_tag_batch", entityId: batchCode,
+        summary: `คีย์รับ ${materialCode} จำนวน ${qty} ชิ้น · ${boxCount} Tag · Job ${jobNo}`,
+        details: { tagIds, materialCode, totalQty: qty, packQty, boxCount, jobNo, productionDate, referenceNo, note },
       }, request);
       return Response.json({
-        success: true,
-        tag: { id: stockTagId, tagId, materialCode, partName: part.partName, customer: part.customer,
-          qty, remainingQty: qty, reservedQty: 0, jobNo, productionDate, status: "in_stock",
-          printedByName: user.displayName, receivedByName: user.displayName, receivedQty: qty, ngQty: 0 },
+        success: true, tag: tags[0], tags, totalQty: qty, packQty, boxCount,
       }, { status: 201 });
     }
 
