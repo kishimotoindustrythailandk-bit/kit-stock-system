@@ -3897,7 +3897,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         {page === "settings" ? <div className="topbar-settings-banner">
           <div className="settings-hero-title"><span>⚙</span><div><h2>ตั้งค่า</h2><p>หน้าหลัก <b>›</b> ตั้งค่า</p></div></div>
           <div className="settings-hero-copy"><b>ตั้งค่าระบบให้ทำงานได้เต็มประสิทธิภาพ</b><span>เพื่อการส่งมอบที่ตรงเวลา</span><div><em>🚀 เร็วขึ้น</em><em>◎ แม่นยำ</em><em>◆ เชื่อถือได้</em></div></div>
-          <div className="settings-hero-art"><strong>Control Today</strong><strong>Deliver Tomorrow</strong><span>▥</span><i>▣</i></div>
+          <div className="settings-hero-art"><strong>Control Today</strong><strong>Deliver Tomorrow</strong></div>
         </div> : page === "users" ? <div className="topbar-settings-banner topbar-users-banner">
           <div className="users-hero-title"><span>♟</span><div><h2>ผู้ใช้งาน</h2><p>หน้าหลัก <b>›</b> ผู้ใช้งาน</p></div></div>
           <div className="users-hero-copy"><b>People Drive</b><span>Better Operations</span></div>
