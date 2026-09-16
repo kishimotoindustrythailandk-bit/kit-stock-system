@@ -768,6 +768,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [partSearch, setPartSearch] = useState("");
   const [historyQuery, setHistoryQuery] = useState("");
   const [historyDate, setHistoryDate] = useState("");
+  const [historyDateTo, setHistoryDateTo] = useState("");
   const [historyType, setHistoryType] = useState("all");
   const [partPage, setPartPage] = useState(1);
   const [partPageSize, setPartPageSize] = useState(10);
@@ -3741,7 +3742,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     };
     const filteredActivities = activities.filter((item) =>
       (historyType === "all" || item.kind === historyType)
-      && (!historyDate || activityLocalDate(item.createdAt) === historyDate)
+      && (!historyDate || activityLocalDate(item.createdAt) >= historyDate)
+      && (!historyDateTo || activityLocalDate(item.createdAt) <= historyDateTo)
       && (!historyNeedle || [item.action, item.detail, item.actor, item.createdAt].some((value) => String(value || "").toLowerCase().includes(historyNeedle)))
     );
     const historyTabs = [
@@ -3753,26 +3755,46 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       { key: "dispatch", label: "ตรวจและขายออก", count: activities.filter((item) => item.kind === "dispatch").length },
     ];
     const shownActivities = filteredActivities.slice(0, 250);
-    return <>
-      <div className="metrics five">
-        <MetricCard tone="purple" icon="⇧" label="นำเข้าแผน" value={fmt(payload.imports.length)} suffix="ครั้ง" />
-        <MetricCard tone="blue" icon="▤" label="ออก Tag" value={fmt(stock.tags.length)} suffix="ใบ" />
-        <MetricCard tone="green" icon="⇩" label="รับเข้า Stock" value={fmt(stock.tags.filter((item) => item.receivedAt).length)} suffix="ใบ" />
-        <MetricCard tone="orange" icon="⇥" label="จัดงาน" value={fmt(stock.picks.length)} suffix="รายการ" />
-        <MetricCard tone="red" icon="⌗" label="ตรวจและขายออก" value={fmt(payload.scans.length)} suffix="รายการ" />
-      </div>
-      <Card className="audit-history-card" title="ประวัติผู้ดำเนินการ" action={<button className="button secondary" onClick={() => void Promise.all([loadDue(), loadStock()])}>↻ รีเฟรช</button>}>
-        <div className="audit-history-controls">
+    async function exportHistoryExcel() {
+      try {
+        const xlsx = await import("xlsx");
+        const rows = [
+          ["วันและเวลา", "ประเภท", "รายละเอียด", "ผู้ดำเนินการ", "สถานะ"],
+          ...filteredActivities.map((item) => [formatDateTime(item.createdAt), item.action, item.detail, item.actor, "บันทึกแล้ว"]),
+        ];
+        const sheet = xlsx.utils.aoa_to_sheet(rows);
+        sheet["!cols"] = [22, 24, 70, 24, 16].map((wch) => ({ wch }));
+        const workbook = xlsx.utils.book_new();
+        xlsx.utils.book_append_sheet(workbook, sheet, "ประวัติการดำเนินการ");
+        xlsx.writeFile(workbook, `KIT-history-${new Date().toISOString().slice(0, 10)}.xlsx`);
+        setNotice({ type: "success", text: `ส่งออกประวัติแล้ว ${fmt(filteredActivities.length)} รายการ` });
+      } catch (caught) {
+        setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ส่งออกประวัติไม่สำเร็จ" });
+      }
+    }
+    const summaryCards = [
+      { tone: "purple", icon: "⇧", label: "นำเข้าแผน", value: payload.imports.length, suffix: "ครั้ง", art: "▤" },
+      { tone: "blue", icon: "◆", label: "พิมพ์ Tag", value: stock.tags.length, suffix: "ใบ", art: "▥" },
+      { tone: "green", icon: "⇩", label: "รับเข้า Stock", value: stock.tags.filter((item) => item.receivedAt).length, suffix: "ใบ", art: "□" },
+      { tone: "orange", icon: "→", label: "จัดงาน", value: stock.picks.length, suffix: "รายการ", art: "▣" },
+      { tone: "red", icon: "☑", label: "ตรวจและขายออก", value: payload.scans.length, suffix: "รายการ", art: "▰" },
+    ];
+    return <div className="history-page-redesign">
+      <div className="history-summary-grid">{summaryCards.map((item) => <article className={`history-summary-card ${item.tone}`} key={item.label}><span>{item.icon}</span><div><small>{item.label}</small><b>{fmt(item.value)}</b><em>{item.suffix}</em></div><i>{item.art}</i></article>)}</div>
+      <section className="history-log-card">
+        <header><div><span>▤</span><div><h3>ประวัติการดำเนินการ</h3><p>ค้นหาและตรวจสอบประวัติการทำงานของทุกเมนูในระบบ</p></div></div><div><button className="button secondary" onClick={() => void Promise.all([loadDue(), loadStock()])}>↻ รีเฟรช</button><button className="button history-excel-button" onClick={() => void exportHistoryExcel()}>▦ ส่งออก Excel</button></div></header>
+        <div className="audit-history-controls history-redesign-controls">
           <div className="audit-history-tabs">{historyTabs.map((tab) => <button type="button" key={tab.key} className={historyType === tab.key ? "active" : ""} onClick={() => setHistoryType(tab.key)}><span>{tab.label}</span><b>{fmt(tab.count)}</b></button>)}</div>
-          <div className="audit-history-filter-row">
+          <div className="history-filter-line">
             <div className="audit-history-search"><span>⌕</span><input value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder="ค้นหาชื่อผู้ทำรายการ, Tag ID, Part No., Job หรือชื่อไฟล์..." />{historyQuery && <button type="button" onClick={() => setHistoryQuery("")}>×</button>}</div>
-            <label className="audit-history-date"><span>วันที่ทำรายการ</span><input type="date" value={historyDate} onChange={(event) => setHistoryDate(event.target.value)} />{historyDate && <button type="button" onClick={() => setHistoryDate("")} aria-label="ล้างวันที่">×</button>}</label>
+            <div className="history-date-range"><b>วันที่ทำรายการ</b><label><span>▦</span><input aria-label="วันที่เริ่มต้น" type="date" value={historyDate} onChange={(event) => setHistoryDate(event.target.value)} /><i>–</i><input aria-label="วันที่สิ้นสุด" type="date" value={historyDateTo} onChange={(event) => setHistoryDateTo(event.target.value)} />{(historyDate || historyDateTo) && <button type="button" onClick={() => { setHistoryDate(""); setHistoryDateTo(""); }} aria-label="ล้างช่วงวันที่">×</button>}</label></div>
           </div>
-          <p>พบ {fmt(filteredActivities.length)} รายการ{filteredActivities.length > 250 ? " · แสดง 250 รายการล่าสุด" : ""}</p>
         </div>
-        {shownActivities.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>วันและเวลา</th><th>รายการที่ทำ</th><th>รายละเอียด</th><th>ผู้ดำเนินการ</th><th>ผลลัพธ์</th></tr></thead><tbody>{shownActivities.map((item) => <tr key={item.id}><td data-label="วันและเวลา"><b>{formatDateTime(item.createdAt)}</b></td><td data-label="รายการที่ทำ"><b>{item.action}</b></td><td data-label="รายละเอียด">{item.detail}</td><td data-label="ผู้ดำเนินการ"><b>{item.actor}</b></td><td data-label="ผลลัพธ์"><em className={"status completed audit-" + item.tone}>บันทึกแล้ว</em></td></tr>)}</tbody></table></div> : <Empty title={(historyQuery || historyDate) ? "ไม่พบรายการที่ค้นหา" : "ยังไม่มีประวัติในหมวดนี้"} text={(historyQuery || historyDate) ? "ลองเปลี่ยนคำค้นหาหรือวันที่ทำรายการ" : "เลือกหมวดอื่นเพื่อดูประวัติรายการ"} />}
-      </Card>
-    </>;
+        {shownActivities.length ? <div className="table-wrap mobile-table-wrap history-table-wrap"><table className="mobile-card-table history-modern-table"><thead><tr><th>วันที่ / เวลา</th><th>ประเภท</th><th>รายละเอียด</th><th>ผู้ดำเนินการ</th><th>สถานะ</th></tr></thead><tbody>{shownActivities.map((item) => <tr key={item.id}><td data-label="วันที่ / เวลา"><b>{formatDateTime(item.createdAt)}</b></td><td data-label="ประเภท"><b>{item.action}</b></td><td data-label="รายละเอียด">{item.detail}</td><td data-label="ผู้ดำเนินการ"><b>{item.actor}</b></td><td data-label="สถานะ"><em className={"status completed audit-" + item.tone}>บันทึกแล้ว</em></td></tr>)}</tbody></table></div> : <div className="history-empty"><span>◇</span><b>{(historyQuery || historyDate || historyDateTo) ? "ไม่พบรายการที่ค้นหา" : "ยังไม่มีประวัติในขณะนี้"}</b><small>{(historyQuery || historyDate || historyDateTo) ? "ลองเปลี่ยนคำค้นหาหรือช่วงวันที่" : "เลือกเมนูด้านบนหรือปรับช่วงวันที่เพื่อดูข้อมูล"}</small></div>}
+        <footer><span>แสดง {fmt(Math.min(filteredActivities.length, 250))} จาก {fmt(filteredActivities.length)} รายการ</span></footer>
+      </section>
+      <footer className="settings-footer"><span>© 2026 KIT Delivery Due Control. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
+    </div>;
   }
 
   function renderSettings() {
@@ -3892,7 +3914,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
-      <header className={`control-topbar settings-topbar ${page === "settings" || page === "users" ? "settings-banner-topbar" : ""} ${page === "users" ? "users-banner-topbar" : ""}`}>
+      <header className={`control-topbar settings-topbar ${page === "settings" || page === "users" || page === "history" ? "settings-banner-topbar" : ""} ${page === "users" ? "users-banner-topbar" : ""} ${page === "history" ? "history-banner-topbar" : ""}`}>
         <button className="menu-button" onClick={() => setMenuOpen(true)}>☰</button>
         {page === "settings" ? <div className="topbar-settings-banner">
           <div className="settings-hero-title"><span>⚙</span><div><h2>ตั้งค่า</h2><p>หน้าหลัก <b>›</b> ตั้งค่า</p></div></div>
@@ -3902,6 +3924,10 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <div className="users-hero-title"><span>♟</span><div><h2>ผู้ใช้งาน</h2><p>หน้าหลัก <b>›</b> ผู้ใช้งาน</p></div></div>
           <div className="users-hero-copy"><b>People Drive</b><span>Better Operations</span></div>
           <div className="users-hero-art"><strong>“ทีมที่ดี<br />สร้างงานที่ดีขึ้นได้เสมอ”</strong></div>
+        </div> : page === "history" ? <div className="topbar-settings-banner topbar-history-banner">
+          <div className="history-hero-title"><span>◷</span><div><h2>ประวัติ</h2><p>หน้าหลัก <b>›</b> ประวัติ</p></div></div>
+          <div className="history-hero-copy"><b>ตรวจสอบทุกการเคลื่อนไหว</b><span>ย้อนหลังได้อย่างชัดเจน</span></div>
+          <div className="history-hero-art"><strong>Track Today</strong><strong>Deliver Tomorrow</strong></div>
         </div> : <div><h1>{activeNav.label}</h1><p>หน้าหลัก <span>›</span> {PAGE_SUBTITLE[page]}</p></div>}
         <div className="top-user"><button type="button" className={`notification overdue-sound-shortcut ${overdueSoundEnabled ? "enabled" : ""}`} onClick={() => void toggleOverdueSound()} aria-label={overdueSoundEnabled ? "ปิดเสียงแจ้งเตือนงานเกิน Due" : "เปิดเสียงแจ้งเตือนงานเกิน Due"} aria-pressed={overdueSoundEnabled}>{overdueSoundEnabled ? "🔔" : "🔕"}</button><button className="notification" onClick={showOverduePlan} disabled={!overdueDues.length || !allowedPages.has("plan")} aria-label={`งานเกินดิวจัดส่ง ${overdueDues.length} รายการ`}>♧<i>{fmt(overdueDues.length)}</i></button><span className="user-avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div><b>{user.displayName}</b><small>{ROLE_LABELS[user.role] || user.role}</small></div><a href={signOutPath} onClick={signOut}>ออกจากระบบ</a></div>
       </header>
