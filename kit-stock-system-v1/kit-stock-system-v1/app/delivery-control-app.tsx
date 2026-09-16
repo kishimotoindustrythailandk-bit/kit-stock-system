@@ -1403,12 +1403,19 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         site: ["site"],
       };
       const candidates: Array<{ sheetName: string; rows: ImportRow[] }> = [];
+      // ชีตแผน FAC ต้องขึ้นต้นด้วยรหัสตัวเลข เช่น 02, 09, 09.0 F3 หรือ 09.00 F3
+      // ไม่ใช้การค้นหาตัวเลขที่ตำแหน่งใดก็ได้ เพื่อไม่ให้ Sheet1/Sheet2 ถูกอ่านเป็นแผนงาน
+      const isNumericDueSheet = (name: string) => /^\d{1,2}(?:[.:]\d{1,2})?(?:\s|$)/.test(name.trim());
 
       for (const sheetName of workbook.SheetNames) {
+        const trimmedSheetName = sheetName.trim();
+        const isTimeSheet = isNumericDueSheet(trimmedSheetName);
+        const isMcpSheet = /^mcp\s*site\s*[12](?:\s|$)/i.test(trimmedSheetName);
+        // ข้ามชีตช่วยคำนวณ/สรุป เช่น vlookup, รอบเช้า, Sheet1 ตั้งแต่ก่อนอ่านข้อมูล
+        if (!isTimeSheet && !isMcpSheet) continue;
+
         const sheet = workbook.Sheets[sheetName];
         const grid = xlsx.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: "" });
-        const isTimeSheet = /^\d{1,2}[.:]\d{2}(?:\s|$)/.test(sheetName.trim());
-        const isMcpSheet = /^mcp\s*site\s*[12](?:\s|$)/i.test(sheetName.trim());
         // แบบฟอร์ม MCP รวมชื่อ Site, วันที่ และรอบเวลาไว้ในหัวด้านบน (เซลล์ merged เช่น B1)
         // จึงอ่านข้อความจาก 6 แถวแรกและใช้วันที่/เวลานี้กับทุกรายการในชีต
         const mcpHeader = isMcpSheet
@@ -1482,16 +1489,12 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       }
 
       // ไฟล์ MCP ใช้ชีต MCP site1/site2 เป็นข้อมูลหลัก
-      // ไฟล์ FAC รวมใช้ทุกชีตรอบเวลา และไม่อ่าน Sheet1/vlookup/รอบเช้าเพื่อป้องกันข้อมูลซ้ำ
+      // ไฟล์ FAC รวมใช้เฉพาะชีตที่ขึ้นต้นด้วยรหัสตัวเลข เพื่อไม่อ่าน Sheet1/vlookup/รอบเช้า
       const mcpSheets = candidates.filter((candidate) => /^mcp\s*site\s*[12](?:\s|$)/i.test(candidate.sheetName.trim()));
-      const timeSheets = candidates.filter((candidate) => /^\d{1,2}[.:]\d{2}(?:\s|$)/.test(candidate.sheetName.trim()));
-      const selectedSheets = mcpSheets.length
-        ? mcpSheets
-        : timeSheets.length
-          ? timeSheets
-          : candidates.sort((left, right) => right.rows.length - left.rows.length).slice(0, 1);
+      const timeSheets = candidates.filter((candidate) => isNumericDueSheet(candidate.sheetName));
+      const selectedSheets = mcpSheets.length ? mcpSheets : timeSheets;
       const rows = selectedSheets.flatMap((candidate) => candidate.rows);
-      if (!rows.length) throw new Error("ไม่พบรายการ Due ที่ใช้งานได้ กรุณาตรวจสอบว่ามี Item No./Material Code, Due Qty/Req. Qty และวันที่ส่งงาน");
+      if (!rows.length) throw new Error("ไม่พบรายการ Due ในชีตรหัสตัวเลข เช่น 02, 09 หรือ 09.00 F3 กรุณาตรวจสอบชื่อชีตและข้อมูลวันที่ส่งงาน");
       setPreviewRows(rows);
       setNotice({ type: "success", text: `อ่านจากชีต ${selectedSheets.map((item) => item.sheetName.trim()).join(", ")} สำเร็จ ${fmt(rows.length)} รายการ รวม ${fmt(rows.reduce((sum, row) => sum + row.reqQty, 0))} ชิ้น` });
     } catch (caught) {
