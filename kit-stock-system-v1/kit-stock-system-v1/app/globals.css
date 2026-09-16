@@ -2190,3 +2190,121 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
   .users-list-tools .button { width: 100%; }
   .users-security-grid { grid-template-columns: 1fr; }
 }
+
+/* History page */
+.control-topbar.history-banner-topbar {
+  color: #fff;
+  border-bottom-color: #6eb3ee;
+  background: linear-gradient(112deg, #096ee5 0%, #2b88f3 42%, #bde8ff 100%);
+}
+.control-topbar.history-banner-topbar::before {
+  opacity: .3;
+  background:
+    radial-gradient(circle at 48% 130%, rgba(255,255,255,.36) 0 14%, transparent 14.5%),
+    linear-gradient(120deg, transparent 34%, rgba(255,255,255,.35) 34% 51%, transparent 51%);
+}
+.topbar-history-banner { color: #fff; }
+.history-hero-title { display: flex; align-items: center; gap: 14px; flex: 0 0 245px; }
+.history-hero-title > span { display: grid; place-items: center; width: 54px; height: 54px; flex: 0 0 54px; color: #fff; border: 4px solid rgba(255,255,255,.92); border-radius: 50%; font-size: 37px; line-height: 1; filter: drop-shadow(0 5px 6px rgba(0,63,145,.24)); }
+.history-hero-title h2 { margin: 0; color: #fff; font-size: 25px; line-height: 1.1; }
+.history-hero-title p { margin: 5px 0 0; color: rgba(255,255,255,.9); font-size: 10px; }
+.history-hero-title p b { padding: 0 8px; }
+.history-hero-copy { flex: 1 1 340px; min-width: 250px; color: #fff; text-align: center; }
+.history-hero-copy b, .history-hero-copy span { display: block; font-size: 16px; line-height: 1.35; }
+.history-hero-copy span { font-size: 15px; }
+.history-hero-art { flex: 0 0 260px; display: flex; flex-direction: column; color: #073ea7; font-style: italic; text-align: center; transform: rotate(-6deg); }
+.history-hero-art strong { font-size: 18px; line-height: 1; }
+.history-banner-topbar .top-user b, .history-banner-topbar .top-user small, .history-banner-topbar .top-user a { color: #123c73; }
+
+.history-page-redesign { display: grid; gap: 16px; }
+.history-summary-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.history-summary-card { position: relative; min-height: 126px; display: flex; align-items: flex-start; gap: 13px; overflow: hidden; padding: 18px 16px; border: 1px solid; border-radius: 15px; box-shadow: 0 7px 20px rgba(28,72,129,.08); }
+.history-summary-card > span { position: relative; z-index: 1; display: grid; place-items: center; width: 48px; height: 48px; flex: 0 0 48px; color: #fff; border-radius: 50%; font-size: 27px; font-weight: 800; box-shadow: 0 6px 13px rgba(21,67,135,.18); }
+.history-summary-card > div { position: relative; z-index: 1; }
+.history-summary-card small, .history-summary-card b, .history-summary-card em { display: block; }
+.history-summary-card small { color: #153465; font-size: 12px; font-weight: 800; white-space: nowrap; }
+.history-summary-card b { margin-top: 3px; color: #071e54; font-size: 30px; line-height: 1; }
+.history-summary-card em { margin-top: 7px; color: #526f91; font-size: 10px; font-style: normal; }
+.history-summary-card > i { position: absolute; right: 10px; bottom: 3px; color: currentColor; font-size: 51px; font-style: normal; opacity: .19; }
+.history-summary-card.purple { color: #7746e7; border-color: #c7abff; background: linear-gradient(135deg, #f7f2ff, #e2d2ff); }
+.history-summary-card.blue { color: #237ef0; border-color: #9fcaff; background: linear-gradient(135deg, #f0f8ff, #cfe8ff); }
+.history-summary-card.green { color: #32bd66; border-color: #87dea7; background: linear-gradient(135deg, #effff4, #caf4d8); }
+.history-summary-card.orange { color: #f59429; border-color: #ffc779; background: linear-gradient(135deg, #fff8e9, #ffe1af); }
+.history-summary-card.red { color: #ee526f; border-color: #f4a2b3; background: linear-gradient(135deg, #fff1f5, #ffd5df); }
+.history-summary-card.purple > span { background: linear-gradient(135deg, #925cff, #6433d6); }
+.history-summary-card.blue > span { background: linear-gradient(135deg, #45a0ff, #1164db); }
+.history-summary-card.green > span { background: linear-gradient(135deg, #55db83, #16a34a); }
+.history-summary-card.orange > span { background: linear-gradient(135deg, #ffb34b, #f07c18); }
+.history-summary-card.red > span { background: linear-gradient(135deg, #ff7089, #df3555); }
+
+.history-log-card { overflow: hidden; border: 1px solid #d8e7f6; border-radius: 17px; background: #fff; box-shadow: 0 8px 24px rgba(31,75,128,.07); }
+.history-log-card > header { min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 13px 18px; }
+.history-log-card > header > div { display: flex; align-items: center; gap: 11px; }
+.history-log-card > header > div:first-child > span { display: grid; place-items: center; width: 43px; height: 43px; flex: 0 0 43px; color: #fff; border-radius: 11px; background: linear-gradient(135deg, #51a7ff, #1664da); font-size: 23px; box-shadow: 0 5px 12px rgba(23,101,218,.22); }
+.history-log-card h3, .history-log-card p { margin: 0; }
+.history-log-card h3 { color: #102f65; font-size: 20px; }
+.history-log-card header p { margin-top: 2px; color: #7085a3; font-size: 10px; }
+.history-log-card > header .button { min-height: 41px; }
+.history-excel-button { color: #fff; border-color: #1164dd; background: linear-gradient(135deg, #2383f3, #0759d2); box-shadow: 0 5px 12px rgba(15,96,216,.2); }
+.history-redesign-controls { display: grid; gap: 13px; padding: 0 18px 15px; }
+.history-redesign-controls .audit-history-tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
+.history-redesign-controls .audit-history-tabs button { min-width: 138px; min-height: 43px; display: flex; align-items: center; justify-content: center; gap: 9px; padding: 7px 13px; color: #325781; border: 1px solid #d9e6f4; border-radius: 10px; background: #f1f7fd; white-space: nowrap; }
+.history-redesign-controls .audit-history-tabs button.active { color: #fff; border-color: #1768df; background: linear-gradient(135deg, #318dfa, #0758d5); box-shadow: 0 5px 12px rgba(20,101,222,.2); }
+.history-redesign-controls .audit-history-tabs button b { min-width: 24px; padding: 2px 6px; color: inherit; border-radius: 99px; background: rgba(116,150,190,.15); font-size: 10px; }
+.history-redesign-controls .audit-history-tabs button.active b { background: rgba(255,255,255,.24); }
+.history-filter-line { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(390px, 470px); align-items: end; gap: 16px; }
+.history-filter-line .audit-history-search { min-height: 47px; display: flex; align-items: center; gap: 8px; padding: 0 13px; border: 1px solid #cfdeef; border-radius: 10px; background: #fff; }
+.history-filter-line .audit-history-search > span { color: #1267da; font-size: 24px; }
+.history-filter-line .audit-history-search input { width: 100%; min-width: 0; min-height: 43px; padding: 0; border: 0; outline: 0; }
+.history-filter-line .audit-history-search button, .history-date-range button { color: #6b829f; border: 0; background: transparent; font-size: 20px; }
+.history-date-range { display: grid; gap: 5px; }
+.history-date-range > b { color: #294b75; font-size: 10px; }
+.history-date-range label { min-height: 47px; display: grid; grid-template-columns: 25px 1fr 18px 1fr 25px; align-items: center; gap: 4px; padding: 0 9px; border: 1px solid #cfdeef; border-radius: 10px; background: #fff; }
+.history-date-range label > span { color: #37618e; font-size: 17px; }
+.history-date-range input { width: 100%; min-width: 0; padding: 0; color: #294b75; border: 0; outline: 0; font-size: 11px; }
+.history-date-range i { color: #7890aa; text-align: center; font-style: normal; }
+.history-table-wrap { margin: 0 18px; border: 1px solid #e0ebf5; border-radius: 10px; }
+.history-modern-table { min-width: 820px; }
+.history-modern-table thead th { color: #244c7a; background: #eaf6ff; }
+.history-modern-table td { vertical-align: middle; }
+.history-modern-table td:nth-child(3) { max-width: 460px; color: #4f6888; }
+.history-modern-table .status { white-space: nowrap; }
+.history-modern-table .audit-purple { color: #673bd2; background: #eee6ff; }
+.history-modern-table .audit-blue { color: #075fd2; background: #dcedff; }
+.history-modern-table .audit-green { color: #188c43; background: #ddf8e6; }
+.history-modern-table .audit-orange { color: #b66811; background: #fff0d6; }
+.history-modern-table .audit-red { color: #cb3853; background: #ffe2e8; }
+.history-empty { min-height: 245px; display: grid; place-content: center; justify-items: center; gap: 7px; margin: 0 18px; color: #6f86a3; border-top: 1px solid #e4edf6; text-align: center; }
+.history-empty > span { display: grid; place-items: center; width: 68px; height: 68px; color: #2580ed; border-radius: 50%; background: #e9f4ff; font-size: 38px; }
+.history-empty b { color: #294a73; font-size: 14px; }
+.history-empty small { font-size: 10px; }
+.history-log-card > footer { display: flex; justify-content: flex-end; padding: 11px 18px; color: #637b99; border-top: 1px solid #e0eaf5; font-size: 9px; }
+
+@media (max-width: 1380px) {
+  .history-hero-art { display: none; }
+  .history-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 900px) {
+  .history-filter-line { grid-template-columns: 1fr; }
+  .history-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 720px) {
+  .topbar-history-banner .history-hero-copy, .topbar-history-banner .history-hero-art { display: none; }
+  .history-hero-title > span { width: 43px; height: 43px; flex-basis: 43px; border-width: 3px; font-size: 29px; }
+  .history-hero-title h2 { font-size: 21px; }
+  .history-page-redesign { gap: 12px; }
+  .history-summary-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .history-summary-card { min-height: 105px; gap: 9px; padding: 13px 10px; }
+  .history-summary-card > span { width: 37px; height: 37px; flex-basis: 37px; font-size: 20px; }
+  .history-summary-card small { font-size: 10px; white-space: normal; }
+  .history-summary-card b { font-size: 24px; }
+  .history-log-card > header { align-items: stretch; flex-direction: column; padding: 12px; }
+  .history-log-card > header > div:last-child { display: grid; grid-template-columns: 1fr 1fr; }
+  .history-log-card > header .button { width: 100%; }
+  .history-redesign-controls { padding: 0 12px 12px; }
+  .history-redesign-controls .audit-history-tabs button { min-width: 116px; }
+  .history-date-range label { grid-template-columns: 22px 1fr 14px 1fr 22px; }
+  .history-table-wrap, .history-empty { margin-right: 12px; margin-left: 12px; }
+}
