@@ -51,6 +51,12 @@ button { cursor: pointer; }
 .control-topbar h1 { margin: 0; font-size: 24px; line-height: 1.25; }
 .control-topbar p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
 .control-topbar p span { margin: 0 7px; color: #b0b9c9; }
+.control-topbar.settings-topbar { background: linear-gradient(90deg, #eef9ff 0%, #dff2ff 55%, #cdeaff 100%); border-bottom-color: #b9ddf6; box-shadow: 0 5px 18px rgba(66, 139, 195, .1); }
+.control-topbar.settings-topbar h1 { color: #123d78; }
+.control-topbar.settings-topbar p { color: #5f82aa; }
+.control-topbar.settings-topbar .top-user a { color: #174b87; }
+.control-topbar.settings-topbar .top-user a:hover { color: #075fcf; background: rgba(255,255,255,.58); }
+.control-topbar.settings-topbar .notification { background: rgba(255,255,255,.72); border-color: #bedcf1; }
 .top-user { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 .top-user .notification { position: relative; width: 42px; height: 42px; margin-right: 10px; color: #3a4e70; border: 1px solid var(--line); border-radius: 50%; background: #fff; }
 .notification i { position: absolute; top: -4px; right: -3px; min-width: 17px; height: 17px; padding: 0 4px; color: #fff; background: var(--red); border: 2px solid #fff; border-radius: 12px; font-size: 9px; line-height: 13px; font-style: normal; }
