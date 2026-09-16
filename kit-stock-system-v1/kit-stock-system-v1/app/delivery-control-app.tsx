@@ -2482,7 +2482,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }
 
   function exportCsv() {
-    const rows = payload.dues.filter((due) => Number(due.scannedQty) > 0);
+    const rows = filtered.filter((due) => Number(due.scannedQty) > 0);
     const csv = [
       ["Delivery Date", "Time", "FAC", "Line", "DO", "Material", "Plan Qty", "Sent Qty", "Remaining", "Status"],
       ...rows.map((due) => [due.deliveryDate, due.deliveryTime, due.fact, due.line, due.doNo, due.materialCode, due.reqQty, due.scannedQty, Math.max(due.reqQty - due.scannedQty, 0), stateLabel(due)]),
@@ -2493,6 +2493,27 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     anchor.download = `KIT-delivery-${new Date().toISOString().slice(0, 10)}.csv`;
     anchor.click();
     URL.revokeObjectURL(url);
+    void recordClientAudit("export_delivery_csv", `ส่งออกรายการส่งออก CSV ${rows.length} รายการ`, { itemCount: rows.length, filterDate, filterFact, filterTime });
+    setNotice({ type: "success", text: `ส่งออกรายการ CSV แล้ว ${fmt(rows.length)} รายการ` });
+  }
+
+  async function exportDeliveryExcel() {
+    const rows = filtered.filter((due) => Number(due.scannedQty) > 0);
+    try {
+      const xlsx = await import("xlsx");
+      const workbook = xlsx.utils.book_new();
+      const sheet = xlsx.utils.aoa_to_sheet([
+        ["วันที่ส่งออก", "เวลา", "FAC", "Line", "DO / เลขที่เอกสาร", "Material / Part No.", "รายละเอียด", "แผน", "ส่งแล้ว", "คงเหลือ", "สถานะ"],
+        ...rows.map((due) => [due.deliveryDate, due.deliveryTime, due.fact, due.line, due.doNo, due.materialCode, due.materialDescription, due.reqQty, due.scannedQty, Math.max(due.reqQty - due.scannedQty, 0), stateLabel(due)]),
+      ]);
+      sheet["!cols"] = [13, 9, 12, 12, 24, 24, 36, 12, 12, 12, 18].map((wch) => ({ wch }));
+      xlsx.utils.book_append_sheet(workbook, sheet, "รายการส่งออก");
+      xlsx.writeFile(workbook, `KIT-delivery-${new Date().toISOString().slice(0, 10)}.xlsx`);
+      void recordClientAudit("export_delivery_excel", `ส่งออกรายการส่งออก Excel ${rows.length} รายการ`, { itemCount: rows.length, filterDate, filterFact, filterTime });
+      setNotice({ type: "success", text: `ส่งออกรายการ Excel แล้ว ${fmt(rows.length)} รายการ` });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ส่งออก Excel ไม่สำเร็จ" });
+    }
   }
 
   function reportFileName(extension: string) {
@@ -3711,11 +3732,19 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }
 
   function renderExports() {
-    const exported = payload.dues.filter((due) => Number(due.scannedQty) > 0);
+    const exported = filtered.filter((due) => Number(due.scannedQty) > 0);
     const full = exported.filter((due) => stateOf(due) === "completed").length;
     const part = exported.filter((due) => stateOf(due) === "partial").length;
     const over = exported.filter((due) => stateOf(due) === "over").length;
-    return <><Card><Filters /></Card><div className="metrics five"><MetricCard tone="blue" icon="▱" label="ส่งออกทั้งหมด" value={fmt(exported.length)} suffix="รายการ" /><MetricCard tone="green" icon="✓" label="ส่งออกครบ" value={fmt(full)} suffix="รายการ" /><MetricCard tone="orange" icon="◷" label="บางส่วน" value={fmt(part)} suffix="รายการ" /><MetricCard tone="red" icon="×" label="เกินดิวจัดส่ง" value={fmt(over)} suffix="รายการ" /><MetricCard tone="purple" icon="□" label="รวมจำนวน" value={fmt(exported.reduce((sum, due) => sum + Number(due.scannedQty), 0))} suffix="ชิ้น" /></div><Card title="รายการส่งออก" action={<button className="button secondary" onClick={exportCsv}>⇩ ส่งออก CSV</button>}><DueTable rows={filtered.filter((due) => Number(due.scannedQty) > 0)} /></Card></>;
+    return <div className="exports-page-redesign">
+      <Card className="exports-filter-card"><Filters /></Card>
+      <div className="metrics five reports-metrics exports-metrics"><MetricCard tone="blue" icon="▤" label="ส่งออกทั้งหมด" value={fmt(exported.length)} suffix="รายการ" /><MetricCard tone="green" icon="✓" label="ส่งออกครบ" value={fmt(full)} suffix="รายการ" /><MetricCard tone="orange" icon="◷" label="บางส่วน" value={fmt(part)} suffix="รายการ" /><MetricCard tone="red" icon="×" label="เกินดิวจัดส่ง" value={fmt(over)} suffix="รายการ" /><MetricCard tone="purple" icon="◇" label="รวมจำนวน" value={fmt(exported.reduce((sum, due) => sum + Number(due.scannedQty), 0))} suffix="ชิ้น" /></div>
+      <Card className="exports-list-card" title={<span className="exports-list-title"><i>≡</i><span>รายการส่งออก<small>รายการสินค้าที่ส่งออกจากคลังไปยังลูกค้าหรือสายการผลิต</small></span></span>} action={<div className="exports-list-actions"><button className="button success" onClick={() => void exportDeliveryExcel()}>▦ ส่งออก Excel</button><button className="button primary" onClick={exportCsv}>▤ ส่งออก CSV</button></div>}>
+        <DueTable rows={exported} />
+        <footer className="exports-list-footer"><span>แสดง {fmt(exported.length)} รายการ</span><span>{filterDate ? formatDate(filterDate) : "ทุกวันที่"} · {filterFact === "ALL" ? "ทุก FAC" : filterFact} · {filterTime === "ALL" ? "ทุกเวลา" : filterTime}</span></footer>
+      </Card>
+      <footer className="settings-footer"><span>© 2026 KIT Delivery Due Control. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
+    </div>;
   }
 
   function renderReports() {
@@ -3980,7 +4009,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
-      <header className={`control-topbar settings-topbar ${page === "settings" || page === "users" || page === "history" || page === "reports" ? "settings-banner-topbar" : ""} ${page === "users" ? "users-banner-topbar" : ""} ${page === "history" ? "history-banner-topbar" : ""} ${page === "reports" ? "reports-banner-topbar" : ""}`}>
+      <header className={`control-topbar settings-topbar ${page === "settings" || page === "users" || page === "history" || page === "reports" || page === "exports" ? "settings-banner-topbar" : ""} ${page === "users" ? "users-banner-topbar" : ""} ${page === "history" ? "history-banner-topbar" : ""} ${page === "reports" ? "reports-banner-topbar" : ""} ${page === "exports" ? "exports-banner-topbar" : ""}`}>
         <button className="menu-button" onClick={() => setMenuOpen(true)}>☰</button>
         {page === "settings" ? <div className="topbar-settings-banner">
           <div className="settings-hero-title"><span>⚙</span><div><h2>ตั้งค่า</h2><p>หน้าหลัก <b>›</b> ตั้งค่า</p></div></div>
@@ -3998,6 +4027,10 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <div className="reports-hero-title"><span>▥</span><div><h2>รายงาน</h2><p>หน้าหลัก <b>›</b> รายงาน</p></div></div>
           <div className="reports-hero-copy"><b>ข้อมูลชัดเจน</b><span>ช่วยให้การตัดสินใจแม่นยำขึ้น</span></div>
           <div className="reports-hero-art"><strong>Data Today</strong><strong>Better Tomorrow</strong></div>
+        </div> : page === "exports" ? <div className="topbar-settings-banner topbar-exports-banner">
+          <div className="exports-hero-title"><span>▰</span><div><h2>รายการส่งออก</h2><p>หน้าหลัก <b>›</b> รายการส่งออก</p></div></div>
+          <div className="exports-hero-copy"><b>ควบคุมการส่งออก</b><span>ให้ถูกต้อง ตรงเวลา และตรวจสอบได้</span></div>
+          <div className="exports-hero-art"><strong>Deliver Right</strong><strong>Move Forward</strong></div>
         </div> : <div><h1>{activeNav.label}</h1><p>หน้าหลัก <span>›</span> {PAGE_SUBTITLE[page]}</p></div>}
         <div className="top-user"><button type="button" className={`notification overdue-sound-shortcut ${overdueSoundEnabled ? "enabled" : ""}`} onClick={() => void toggleOverdueSound()} aria-label={overdueSoundEnabled ? "ปิดเสียงแจ้งเตือนงานเกิน Due" : "เปิดเสียงแจ้งเตือนงานเกิน Due"} aria-pressed={overdueSoundEnabled}>{overdueSoundEnabled ? "🔔" : "🔕"}</button><button className="notification" onClick={showOverduePlan} disabled={!overdueDues.length || !allowedPages.has("plan")} aria-label={`งานเกินดิวจัดส่ง ${overdueDues.length} รายการ`}>♧<i>{fmt(overdueDues.length)}</i></button><span className="user-avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div><b>{user.displayName}</b><small>{ROLE_LABELS[user.role] || user.role}</small></div><a href={signOutPath} onClick={signOut}>ออกจากระบบ</a></div>
       </header>
