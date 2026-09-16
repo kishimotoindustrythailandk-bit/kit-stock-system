@@ -3,6 +3,7 @@ import { getCurrentUser, hasPermission } from "../../cloudflare-auth";
 import { getDb } from "../../../db";
 import { deliveryImports } from "../../../db/schema";
 import { getRuntimeEnv } from "../../../runtime/env";
+import { writeAuditLog } from "../../audit-log";
 
 type ImportRow = {
   sourceKey?: string;
@@ -124,6 +125,13 @@ export async function POST(request: Request) {
 
     await insertDueRows(importId, normalized);
 
+    await writeAuditLog(user, {
+      module: "plan", moduleLabel: "แผนส่งงาน (Due)", action: "import_due", actionLabel: "นำเข้าไฟล์ Due",
+      entityType: "delivery_import", entityId: importId,
+      summary: `นำเข้า ${fileName} จำนวน ${normalized.length} รายการ รวม ${totalQty} ชิ้น`,
+      details: { fileName, rowCount: normalized.length, totalQty },
+    }, request);
+
     return Response.json({ importId, rowCount: normalized.length, totalQty }, { status: 201 });
   } catch (error) {
     if (importId) {
@@ -193,6 +201,12 @@ export async function DELETE(request: Request) {
       DB.prepare("DELETE FROM delivery_due_lines WHERE import_id = ?1").bind(importId),
       DB.prepare("DELETE FROM delivery_imports WHERE id = ?1").bind(importId),
     ]);
+    await writeAuditLog(user, {
+      module: "plan", moduleLabel: "แผนส่งงาน (Due)", action: "delete_due_import", actionLabel: "ลบข้อมูลนำเข้า Due",
+      entityType: "delivery_import", entityId: importId,
+      summary: `ลบไฟล์ ${target.fileName} จำนวน ${target.rowCount} รายการ รวม ${target.totalQty} ชิ้น`,
+      details: { ...target, scanCount, receiptCount, stockCount }, before: target,
+    }, request);
     return Response.json({ success: true, deleted: target, scanCount, receiptCount, stockCount });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "ลบข้อมูลนำเข้าไม่สำเร็จ" }, { status: 500 });
