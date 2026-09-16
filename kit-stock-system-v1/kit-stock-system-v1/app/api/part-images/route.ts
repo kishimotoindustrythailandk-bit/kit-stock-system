@@ -1,5 +1,6 @@
 import { getCurrentUser, hasPermission } from "../../cloudflare-auth";
 import { getRuntimeEnv } from "../../../runtime/env";
+import { writeAuditLog } from "../../audit-log";
 
 type ImageRow = {
   materialCode: string;
@@ -193,6 +194,12 @@ export async function POST(request: Request) {
         updated_by_name = excluded.updated_by_name, updated_at = CURRENT_TIMESTAMP
     `).bind(materialCode, newObjectKey, image.name.slice(0, 200), image.type, auth.user!.displayName).run();
     if (old?.objectKey && old.objectKey !== newObjectKey) await BUCKET.delete(old.objectKey);
+    await writeAuditLog(auth.user!, {
+      module: "parts", moduleLabel: "ทะเบียน Part", action: old ? "update_part_image" : "add_part_image",
+      actionLabel: old ? "เปลี่ยนรูปชิ้นงาน" : "เพิ่มรูปชิ้นงาน", entityType: "part_image", entityId: materialCode,
+      summary: `${old ? "เปลี่ยน" : "เพิ่ม"}รูป${slot === "master" ? "ตัวอย่าง" : "ชิ้นงานจริง"}ของ ${materialCode}`,
+      details: { materialCode, slot, fileName: image.name, contentType: image.type, size: image.size },
+    }, request);
     return Response.json({ success: true, materialCode, slot });
   } catch (error) {
     const { BUCKET } = getRuntimeEnv();
@@ -215,6 +222,12 @@ export async function DELETE(request: Request) {
     if (!row) return Response.json({ error: "ไม่พบรูปชิ้นงาน" }, { status: 404 });
     await DB.prepare(`DELETE FROM ${table} WHERE material_code = ?1`).bind(materialCode).run();
     await BUCKET.delete(row.objectKey);
+    await writeAuditLog(auth.user!, {
+      module: "parts", moduleLabel: "ทะเบียน Part", action: "delete_part_image", actionLabel: "ลบรูปชิ้นงาน",
+      entityType: "part_image", entityId: materialCode,
+      summary: `ลบรูป${slot === "master" ? "ตัวอย่าง" : "ชิ้นงานจริง"}ของ ${materialCode}`,
+      details: { materialCode, slot },
+    }, request);
     return Response.json({ success: true, slot });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "ลบรูปไม่สำเร็จ" }, { status: 400 });
