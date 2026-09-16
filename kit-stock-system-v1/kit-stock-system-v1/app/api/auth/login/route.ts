@@ -2,6 +2,7 @@ import { getRuntimeEnv } from "../../../../runtime/env";
 import { SESSION_COOKIE } from "../../../cloudflare-auth";
 import { checkLock, clearFailures, DUMMY_PIN_HASH, MAX_FAILED_ATTEMPTS, recordFailure } from "../../../login-throttle";
 import { verifyHashedPin } from "../../../pin-security";
+import { writeAuditLog } from "../../../audit-log";
 
 type LoginUser = {
   id: number;
@@ -87,6 +88,10 @@ export async function POST(request: Request) {
       // เก็บกวาด session ที่หมดอายุไปพร้อมกัน เดิมไม่มีการล้างเลย ตารางจึงโตไม่หยุด
       db.prepare("DELETE FROM app_sessions WHERE expires_at <= ?1").bind(new Date().toISOString()),
     ]);
+    await writeAuditLog({ id: user.id, employeeCode: user.employeeCode, displayName: user.displayName, email: "", role: user.role }, {
+      module: "security", moduleLabel: "ความปลอดภัย", action: "login", actionLabel: "เข้าสู่ระบบ",
+      entityType: "app_user", entityId: user.id, summary: `เข้าสู่ระบบด้วยบัญชี ${user.displayName} (${user.employeeCode})`,
+    }, request);
 
     return Response.json({ ok: true, mustChangePin, user: { displayName: user.displayName, role: user.role } }, {
       headers: {
