@@ -1,5 +1,6 @@
 import { getCurrentUser, hasPermission } from "../../cloudflare-auth";
 import { getRuntimeEnv } from "../../../runtime/env";
+import { writeAuditLog } from "../../audit-log";
 
 function clean(value: unknown, max = 200) {
   return String(value ?? "").trim().slice(0, max);
@@ -121,6 +122,12 @@ export async function POST(request: Request) {
         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, 'pending', ?9, ?10)
       `).bind(requestNo, materialCode, part.partName, customer || part.customer || "", requestedQty,
         reasonType, reasonDetail, neededDate, user.displayName, user.employeeCode).run();
+      await writeAuditLog(user, {
+        module: "replacement", moduleLabel: "เบิกงานทดแทน", action: "create_replacement_request", actionLabel: "ขอเบิกงานทดแทน",
+        entityType: "replacement_request", entityId: requestNo,
+        summary: `ขอเบิก ${materialCode} จำนวน ${requestedQty} ชิ้น · ${requestNo}`,
+        details: { requestNo, materialCode, requestedQty, reasonType, reasonDetail, neededDate },
+      }, request);
       return Response.json({ action: "created", request: await requestRow(Number(result.meta.last_row_id)) }, { status: 201 });
     }
 
@@ -212,6 +219,12 @@ export async function POST(request: Request) {
         FROM replacement_issues i LEFT JOIN stock_tags t ON t.id = i.stock_tag_id
         WHERE i.id = ?1 LIMIT 1
       `).bind(issueId).first();
+      await writeAuditLog(user, {
+        module: "replacement", moduleLabel: "เบิกงานทดแทน", action: "issue_replacement", actionLabel: "เบิก Tag งานทดแทน",
+        entityType: "replacement_issue", entityId: noticeNo,
+        summary: `เบิก Tag ${String(tag.tagId)} จำนวน ${qty} ชิ้น ให้ใบขอ ${String(replacement.requestNo || requestId)}`,
+        details: { requestId, requestNo: replacement.requestNo, stockTagCode: tag.tagId, materialCode: tag.materialCode, qty, noticeNo },
+      }, request);
       return Response.json({ action: "issued", request: await requestRow(requestId), issue }, { status: 201 });
     }
 
@@ -223,6 +236,10 @@ export async function POST(request: Request) {
           printed_at = CURRENT_TIMESTAMP WHERE id = ?3
       `).bind(user.displayName, user.employeeCode, issueId).run();
       if (!result.meta.changes) return Response.json({ error: "ไม่พบรายการที่จะพิมพ์" }, { status: 404 });
+      await writeAuditLog(user, {
+        module: "replacement", moduleLabel: "เบิกงานทดแทน", action: "print_replacement_notice", actionLabel: "พิมพ์ใบเบิกงานทดแทน",
+        entityType: "replacement_issue", entityId: issueId, summary: `พิมพ์ใบเบิกงานทดแทนรายการ #${issueId}`,
+      }, request);
       return Response.json({ success: true });
     }
 
@@ -233,6 +250,12 @@ export async function POST(request: Request) {
       if (!replacement) return Response.json({ error: "ไม่พบใบขอเบิก" }, { status: 404 });
       if (Number(replacement.issuedQty || 0) > 0) return Response.json({ error: "ใบขอนี้เริ่มเบิกแล้ว จึงยกเลิกไม่ได้" }, { status: 409 });
       await DB.prepare("UPDATE replacement_requests SET status = 'cancelled' WHERE id = ?1 AND status = 'pending'").bind(requestId).run();
+      await writeAuditLog(user, {
+        module: "replacement", moduleLabel: "เบิกงานทดแทน", action: "cancel_replacement", actionLabel: "ยกเลิกใบขอเบิกงานทดแทน",
+        entityType: "replacement_request", entityId: String(replacement.requestNo || requestId),
+        summary: `ยกเลิกใบขอ ${String(replacement.requestNo || requestId)} · ${String(replacement.materialCode || "")}`,
+        before: replacement, after: { ...replacement, status: "cancelled" },
+      }, request);
       return Response.json({ success: true, request: await requestRow(requestId) });
     }
 
