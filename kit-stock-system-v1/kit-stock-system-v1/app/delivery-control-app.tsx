@@ -1739,10 +1739,11 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "manual_receive", ...manualStockForm, qty: Number(manualStockForm.qty || 0) }),
       });
-      const data = await response.json() as { tag?: StockTag; error?: string };
+      const data = await response.json() as { tag?: StockTag; tags?: StockTag[]; totalQty?: number; packQty?: number; boxCount?: number; error?: string };
       if (!response.ok) throw new Error(data.error || "คีย์รับงานเข้า Stock ไม่สำเร็จ");
       setManualStockForm((current) => ({ ...current, materialCode: "", qty: "", jobNo: "", referenceNo: "", note: "" }));
-      setNotice({ type: "success", text: `รับเข้า Stock แบบคีย์เอง ${fmt(Number(data.tag?.qty || 0))} ชิ้น · สร้าง KIT Tag ${data.tag?.tagId || ""} แล้ว` });
+      const createdTagCount = Number(data.boxCount || data.tags?.length || (data.tag ? 1 : 0));
+      setNotice({ type: "success", text: `รับเข้า Stock แบบคีย์เอง ${fmt(Number(data.totalQty || 0))} ชิ้น · แบ่งตามจำนวนต่อกล่องและสร้าง KIT Tag ${fmt(createdTagCount)} ใบแล้ว` });
       await loadStock();
     } catch (caught) {
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "คีย์รับงานเข้า Stock ไม่สำเร็จ" });
@@ -3181,6 +3182,11 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   function renderStock() {
     const receivedStockTags = stock.tags.filter((item) => item.status === "in_stock" || item.status === "depleted");
     const activeStockParts = stock.parts.filter((part) => part.active).sort((left, right) => left.materialCode.localeCompare(right.materialCode));
+    const selectedManualStockPart = activeStockParts.find((part) => part.materialCode === manualStockForm.materialCode.trim().toUpperCase());
+    const manualReceiptQty = Number(manualStockForm.qty || 0);
+    const manualReceiptTagCount = selectedManualStockPart?.standardQty && manualReceiptQty > 0
+      ? Math.ceil(manualReceiptQty / selectedManualStockPart.standardQty)
+      : 0;
     const onHand = receivedStockTags.reduce((sum, item) => sum + Number(item.remainingQty), 0);
     const reserved = receivedStockTags.reduce((sum, item) => sum + Number(item.reservedQty), 0);
     const available = Math.max(onHand - reserved, 0);
@@ -3229,8 +3235,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
             <header><span>＋</span><div><b>รับงานเข้า Stock แบบคีย์เอง</b><small>สำหรับงานที่ไม่มี KIT Tag ระบบจะสร้าง Tag ภายในให้อัตโนมัติ</small></div></header>
             <div className="stock-management-fields">
               <label><span>Part / Material *</span><input required list="manual-stock-part-options" value={manualStockForm.materialCode} onChange={(event) => setManualStockForm((current) => ({ ...current, materialCode: event.target.value.toUpperCase() }))} placeholder="พิมพ์รหัส/ชื่อ หรือเลือก Part" autoComplete="off" spellCheck={false} /><datalist id="manual-stock-part-options">{activeStockParts.map((part) => <option key={part.materialCode} value={part.materialCode}>{part.partName}{part.customer ? ` · ${part.customer}` : ""}</option>)}</datalist></label>
+              <label><span>จำนวนต่อกล่อง / Tag ที่จะสร้าง</span><input value={selectedManualStockPart ? `${fmt(selectedManualStockPart.standardQty)} ชิ้น/กล่อง${manualReceiptTagCount ? ` · ${fmt(manualReceiptTagCount)} Tag` : ""}` : ""} placeholder="เลือก Part และกรอกจำนวนก่อน" readOnly /></label>
               <label><span>จำนวนรับเข้า *</span><input required type="number" min={1} step={1} inputMode="numeric" value={manualStockForm.qty} onChange={(event) => setManualStockForm((current) => ({ ...current, qty: event.target.value.replace(/[^0-9]/g, "") }))} placeholder="จำนวนชิ้น" /></label>
-              <label><span>Job / เอกสารอ้างอิง *</span><input required value={manualStockForm.jobNo} onChange={(event) => setManualStockForm((current) => ({ ...current, jobNo: event.target.value }))} placeholder="เช่น JOB-260904-001" /></label>
+              <label><span>Job / เอกสารอ้างอิง *</span><input required value={manualStockForm.jobNo} onChange={(event) => setManualStockForm((current) => ({ ...current, jobNo: event.target.value.toUpperCase() }))} placeholder="เช่น JOB-260904-001 (ห้ามซ้ำ)" /></label>
               <label><span>วันที่ผลิต *</span><input required type="date" value={manualStockForm.productionDate} onChange={(event) => setManualStockForm((current) => ({ ...current, productionDate: event.target.value }))} /></label>
               <label><span>เลขที่ใบรับ / อ้างอิง</span><input value={manualStockForm.referenceNo} onChange={(event) => setManualStockForm((current) => ({ ...current, referenceNo: event.target.value }))} placeholder="ไม่บังคับ" /></label>
               <label className="wide"><span>หมายเหตุ</span><input value={manualStockForm.note} onChange={(event) => setManualStockForm((current) => ({ ...current, note: event.target.value }))} placeholder="ระบุที่มาของงานหรือรายละเอียดเพิ่มเติม" /></label>
