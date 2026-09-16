@@ -1,5 +1,6 @@
 import { getRuntimeEnv } from "../../../../runtime/env";
-import { SESSION_COOKIE } from "../../../cloudflare-auth";
+import { getCurrentUser, SESSION_COOKIE } from "../../../cloudflare-auth";
+import { writeAuditLog } from "../../../audit-log";
 
 function sessionTokenFrom(request: Request) {
   const cookie = request.headers.get("cookie") ?? "";
@@ -18,7 +19,12 @@ function sessionTokenFrom(request: Request) {
  * โดยที่เจ้าตัวไม่รู้ตัว (CSRF) — น่ารำคาญมากถ้าเกิดตอนกำลังสแกนของอยู่หน้างาน
  */
 export async function POST(request: Request) {
+  const user = await getCurrentUser().catch(() => null);
   const token = sessionTokenFrom(request);
+  if (user) await writeAuditLog(user, {
+    module: "security", moduleLabel: "ความปลอดภัย", action: "logout", actionLabel: "ออกจากระบบ",
+    entityType: "app_user", entityId: user.id, summary: `ออกจากระบบบัญชี ${user.displayName} (${user.employeeCode})`,
+  }, request);
   if (token) {
     await getRuntimeEnv().DB
       ?.prepare("DELETE FROM app_sessions WHERE id = ?1")
