@@ -1021,7 +1021,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }, [hasDueDataPermission]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!["stock", "parts", "tags", "arrange", "replacement", "dispatch", "reports", "history"].includes(page)) return;
+    if (!["stock", "manual-stock", "stock-count", "parts", "tags", "arrange", "replacement", "dispatch", "reports", "history"].includes(page)) return;
     const timer = window.setTimeout(() => void loadStock(), 0);
     return () => window.clearTimeout(timer);
   }, [page]);
