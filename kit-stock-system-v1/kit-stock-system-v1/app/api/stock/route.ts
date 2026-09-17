@@ -492,9 +492,11 @@ export async function POST(request: Request) {
           cast(json_extract(value, '$.qty') AS INTEGER),
           ?3, ?4, 'printed', ?5, '', '', NULL, CURRENT_TIMESTAMP
         FROM json_each(?1)
-        WHERE NOT EXISTS (
-          SELECT 1 FROM stock_tags WHERE upper(trim(job_no)) = ?3
-        )
+        CROSS JOIN (
+          SELECT count(*) AS existing_job_count
+          FROM stock_tags WHERE upper(trim(job_no)) = ?3
+        ) AS job_guard
+        WHERE job_guard.existing_job_count = 0
       `).bind(JSON.stringify(tagDrafts), materialCode, jobNo, productionDate, user.displayName).run();
       if (Number(insertedResult.meta.changes || 0) !== boxCount) {
         return Response.json({
