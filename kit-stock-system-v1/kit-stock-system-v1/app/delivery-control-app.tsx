@@ -4,7 +4,7 @@
 
 import { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
-type PageKey = "dashboard" | "stock" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
+type PageKey = "dashboard" | "stock" | "manual-stock" | "stock-count" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
 
 type DueLine = {
   id: number;
@@ -126,10 +126,10 @@ type StockCountAdjustmentLine = {
   qtyChange: number; beforeQty: number; afterQty: number; createdAt: string;
 };
 type StockCountPreview = {
-  action: "preview_stock_count"; materialCode: string; partName: string; countDate: string;
+  action: "preview_tag_count"; tagId: string; materialCode: string; partName: string;
+  customer: string; jobNo: string; productionDate: string; status: string;
   systemQty: number; countedQty: number; difference: number; reservedQty: number;
-  reducibleQty: number; affectedTagCount: number;
-  affectedTags: Array<{ stockTagCode: string; qtyChange: number; beforeQty: number; afterQty: number }>;
+  availableQty: number; materialTotalQty: number; materialTotalAfter: number; countDate: string;
 };
 type StockPayload = {
   parts: StockPart[]; tags: StockTag[]; allocations: StockAllocation[];
@@ -211,6 +211,8 @@ const EMPTY_USER: UserForm = { employeeCode: "", displayName: "", email: "", rol
 const NAV: Array<{ key: PageKey; label: string; icon: string }> = [
   { key: "dashboard", label: "หน้าหลัก", icon: "⌂" },
   { key: "stock", label: "Stock", icon: "▦" },
+  { key: "manual-stock", label: "รับเข้า Stock แบบคีย์เอง", icon: "＋" },
+  { key: "stock-count", label: "ตรวจนับ/ปรับยอดสิ้นเดือน", icon: "≋" },
   { key: "forecast", label: "Forecast Stock", icon: "▧" },
   { key: "parts", label: "ทะเบียน Part", icon: "▦" },
   { key: "tags", label: "พิมพ์ Tag", icon: "▤" },
@@ -254,6 +256,8 @@ function updatePageLocation(next: PageKey, mode: "push" | "replace" = "push") {
 const PERMISSION_HELP: Record<PageKey, string> = {
   dashboard: "ภาพรวม Due และสถานะงาน",
   stock: "รับ Tag เข้า Stock และดูยอดคงเหลือ",
+  "manual-stock": "คีย์รับงานเข้าและสร้าง Tag ตามจำนวนบรรจุต่อกล่อง",
+  "stock-count": "สแกนตรวจนับและปรับยอดทีละ KIT Stock Tag",
   forecast: "นำเข้า Forecast ลูกค้าและตรวจว่ายอด Stock ส่งได้ถึงวันไหน",
   parts: "ทะเบียน Part และรูปชิ้นงาน",
   tags: "ทะเบียน Part สร้างและพิมพ์ Tag",
@@ -272,6 +276,8 @@ const PERMISSION_HELP: Record<PageKey, string> = {
 const PAGE_SUBTITLE: Record<PageKey, string> = {
   dashboard: "ภาพรวมการส่งงานและสถานะล่าสุด",
   stock: "สแกนรับเข้า ตรวจสอบยอดคงเหลือ และประวัติ Stock",
+  "manual-stock": "คีย์รับเข้า แบ่งจำนวนตามบรรจุต่อกล่อง และสร้าง Tag อัตโนมัติ",
+  "stock-count": "สแกนและบันทึกยอดจริงทีละ Tag พร้อมปรับยอด Stock รวม",
   forecast: "นำเข้า Forecast รายวันและตรวจสอบว่ายอด Stock ส่งได้ถึงวันไหน",
   parts: "เพิ่ม นำเข้า และจัดการรูปชิ้นงานของแต่ละ Part",
   tags: "ทะเบียน Part สร้าง Tag และพิมพ์ Tag รับงานเข้า Stock",
@@ -711,7 +717,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [query, setQuery] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
-  const [cameraPurpose, setCameraPurpose] = useState<"scan" | "stock">("scan");
+  const [cameraPurpose, setCameraPurpose] = useState<"scan" | "stock" | "stock-count">("scan");
   const [cameraError, setCameraError] = useState("");
   const [selectedScan, setSelectedScan] = useState<DueScan | null>(null);
   const [settings, setSettings] = useState({ partial: true, confirm: true, sound: true, autoFocus: true });
@@ -744,9 +750,10 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [deletingImportId, setDeletingImportId] = useState<number | null>(null);
   const [stock, setStock] = useState<StockPayload>({ parts: [], tags: [], allocations: [], picks: [], dispatchLinks: [], jobClosures: [], manualReceipts: [], countAdjustments: [], countAdjustmentLines: [] });
   const [manualStockForm, setManualStockForm] = useState({ materialCode: "", qty: "", jobNo: "", productionDate: new Date().toISOString().slice(0, 10), referenceNo: "", note: "" });
-  const [stockCountForm, setStockCountForm] = useState({ materialCode: "", countedQty: "", countDate: new Date().toISOString().slice(0, 10), reason: "" });
+  const [stockCountForm, setStockCountForm] = useState({ rawPayload: "", countedQty: "", countDate: new Date().toISOString().slice(0, 10), reason: "บันทึกยอดตรวจนับ Stock สิ้นเดือน" });
   const [stockCountPreview, setStockCountPreview] = useState<StockCountPreview | null>(null);
   const [stockManagementSaving, setStockManagementSaving] = useState(false);
+  const stockCountInputRef = useRef<HTMLInputElement>(null);
   const [replacement, setReplacement] = useState<ReplacementPayload>({ requests: [], issues: [] });
   const [replacementLoading, setReplacementLoading] = useState(false);
   const [replacementSaving, setReplacementSaving] = useState(false);
@@ -1238,6 +1245,11 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         void receiveStockTag(value);
         return;
       }
+      if (cameraPurpose === "stock-count") {
+        setStockCountForm((current) => ({ ...current, rawPayload: value }));
+        void loadStockCountTag(value);
+        return;
+      }
       if (page === "verify") {
         setVerifyRaw(value);
         setVerifyResult(null);
@@ -1292,9 +1304,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }, [cameraOpen, cameraPurpose, page]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const scannerPage = page === "stock" || page === "dispatch" || (page === "replacement" && canIssueReplacement);
+    const scannerPage = page === "stock" || page === "stock-count" || page === "dispatch" || (page === "replacement" && canIssueReplacement);
     if (!scannerPage || stockReceivePreview || dispatchConfirmation || replacementPreview || cameraOpen) return;
-    const activeInput = page === "stock" ? stockScanInputRef.current : page === "replacement" ? replacementInputRef.current : tagInput.current;
+    const activeInput = page === "stock" ? stockScanInputRef.current : page === "stock-count" ? stockCountInputRef.current : page === "replacement" ? replacementInputRef.current : tagInput.current;
     const mobileOrTouch = window.matchMedia("(max-width: 720px), (pointer: coarse)").matches;
     const focusTimer = mobileOrTouch ? null : window.setTimeout(() => activeInput?.focus(), 80);
     const submitBuffer = () => {
@@ -1306,6 +1318,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       if (page === "stock") {
         setStockScan(value);
         void receiveStockTag(value);
+      } else if (page === "stock-count") {
+        setStockCountForm((current) => ({ ...current, rawPayload: value }));
+        void loadStockCountTag(value);
       } else if (page === "replacement") {
         setReplacementTag(value);
         void previewReplacementIssue(value);
@@ -1752,6 +1767,37 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     }
   }
 
+  function defaultStockCountReason(difference: number) {
+    if (difference > 0) return "ปรับเพิ่มยอดนับ Stock สิ้นเดือน";
+    if (difference < 0) return "ปรับลดยอดนับ Stock สิ้นเดือน";
+    return "บันทึกยอดตรวจนับ Stock สิ้นเดือน";
+  }
+
+  async function loadStockCountTag(value?: string) {
+    const rawPayload = (value ?? stockCountForm.rawPayload).trim();
+    if (!rawPayload || stockManagementSaving) return;
+    setStockManagementSaving(true);
+    setStockCountPreview(null);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "preview_tag_count", rawPayload, countDate: stockCountForm.countDate }),
+      });
+      const data = await response.json() as StockCountPreview & { error?: string };
+      if (!response.ok) throw new Error(data.error || "ตรวจสอบ KIT Stock Tag ไม่สำเร็จ");
+      setStockCountForm((current) => ({
+        ...current, rawPayload: data.tagId, countedQty: String(data.systemQty),
+        reason: defaultStockCountReason(0),
+      }));
+      setStockCountPreview(data);
+      setNotice({ type: "success", text: `พบ Tag ${data.tagId} · ยอดในระบบ ${fmt(data.systemQty)} ชิ้น กรุณาตรวจนับและแก้ไขยอดจริง` });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบ KIT Stock Tag ไม่สำเร็จ" });
+    } finally {
+      setStockManagementSaving(false);
+    }
+  }
+
   async function previewStockCount(event: FormEvent) {
     event.preventDefault();
     if (stockManagementSaving) return;
@@ -1759,13 +1805,21 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     try {
       const response = await fetch("/api/stock", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "preview_stock_count", ...stockCountForm, countedQty: Number(stockCountForm.countedQty) }),
+        body: JSON.stringify({
+          action: "preview_tag_count", rawPayload: stockCountForm.rawPayload,
+          countedQty: Number(stockCountForm.countedQty), countDate: stockCountForm.countDate,
+        }),
       });
       const data = await response.json() as StockCountPreview & { error?: string };
-      if (!response.ok) throw new Error(data.error || "ตรวจสอบยอด Stock ไม่สำเร็จ");
+      if (!response.ok) throw new Error(data.error || "ตรวจสอบยอด Tag ไม่สำเร็จ");
+      setStockCountForm((current) => ({
+        ...current,
+        reason: current.reason.trim() && current.reason !== "บันทึกยอดตรวจนับ Stock สิ้นเดือน"
+          ? current.reason : defaultStockCountReason(data.difference),
+      }));
       setStockCountPreview(data);
     } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบยอด Stock ไม่สำเร็จ" });
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบยอด Tag ไม่สำเร็จ" });
     } finally {
       setStockManagementSaving(false);
     }
@@ -1777,17 +1831,21 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     try {
       const response = await fetch("/api/stock", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "confirm_stock_count", ...stockCountForm, countedQty: Number(stockCountForm.countedQty) }),
+        body: JSON.stringify({
+          action: "confirm_tag_count", rawPayload: stockCountForm.rawPayload,
+          countedQty: Number(stockCountForm.countedQty), countDate: stockCountForm.countDate,
+          reason: stockCountForm.reason,
+        }),
       });
-      const data = await response.json() as { adjustmentNo?: string; difference?: number; error?: string };
-      if (!response.ok) throw new Error(data.error || "ปรับยอด Stock ไม่สำเร็จ");
+      const data = await response.json() as StockCountPreview & { adjustmentNo?: string; error?: string };
+      if (!response.ok) throw new Error(data.error || "ปรับยอด Tag ไม่สำเร็จ");
       setStockCountPreview(null);
-      setStockCountForm((current) => ({ ...current, materialCode: "", countedQty: "", reason: "" }));
-      const difference = Number(data.difference || 0);
-      setNotice({ type: "success", text: `บันทึกยอดตรวจนับแล้ว ${data.adjustmentNo || ""} · ${difference > 0 ? "เพิ่ม" : difference < 0 ? "ตัด" : "ยอดตรง"} ${fmt(Math.abs(difference))} ชิ้น` });
+      setStockCountForm((current) => ({ ...current, rawPayload: "", countedQty: "", reason: "บันทึกยอดตรวจนับ Stock สิ้นเดือน" }));
+      setNotice({ type: "success", text: `บันทึก Tag ${data.tagId} แล้ว · ${data.difference > 0 ? "เพิ่ม" : data.difference < 0 ? "ลด" : "ยอดตรง"} ${fmt(Math.abs(data.difference))} ชิ้น · Stock รวม ${fmt(data.materialTotalAfter)} ชิ้น` });
       await loadStock();
+      window.setTimeout(() => stockCountInputRef.current?.focus(), 100);
     } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ปรับยอด Stock ไม่สำเร็จ" });
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ปรับยอด Tag ไม่สำเร็จ" });
     } finally {
       setStockManagementSaving(false);
     }
@@ -3179,6 +3237,53 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     </div>;
   }
 
+  function renderManualStock() {
+    const activeStockParts = stock.parts.filter((part) => part.active).sort((left, right) => left.materialCode.localeCompare(right.materialCode));
+    const selectedPart = activeStockParts.find((part) => part.materialCode === manualStockForm.materialCode.trim().toUpperCase());
+    const totalQty = Number(manualStockForm.qty || 0);
+    const tagCount = selectedPart?.standardQty && totalQty > 0 ? Math.ceil(totalQty / selectedPart.standardQty) : 0;
+    return <div className="stock-home">
+      <Card className="stock-management-card" title="รับงานเข้า Stock แบบคีย์เอง">
+        <form className="stock-management-panel manual" onSubmit={saveManualStockReceipt}>
+          <header><span>＋</span><div><b>คีย์รับเข้าและสร้าง KIT Tag</b><small>ระบบแบ่งจำนวนตามจำนวนบรรจุต่อกล่องของ Part และสร้าง Tag ให้ครบทุกกล่อง</small></div></header>
+          <div className="stock-management-fields">
+            <label><span>Part / Material *</span><input required list="manual-stock-part-options" value={manualStockForm.materialCode} onChange={(event) => setManualStockForm((current) => ({ ...current, materialCode: event.target.value.toUpperCase() }))} placeholder="พิมพ์รหัส/ชื่อ หรือเลือก Part" autoComplete="off" spellCheck={false} /><datalist id="manual-stock-part-options">{activeStockParts.map((part) => <option key={part.materialCode} value={part.materialCode}>{part.partName}{part.customer ? ` · ${part.customer}` : ""}</option>)}</datalist></label>
+            <label><span>จำนวนต่อกล่อง / Tag ที่จะสร้าง</span><input value={selectedPart ? `${fmt(selectedPart.standardQty)} ชิ้น/กล่อง${tagCount ? ` · ${fmt(tagCount)} Tag` : ""}` : ""} placeholder="เลือก Part และกรอกจำนวนก่อน" readOnly /></label>
+            <label><span>จำนวนรับเข้า *</span><input required type="number" min={1} step={1} inputMode="numeric" value={manualStockForm.qty} onChange={(event) => setManualStockForm((current) => ({ ...current, qty: event.target.value.replace(/[^0-9]/g, "") }))} placeholder="จำนวนชิ้น" /></label>
+            <label><span>Job / เอกสารอ้างอิง *</span><input required value={manualStockForm.jobNo} onChange={(event) => setManualStockForm((current) => ({ ...current, jobNo: event.target.value.toUpperCase() }))} placeholder="เช่น JOB-260904-001 (ห้ามซ้ำ)" /></label>
+            <label><span>วันที่ผลิต *</span><input required type="date" value={manualStockForm.productionDate} onChange={(event) => setManualStockForm((current) => ({ ...current, productionDate: event.target.value }))} /></label>
+            <label><span>เลขที่ใบรับ / อ้างอิง</span><input value={manualStockForm.referenceNo} onChange={(event) => setManualStockForm((current) => ({ ...current, referenceNo: event.target.value }))} placeholder="ไม่บังคับ" /></label>
+            <label className="wide"><span>หมายเหตุ</span><input value={manualStockForm.note} onChange={(event) => setManualStockForm((current) => ({ ...current, note: event.target.value }))} placeholder="ระบุที่มาของงานหรือรายละเอียดเพิ่มเติม" /></label>
+          </div>
+          <button className="button primary stock-management-submit" disabled={stockManagementSaving}>{stockManagementSaving ? "กำลังบันทึก…" : `✓ บันทึกรับเข้าและสร้าง ${fmt(tagCount)} Tag`}</button>
+        </form>
+        <div className="stock-management-history"><div><b>รับเข้าแบบคีย์ล่าสุด</b>{stock.manualReceipts.slice(0, 10).map((item) => <article key={item.id}><span><b>{item.materialCode}</b><small>{item.jobNo} · {item.tagId}</small></span><em className="plus">+{fmt(item.qty)}</em><small>{item.receivedByName} · {formatDateTime(item.receivedAt)}</small></article>)}{!stock.manualReceipts.length && <p>ยังไม่มีรายการ</p>}</div></div>
+      </Card>
+    </div>;
+  }
+
+  function renderStockCount() {
+    const preview = stockCountPreview;
+    return <div className="stock-home">
+      <Card className="stock-management-card" title="ตรวจนับและปรับยอดสิ้นเดือน">
+        <form className="stock-management-panel count" onSubmit={previewStockCount}>
+          <header><span>≋</span><div><b>สแกนตรวจนับทีละ KIT Stock Tag</b><small>ยอดของ Tag และยอด Stock รวมจะเพิ่มหรือลดพร้อมกัน พร้อมเก็บประวัติผู้แก้ไข</small></div></header>
+          <button type="button" className="stock-camera-zone" onClick={() => { setCameraPurpose("stock-count"); setCameraOpen(true); }}><span>⌗</span><b>สแกน Tag ที่ต้องการตรวจนับ</b><small>สแกนและบันทึกให้เสร็จทีละ Tag</small></button>
+          <div className="stock-management-fields">
+            <label className="wide"><span>KIT Stock Tag *</span><div className="stock-receive-form"><input ref={stockCountInputRef} required value={stockCountForm.rawPayload} onChange={(event) => { setStockCountPreview(null); setStockCountForm((current) => ({ ...current, rawPayload: event.target.value.toUpperCase() })); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void loadStockCountTag(value); } }} placeholder="สแกนหรือพิมพ์รหัส KIT Stock Tag" autoComplete="off" /><button type="button" className="button secondary" disabled={!stockCountForm.rawPayload.trim() || stockManagementSaving} onClick={() => void loadStockCountTag()}>{stockManagementSaving ? "กำลังตรวจสอบ…" : "ตรวจสอบ Tag"}</button></div></label>
+            {preview && <><label><span>Part / Material</span><input value={`${preview.materialCode} · ${preview.partName}`} readOnly /></label><label><span>Job</span><input value={preview.jobNo || "—"} readOnly /></label><label><span>ยอดใน Tag ก่อนตรวจนับ</span><input value={`${fmt(preview.systemQty)} ชิ้น`} readOnly /></label><label><span>ยอด Stock รวมก่อนปรับ</span><input value={`${fmt(preview.materialTotalQty)} ชิ้น`} readOnly /></label></>}
+            <label><span>ยอดนับจริงของ Tag *</span><input required disabled={!preview} type="number" min={preview?.reservedQty || 0} step={1} inputMode="numeric" value={stockCountForm.countedQty} onChange={(event) => { const countedQty = event.target.value.replace(/[^0-9]/g, ""); const difference = Number(countedQty || 0) - Number(preview?.systemQty || 0); setStockCountForm((current) => ({ ...current, countedQty, reason: defaultStockCountReason(difference) })); }} placeholder="จำนวนที่นับได้จาก Tag นี้" /></label>
+            <label><span>วันที่ตรวจนับ *</span><input required type="date" value={stockCountForm.countDate} onChange={(event) => setStockCountForm((current) => ({ ...current, countDate: event.target.value }))} /></label>
+            <label className="wide"><span>สาเหตุการปรับยอด *</span><input required value={stockCountForm.reason} onChange={(event) => setStockCountForm((current) => ({ ...current, reason: event.target.value }))} /></label>
+          </div>
+          {preview && <p className="stock-count-safety"><b>Tag นี้มีงานจัดรอขาย/จอง {fmt(preview.reservedQty)} ชิ้น</b><span>ยอดนับจริงต้องไม่น้อยกว่ายอดที่จองไว้</span></p>}
+          <button className="button stock-count-preview-button" disabled={!preview || stockManagementSaving || stockCountForm.countedQty === ""}>{stockManagementSaving ? "กำลังตรวจสอบ…" : "ตรวจสอบยอดก่อนบันทึก →"}</button>
+        </form>
+        <div className="stock-management-history"><div><b>ประวัติปรับยอดทีละ Tag ล่าสุด</b>{stock.countAdjustments.slice(0, 10).map((item) => { const line = stock.countAdjustmentLines.find((entry) => entry.adjustmentId === item.id); return <article key={item.id}><span><b>{line?.stockTagCode || item.materialCode}</b><small>{item.adjustmentNo} · {item.reason}</small></span><em className={item.difference < 0 ? "minus" : item.difference > 0 ? "plus" : "equal"}>{item.difference > 0 ? "+" : ""}{fmt(item.difference)}</em><small>{item.adjustedByName} · {formatDateTime(item.adjustedAt)}</small></article>; })}{!stock.countAdjustments.length && <p>ยังไม่มีรายการ</p>}</div></div>
+      </Card>
+    </div>;
+  }
+
   function renderStock() {
     const receivedStockTags = stock.tags.filter((item) => item.status === "in_stock" || item.status === "depleted");
     const activeStockParts = stock.parts.filter((part) => part.active).sort((left, right) => left.materialCode.localeCompare(right.materialCode));
@@ -3229,45 +3334,6 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           })}</div><button className="stock-view-all" onClick={() => setTagSearch("")}>ดูรายการทั้งหมด →</button></> : <Empty title="ยังไม่มี Stock" text={stockNeedle ? "ไม่พบรายการที่ค้นหา" : "ยิง Tag รับงานเข้า Stock แล้วรายการจะแสดงที่นี่"} />}
         </Card>
       </div>
-      <Card className="stock-management-card" title="รับเข้าแบบคีย์เอง / ปรับยอดตรวจนับ">
-        <div className="stock-management-grid">
-          <form className="stock-management-panel manual" onSubmit={saveManualStockReceipt}>
-            <header><span>＋</span><div><b>รับงานเข้า Stock แบบคีย์เอง</b><small>สำหรับงานที่ไม่มี KIT Tag ระบบจะสร้าง Tag ภายในให้อัตโนมัติ</small></div></header>
-            <div className="stock-management-fields">
-              <label><span>Part / Material *</span><input required list="manual-stock-part-options" value={manualStockForm.materialCode} onChange={(event) => setManualStockForm((current) => ({ ...current, materialCode: event.target.value.toUpperCase() }))} placeholder="พิมพ์รหัส/ชื่อ หรือเลือก Part" autoComplete="off" spellCheck={false} /><datalist id="manual-stock-part-options">{activeStockParts.map((part) => <option key={part.materialCode} value={part.materialCode}>{part.partName}{part.customer ? ` · ${part.customer}` : ""}</option>)}</datalist></label>
-              <label><span>จำนวนต่อกล่อง / Tag ที่จะสร้าง</span><input value={selectedManualStockPart ? `${fmt(selectedManualStockPart.standardQty)} ชิ้น/กล่อง${manualReceiptTagCount ? ` · ${fmt(manualReceiptTagCount)} Tag` : ""}` : ""} placeholder="เลือก Part และกรอกจำนวนก่อน" readOnly /></label>
-              <label><span>จำนวนรับเข้า *</span><input required type="number" min={1} step={1} inputMode="numeric" value={manualStockForm.qty} onChange={(event) => setManualStockForm((current) => ({ ...current, qty: event.target.value.replace(/[^0-9]/g, "") }))} placeholder="จำนวนชิ้น" /></label>
-              <label><span>Job / เอกสารอ้างอิง *</span><input required value={manualStockForm.jobNo} onChange={(event) => setManualStockForm((current) => ({ ...current, jobNo: event.target.value.toUpperCase() }))} placeholder="เช่น JOB-260904-001 (ห้ามซ้ำ)" /></label>
-              <label><span>วันที่ผลิต *</span><input required type="date" value={manualStockForm.productionDate} onChange={(event) => setManualStockForm((current) => ({ ...current, productionDate: event.target.value }))} /></label>
-              <label><span>เลขที่ใบรับ / อ้างอิง</span><input value={manualStockForm.referenceNo} onChange={(event) => setManualStockForm((current) => ({ ...current, referenceNo: event.target.value }))} placeholder="ไม่บังคับ" /></label>
-              <label className="wide"><span>หมายเหตุ</span><input value={manualStockForm.note} onChange={(event) => setManualStockForm((current) => ({ ...current, note: event.target.value }))} placeholder="ระบุที่มาของงานหรือรายละเอียดเพิ่มเติม" /></label>
-            </div>
-            <button className="button primary stock-management-submit" disabled={stockManagementSaving}>{stockManagementSaving ? "กำลังบันทึก…" : "✓ บันทึกรับเข้า Stock"}</button>
-          </form>
-          {user.role === "admin" ? <form className="stock-management-panel count" onSubmit={previewStockCount}>
-            <header><span>≋</span><div><b>ตรวจนับและปรับยอดสิ้นเดือน</b><small>ยอดลดจะไล่ตัดจาก KIT Tag ที่มีอยู่จริง โดยไม่แตะงานที่จัดรอขาย</small></div></header>
-            <div className="stock-management-fields">
-              <label><span>Part / Material *</span><input required list="stock-count-part-options" value={stockCountForm.materialCode} onChange={(event) => setStockCountForm((current) => ({ ...current, materialCode: event.target.value.toUpperCase() }))} placeholder="พิมพ์รหัส/ชื่อ หรือเลือก Part" autoComplete="off" spellCheck={false} /><datalist id="stock-count-part-options">{activeStockParts.map((part) => <option key={part.materialCode} value={part.materialCode}>{part.partName}{part.customer ? ` · ${part.customer}` : ""}</option>)}</datalist></label>
-              <label><span>ยอดนับจริง *</span><input required type="number" min={0} step={1} inputMode="numeric" value={stockCountForm.countedQty} onChange={(event) => setStockCountForm((current) => ({ ...current, countedQty: event.target.value.replace(/[^0-9]/g, "") }))} placeholder="รวมทุก Tag" /></label>
-              <label><span>วันที่ตรวจนับ *</span><input required type="date" value={stockCountForm.countDate} onChange={(event) => setStockCountForm((current) => ({ ...current, countDate: event.target.value }))} /></label>
-              <label className="wide"><span>สาเหตุการปรับยอด *</span><input required value={stockCountForm.reason} onChange={(event) => setStockCountForm((current) => ({ ...current, reason: event.target.value }))} placeholder="เช่น ตรวจนับสิ้นเดือน / พบยอดคลาดเคลื่อน" /></label>
-            </div>
-            <button className="button stock-count-preview-button" disabled={stockManagementSaving}>{stockManagementSaving ? "กำลังตรวจสอบ…" : "ตรวจสอบยอดก่อนปรับ →"}</button>
-          </form> : <aside className="stock-management-panel locked"><span>🔒</span><b>ปรับยอดตรวจนับสิ้นเดือน</b><p>ส่วนนี้จำกัดเฉพาะผู้ดูแลระบบ เพื่อป้องกันการแก้ยอด Stock โดยไม่ตั้งใจ</p></aside>}
-        </div>
-        {(stock.manualReceipts.length > 0 || stock.countAdjustments.length > 0) && <div className="stock-management-history">
-          <div>
-            <b>รับเข้าแบบคีย์ล่าสุด</b>
-            {stock.manualReceipts.slice(0, 5).map((item) => <article key={item.id}><span><b>{item.materialCode}</b><small>{item.jobNo} · {item.tagId}</small></span><em className="plus">+{fmt(item.qty)}</em><small>{item.receivedByName} · {formatDateTime(item.receivedAt)}</small></article>)}
-            {!stock.manualReceipts.length && <p>ยังไม่มีรายการ</p>}
-          </div>
-          <div>
-            <b>ประวัติปรับยอดล่าสุด</b>
-            {stock.countAdjustments.slice(0, 5).map((item) => <article key={item.id}><span><b>{item.materialCode}</b><small>{item.adjustmentNo} · {item.reason}</small></span><em className={item.difference < 0 ? "minus" : item.difference > 0 ? "plus" : "equal"}>{item.difference > 0 ? "+" : ""}{fmt(item.difference)}</em><small>{item.adjustedByName} · {formatDateTime(item.adjustedAt)}</small></article>)}
-            {!stock.countAdjustments.length && <p>ยังไม่มีรายการ</p>}
-          </div>
-        </div>}
-      </Card>
       <div className="stock-analytics-grid">
         <Card className="stock-status-card" title="3. สรุปสถานะ Stock"><div className="stock-donut-wrap"><div className="stock-donut" style={{ "--ready-stock": String(readyPercent * 3.6) + "deg" } as React.CSSProperties}><span><b>{fmt(onHand)}</b><small>ชิ้น</small></span></div><ul><li><i className="ready" /><span>พร้อมจัดงาน</span><b>{fmt(available)} ชิ้น</b><em>{readyPercent}%</em></li><li><i className="reserved" /><span>รอขายออก</span><b>{fmt(reserved)} ชิ้น</b><em>{reservedPercent}%</em></li></ul></div></Card>
         <Card className="stock-trend-card" title="แนวโน้ม 7 วันที่ผ่านมา"><div className="stock-trend-chart">{trendDays.map((item) => <div key={item.key} className="trend-column"><b>{item.qty ? fmt(item.qty) : ""}</b><i style={{ height: String(Math.max((item.qty / trendMax) * 100, 4)) + "%" }} /><span>{item.label}</span></div>)}</div></Card>
@@ -4008,7 +4074,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     </div>;
   }
 
-  const pageContent: Record<PageKey, () => ReactNode> = { dashboard: renderDashboard, stock: renderStock, forecast: renderForecast, parts: renderParts, tags: renderTags, plan: renderPlan, arrange: () => renderScan("arrange"), replacement: renderReplacement, verify: renderVerify, dispatch: () => renderScan("dispatch"), exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
+  const pageContent: Record<PageKey, () => ReactNode> = { dashboard: renderDashboard, stock: renderStock, "manual-stock": renderManualStock, "stock-count": renderStockCount, forecast: renderForecast, parts: renderParts, tags: renderTags, plan: renderPlan, arrange: () => renderScan("arrange"), replacement: renderReplacement, verify: renderVerify, dispatch: () => renderScan("dispatch"), exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
   const activeNav = NAV.find((item) => item.key === page) || NAV.find((item) => item.key === firstAllowedPage) || NAV[0];
 
   return <div className="control-shell">
@@ -4069,21 +4135,19 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       </div>
       <footer><button type="button" className="button secondary" onClick={() => { setReplacementPreview(null); setReplacementTag(""); setReplacementQty(""); }}>ยกเลิก / สแกนใหม่</button><button type="button" className="button confirm-replacement-button" disabled={replacementSaving || !Number(replacementQty) || Number(replacementQty) > replacementPreview.request.remainingQty || Number(replacementQty) > replacementPreview.tag.availableQty} onClick={() => void confirmReplacementIssue()}>{replacementSaving ? "กำลังเบิกงาน…" : "✓ ยืนยันเบิกและตัดยอด"}</button></footer>
     </div></div>}
-    {stockCountPreview && <div className="modal-backdrop stock-count-backdrop" role="dialog" aria-modal="true" aria-labelledby="stock-count-title"><div className="stock-count-modal">
-      <header><div><span>≋</span><div><small>ตรวจนับ Stock สิ้นเดือน</small><h3 id="stock-count-title">ยืนยันการปรับยอด</h3></div></div><button type="button" onClick={() => setStockCountPreview(null)} aria-label="ปิด">×</button></header>
+    {stockCountPreview && stockCountForm.countedQty !== "" && <div className="modal-backdrop stock-count-backdrop" role="dialog" aria-modal="true" aria-labelledby="stock-count-title"><div className="stock-count-modal">
+      <header><div><span>≋</span><div><small>ตรวจนับ Stock สิ้นเดือนทีละ Tag</small><h3 id="stock-count-title">ยืนยันการปรับยอด Tag</h3></div></div><button type="button" onClick={() => setStockCountPreview(null)} aria-label="ปิด">×</button></header>
       <div className="stock-count-content">
-        <section><small>PART / MATERIAL</small><h4>{stockCountPreview.materialCode}</h4><p>{stockCountPreview.partName}</p></section>
+        <section><small>KIT STOCK TAG</small><h4>{stockCountPreview.tagId}</h4><p>{stockCountPreview.materialCode} · {stockCountPreview.partName} · Job {stockCountPreview.jobNo}</p></section>
         <div className="stock-count-compare">
-          <article><small>ยอดในระบบ</small><b>{fmt(stockCountPreview.systemQty)}</b><em>ชิ้น</em></article>
-          <span>→</span>
+          <article><small>ยอดเดิมใน Tag</small><b>{fmt(stockCountPreview.systemQty)}</b><em>ชิ้น</em></article><span>→</span>
           <article><small>ยอดนับจริง</small><b>{fmt(stockCountPreview.countedQty)}</b><em>ชิ้น</em></article>
           <article className={stockCountPreview.difference < 0 ? "negative" : stockCountPreview.difference > 0 ? "positive" : "equal"}><small>ผลต่าง</small><b>{stockCountPreview.difference > 0 ? "+" : ""}{fmt(stockCountPreview.difference)}</b><em>ชิ้น</em></article>
         </div>
-        <div className="stock-count-safety"><b>งานจัดรอขาย/จองไว้ {fmt(stockCountPreview.reservedQty)} ชิ้น</b><span>{stockCountPreview.difference < 0 ? `ระบบจะตัดจาก KIT Tag ${fmt(stockCountPreview.affectedTagCount)} ใบ โดยไม่ตัดส่วนที่จองไว้` : stockCountPreview.difference > 0 ? "ระบบจะสร้าง Adjustment Tag ใหม่สำหรับยอดที่เพิ่ม" : "ยอดตรงกัน ระบบจะบันทึกผลตรวจนับไว้เป็นหลักฐาน"}</span></div>
-        {stockCountPreview.affectedTags.length > 0 && <div className="stock-count-tags"><b>Tag ที่จะถูกปรับ</b>{stockCountPreview.affectedTags.map((line) => <div key={line.stockTagCode}><span>{line.stockTagCode}</span><em>{line.qtyChange > 0 ? "+" : ""}{fmt(line.qtyChange)}</em><small>{fmt(line.beforeQty)} → {fmt(line.afterQty)}</small></div>)}</div>}
+        <div className="stock-count-safety"><b>ยอด Stock รวม {fmt(stockCountPreview.materialTotalQty)} → {fmt(stockCountPreview.materialTotalAfter)} ชิ้น</b><span>Tag นี้มีงานจัดรอขาย/จอง {fmt(stockCountPreview.reservedQty)} ชิ้น</span></div>
         <p className="stock-count-reason"><b>สาเหตุ:</b> {stockCountForm.reason}</p>
       </div>
-      <footer><button type="button" className="button secondary" onClick={() => setStockCountPreview(null)}>ยกเลิก</button><button type="button" className="button confirm-stock-count-button" disabled={stockManagementSaving} onClick={() => void confirmStockCountAdjustment()}>{stockManagementSaving ? "กำลังปรับยอด…" : "✓ ยืนยันปรับยอด Stock"}</button></footer>
+      <footer><button type="button" className="button secondary" onClick={() => setStockCountPreview(null)}>กลับไปแก้ไข</button><button type="button" className="button confirm-stock-count-button" disabled={stockManagementSaving || !stockCountForm.reason.trim()} onClick={() => void confirmStockCountAdjustment()}>{stockManagementSaving ? "กำลังบันทึก…" : "✓ ยืนยันปรับยอด Tag และ Stock"}</button></footer>
     </div></div>}
     {stockReceivePreview && <div className="modal-backdrop dispatch-confirm-backdrop stock-receive-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="stock-receive-confirm-title"><div className="dispatch-confirm-modal stock-receive-confirm-modal">
       <header><div><span>✓</span><div><small>ตรวจพบ KIT Stock Tag</small><h3 id="stock-receive-confirm-title">ตรวจสอบก่อนรับเข้า Stock</h3></div></div><button type="button" onClick={() => { setStockReceivePreview(null); setStockReceiveQty(""); setStockReceiveProductionDate(""); setStockScan(""); }} aria-label="ปิด">×</button></header>
@@ -4116,7 +4180,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       </div>
       {(dispatchConfirmation.verdict === "ready" || dispatchConfirmation.verdict === "ready_noimg") ? <footer><button type="button" className="button secondary" onClick={() => setDispatchConfirmation(null)}>ยกเลิก / ตรวจใหม่</button><button type="button" className="button confirm-dispatch-button" disabled={checkingTag} onClick={() => void confirmDispatch()}>{checkingTag ? "กำลังขายออก…" : "✓ ยืนยันขายออกและตัดยอด"}</button></footer> : <footer className="dispatch-confirm-blocked"><p>ไม่สามารถขายออกได้: {dispatchConfirmation.message || "ข้อมูลไม่พร้อมขายออก"}</p><button type="button" className="button secondary" onClick={() => setDispatchConfirmation(null)}>ปิดและตรวจใหม่</button></footer>}
     </div></div>}
-    {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>{cameraPurpose === "stock" ? "สแกน Tag รับงานเข้า Stock" : "สแกน Tag ด้วยกล้อง"}</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className="camera-view"><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div><p className="camera-format-hint">รองรับ QR · Data Matrix · Code 128 · Code 39</p>{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
+    {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>{cameraPurpose === "stock" ? "สแกน Tag รับงานเข้า Stock" : cameraPurpose === "stock-count" ? "สแกน Tag ตรวจนับสิ้นเดือน" : "สแกน Tag ด้วยกล้อง"}</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className="camera-view"><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div><p className="camera-format-hint">รองรับ QR · Data Matrix · Code 128 · Code 39</p>{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
     {userEditorOpen && <div className="modal-backdrop"><form className="user-modal permission-modal" onSubmit={saveUser}>
       <header><div><h3>{userForm.id ? "แก้ไขผู้ใช้งานและสิทธิ์" : "เพิ่มผู้ใช้งาน"}</h3><p>เลือกบทบาทและกำหนดหน้าที่แต่ละคนสามารถเปิดใช้งานได้</p></div><button type="button" onClick={() => setUserEditorOpen(false)}>×</button></header>
       <div className="user-form-grid">
