@@ -480,7 +480,7 @@ export async function POST(request: Request) {
         const boxQty = boxNo < boxCount ? packQty : totalQty - (packQty * (boxCount - 1));
         return { tagId: createTagId(batchCode, boxNo, boxCount), boxNo, qty: boxQty };
       });
-      // สร้างทุก Tag ด้วย INSERT เดียว: สำเร็จครบทั้ง Job หรือไม่สร้างเลย
+      // สร้างทุก Tag ด้วย INSERT เดียวแบบ atomic: สำเร็จครบทั้ง Job หรือไม่สร้างเลย
       // WHERE NOT EXISTS ป้องกันสองเครื่องสร้าง Job เดียวกันพร้อมกันโดยไม่ต้องพึ่งผลตรวจล่วงหน้า
       const insertedResult = await runtimeDb.prepare(`
         INSERT INTO stock_tags
