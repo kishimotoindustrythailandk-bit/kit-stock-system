@@ -758,16 +758,15 @@ export async function POST(request: Request) {
       }
       const systemQty = Number(tag.remainingQty || 0);
       const reservedQty = Number(tag.stagedQty || 0) + Number(tag.legacyReservedQty || 0);
+      const stockAreaSystemQty = Math.max(systemQty - reservedQty, 0);
       const hasCountedQty = body.countedQty !== undefined && body.countedQty !== "";
-      const countedQty = hasCountedQty ? Number(body.countedQty) : systemQty;
-      if (!Number.isInteger(countedQty) || countedQty < 0) {
-        return Response.json({ error: "ยอดนับจริงต้องเป็นจำนวนเต็มตั้งแต่ 0 ขึ้นไป" }, { status: 400 });
+      // ผู้ตรวจนับกรอกเฉพาะของที่พบในพื้นที่ Stock งานที่จัด/จองถูกย้ายออกไปแล้ว
+      // และระบบนำยอดนั้นกลับมารวมให้เอง ห้ามผู้ตรวจแก้ยอดจองจากหน้านี้
+      const stockAreaCountedQty = hasCountedQty ? Number(body.countedQty) : stockAreaSystemQty;
+      if (!Number.isInteger(stockAreaCountedQty) || stockAreaCountedQty < 0) {
+        return Response.json({ error: "ยอดที่นับได้ในพื้นที่ Stock ต้องเป็นจำนวนเต็มตั้งแต่ 0 ขึ้นไป" }, { status: 400 });
       }
-      if (countedQty < reservedQty) {
-        return Response.json({
-          error: `ปรับ Tag เหลือ ${countedQty} ชิ้นไม่ได้ เพราะมีงานจัดรอขาย/จองอยู่ ${reservedQty} ชิ้น`,
-        }, { status: 409 });
-      }
+      const countedQty = stockAreaCountedQty + reservedQty;
       const totalRow = await runtimeDb.prepare(`
         SELECT coalesce(sum(remaining_qty), 0) AS totalQty
         FROM stock_tags WHERE material_code = ?1 AND status IN ('in_stock', 'depleted')
@@ -779,8 +778,9 @@ export async function POST(request: Request) {
         action: "preview_tag_count" as const,
         tagId: tag.tagId, materialCode: tag.materialCode, partName: tag.partName,
         customer: tag.customer || "", jobNo: tag.jobNo, productionDate: tag.productionDate,
-        status: tag.status, systemQty, countedQty, difference, reservedQty,
-        availableQty: Math.max(systemQty - reservedQty, 0), materialTotalQty,
+        status: tag.status, systemQty, countedQty: stockAreaCountedQty, difference, reservedQty,
+        stockAreaSystemQty, stockAreaCountedQty, newTotalQty: countedQty,
+        availableQty: stockAreaSystemQty, materialTotalQty,
         materialTotalAfter, countDate,
       };
       if (action === "preview_tag_count") return Response.json(preview);
@@ -811,10 +811,10 @@ export async function POST(request: Request) {
       await writeAuditLog(user, {
         module: "stock", moduleLabel: "Stock", action: "tag_stock_count_adjustment", actionLabel: "ตรวจนับและปรับยอด Tag",
         entityType: "stock_tag", entityId: tag.tagId,
-        summary: `ตรวจนับ Tag ${tag.tagId} · ${tag.materialCode} จาก ${systemQty} เป็น ${countedQty} ชิ้น (${difference >= 0 ? "+" : ""}${difference})`,
-        details: { adjustmentNo, tagId: tag.tagId, materialCode: tag.materialCode, jobNo: tag.jobNo, countDate, systemQty, countedQty, difference, reservedQty, materialTotalQty, materialTotalAfter, reason },
-        before: { tagId: tag.tagId, remainingQty: systemQty, materialTotalQty },
-        after: { tagId: tag.tagId, remainingQty: countedQty, materialTotalQty: materialTotalAfter },
+        summary: `ตรวจนับ Tag ${tag.tagId} · พื้นที่ Stock ${stockAreaSystemQty} เป็น ${stockAreaCountedQty} ชิ้น · รวมงานจัด/จอง ${reservedQty} ชิ้น · ยอดรวมใหม่ ${countedQty} ชิ้น (${difference >= 0 ? "+" : ""}${difference})`,
+        details: { adjustmentNo, tagId: tag.tagId, materialCode: tag.materialCode, jobNo: tag.jobNo, countDate, systemQty, stockAreaSystemQty, stockAreaCountedQty, reservedQty, newTotalQty: countedQty, difference, materialTotalQty, materialTotalAfter, reason },
+        before: { tagId: tag.tagId, remainingQty: systemQty, stockAreaQty: stockAreaSystemQty, reservedQty, materialTotalQty },
+        after: { tagId: tag.tagId, remainingQty: countedQty, stockAreaQty: stockAreaCountedQty, reservedQty, materialTotalQty: materialTotalAfter },
       }, request);
       return Response.json({
         ...preview, success: true, action: "tag_stock_count_adjusted", adjustmentNo, materialTotalAfter,
