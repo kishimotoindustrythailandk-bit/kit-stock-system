@@ -13,13 +13,13 @@ export type CloudUser = {
 };
 
 export const SESSION_COOKIE = "kit_session";
-export const PERMISSION_KEYS = ["dashboard", "stock", "forecast", "parts", "tags", "plan", "arrange", "replacement", "dispatch", "exports", "reports", "history", "settings", "users"] as const;
+export const PERMISSION_KEYS = ["dashboard", "stock", "manual-stock", "stock-count", "forecast", "parts", "tags", "plan", "arrange", "replacement", "dispatch", "exports", "reports", "history", "settings", "users"] as const;
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
 
 const ROLE_DEFAULTS: Record<string, PermissionKey[]> = {
   admin: [...PERMISSION_KEYS],
   // คงค่าเดิมไว้เฉพาะบัญชี legacy ที่ยังไม่มีแถว permission ระหว่างเปลี่ยนระบบ
-  dispatcher: ["dashboard", "stock", "parts", "tags", "arrange", "replacement", "history"],
+  dispatcher: ["dashboard", "stock", "manual-stock", "stock-count", "parts", "tags", "arrange", "replacement", "history"],
   inspector: ["dashboard", "replacement", "dispatch", "history"],
 };
 
