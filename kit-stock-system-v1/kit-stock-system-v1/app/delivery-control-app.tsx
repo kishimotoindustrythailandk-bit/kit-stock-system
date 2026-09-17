@@ -752,6 +752,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [manualStockForm, setManualStockForm] = useState({ materialCode: "", qty: "", jobNo: "", productionDate: new Date().toISOString().slice(0, 10), referenceNo: "", note: "" });
   const [stockCountForm, setStockCountForm] = useState({ rawPayload: "", countedQty: "", countDate: new Date().toISOString().slice(0, 10), reason: "บันทึกยอดตรวจนับ Stock สิ้นเดือน" });
   const [stockCountPreview, setStockCountPreview] = useState<StockCountPreview | null>(null);
+  const [stockCountConfirmOpen, setStockCountConfirmOpen] = useState(false);
   const [stockManagementSaving, setStockManagementSaving] = useState(false);
   const stockCountInputRef = useRef<HTMLInputElement>(null);
   const [replacement, setReplacement] = useState<ReplacementPayload>({ requests: [], issues: [] });
@@ -1777,6 +1778,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const rawPayload = (value ?? stockCountForm.rawPayload).trim();
     if (!rawPayload || stockManagementSaving) return;
     setStockManagementSaving(true);
+    setStockCountConfirmOpen(false);
     setStockCountPreview(null);
     try {
       const response = await fetch("/api/stock", {
@@ -1818,6 +1820,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           ? current.reason : defaultStockCountReason(data.difference),
       }));
       setStockCountPreview(data);
+      setStockCountConfirmOpen(true);
     } catch (caught) {
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบยอด Tag ไม่สำเร็จ" });
     } finally {
@@ -1839,6 +1842,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       });
       const data = await response.json() as StockCountPreview & { adjustmentNo?: string; error?: string };
       if (!response.ok) throw new Error(data.error || "ปรับยอด Tag ไม่สำเร็จ");
+      setStockCountConfirmOpen(false);
       setStockCountPreview(null);
       setStockCountForm((current) => ({ ...current, rawPayload: "", countedQty: "", reason: "บันทึกยอดตรวจนับ Stock สิ้นเดือน" }));
       setNotice({ type: "success", text: `บันทึก Tag ${data.tagId} แล้ว · ${data.difference > 0 ? "เพิ่ม" : data.difference < 0 ? "ลด" : "ยอดตรง"} ${fmt(Math.abs(data.difference))} ชิ้น · Stock รวม ${fmt(data.materialTotalAfter)} ชิ้น` });
@@ -3286,12 +3290,6 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
 
   function renderStock() {
     const receivedStockTags = stock.tags.filter((item) => item.status === "in_stock" || item.status === "depleted");
-    const activeStockParts = stock.parts.filter((part) => part.active).sort((left, right) => left.materialCode.localeCompare(right.materialCode));
-    const selectedManualStockPart = activeStockParts.find((part) => part.materialCode === manualStockForm.materialCode.trim().toUpperCase());
-    const manualReceiptQty = Number(manualStockForm.qty || 0);
-    const manualReceiptTagCount = selectedManualStockPart?.standardQty && manualReceiptQty > 0
-      ? Math.ceil(manualReceiptQty / selectedManualStockPart.standardQty)
-      : 0;
     const onHand = receivedStockTags.reduce((sum, item) => sum + Number(item.remainingQty), 0);
     const reserved = receivedStockTags.reduce((sum, item) => sum + Number(item.reservedQty), 0);
     const available = Math.max(onHand - reserved, 0);
@@ -4135,8 +4133,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       </div>
       <footer><button type="button" className="button secondary" onClick={() => { setReplacementPreview(null); setReplacementTag(""); setReplacementQty(""); }}>ยกเลิก / สแกนใหม่</button><button type="button" className="button confirm-replacement-button" disabled={replacementSaving || !Number(replacementQty) || Number(replacementQty) > replacementPreview.request.remainingQty || Number(replacementQty) > replacementPreview.tag.availableQty} onClick={() => void confirmReplacementIssue()}>{replacementSaving ? "กำลังเบิกงาน…" : "✓ ยืนยันเบิกและตัดยอด"}</button></footer>
     </div></div>}
-    {stockCountPreview && stockCountForm.countedQty !== "" && <div className="modal-backdrop stock-count-backdrop" role="dialog" aria-modal="true" aria-labelledby="stock-count-title"><div className="stock-count-modal">
-      <header><div><span>≋</span><div><small>ตรวจนับ Stock สิ้นเดือนทีละ Tag</small><h3 id="stock-count-title">ยืนยันการปรับยอด Tag</h3></div></div><button type="button" onClick={() => setStockCountPreview(null)} aria-label="ปิด">×</button></header>
+    {stockCountPreview && stockCountConfirmOpen && <div className="modal-backdrop stock-count-backdrop" role="dialog" aria-modal="true" aria-labelledby="stock-count-title"><div className="stock-count-modal">
+      <header><div><span>≋</span><div><small>ตรวจนับ Stock สิ้นเดือนทีละ Tag</small><h3 id="stock-count-title">ยืนยันการปรับยอด Tag</h3></div></div><button type="button" onClick={() => setStockCountConfirmOpen(false)} aria-label="ปิด">×</button></header>
       <div className="stock-count-content">
         <section><small>KIT STOCK TAG</small><h4>{stockCountPreview.tagId}</h4><p>{stockCountPreview.materialCode} · {stockCountPreview.partName} · Job {stockCountPreview.jobNo}</p></section>
         <div className="stock-count-compare">
@@ -4147,7 +4145,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         <div className="stock-count-safety"><b>ยอด Stock รวม {fmt(stockCountPreview.materialTotalQty)} → {fmt(stockCountPreview.materialTotalAfter)} ชิ้น</b><span>Tag นี้มีงานจัดรอขาย/จอง {fmt(stockCountPreview.reservedQty)} ชิ้น</span></div>
         <p className="stock-count-reason"><b>สาเหตุ:</b> {stockCountForm.reason}</p>
       </div>
-      <footer><button type="button" className="button secondary" onClick={() => setStockCountPreview(null)}>กลับไปแก้ไข</button><button type="button" className="button confirm-stock-count-button" disabled={stockManagementSaving || !stockCountForm.reason.trim()} onClick={() => void confirmStockCountAdjustment()}>{stockManagementSaving ? "กำลังบันทึก…" : "✓ ยืนยันปรับยอด Tag และ Stock"}</button></footer>
+      <footer><button type="button" className="button secondary" onClick={() => setStockCountConfirmOpen(false)}>กลับไปแก้ไข</button><button type="button" className="button confirm-stock-count-button" disabled={stockManagementSaving || !stockCountForm.reason.trim()} onClick={() => void confirmStockCountAdjustment()}>{stockManagementSaving ? "กำลังบันทึก…" : "✓ ยืนยันปรับยอด Tag และ Stock"}</button></footer>
     </div></div>}
     {stockReceivePreview && <div className="modal-backdrop dispatch-confirm-backdrop stock-receive-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="stock-receive-confirm-title"><div className="dispatch-confirm-modal stock-receive-confirm-modal">
       <header><div><span>✓</span><div><small>ตรวจพบ KIT Stock Tag</small><h3 id="stock-receive-confirm-title">ตรวจสอบก่อนรับเข้า Stock</h3></div></div><button type="button" onClick={() => { setStockReceivePreview(null); setStockReceiveQty(""); setStockReceiveProductionDate(""); setStockScan(""); }} aria-label="ปิด">×</button></header>
