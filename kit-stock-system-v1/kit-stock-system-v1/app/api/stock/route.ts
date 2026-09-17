@@ -87,7 +87,7 @@ export async function GET() {
   try {
     const user = await getCurrentUser();
     if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
-    const fullStockPermissions = ["stock", "tags", "arrange", "dispatch", "reports", "history"] as const;
+    const fullStockPermissions = ["stock", "manual-stock", "stock-count", "tags", "arrange", "dispatch", "reports", "history"] as const;
     const canReadFullStock = fullStockPermissions.some((key) => hasPermission(user, key));
     const canReadPartsOnly = hasPermission(user, "parts") || hasPermission(user, "replacement");
     if (!canReadFullStock && !canReadPartsOnly) {
@@ -630,7 +630,7 @@ export async function POST(request: Request) {
 
 
     if (action === "manual_receive") {
-      if (!hasPermission(user, "stock")) {
+      if (!hasPermission(user, "manual-stock")) {
         return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์คีย์รับงานเข้า Stock" }, { status: 403 });
       }
       const materialCode = clean(body.materialCode, 100).toUpperCase();
@@ -716,6 +716,108 @@ export async function POST(request: Request) {
       }, request);
       return Response.json({
         success: true, tag: tags[0], tags, totalQty: qty, packQty, boxCount,
+      }, { status: 201 });
+    }
+
+    if (action === "preview_tag_count" || action === "confirm_tag_count") {
+      if (!hasPermission(user, "stock-count")) {
+        return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ตรวจนับและปรับยอด Stock" }, { status: 403 });
+      }
+      let tagId = "";
+      try {
+        tagId = parseInternalTag(clean(body.rawPayload, 1000));
+      } catch (error) {
+        return Response.json({ error: error instanceof Error ? error.message : "Tag ไม่ถูกต้อง" }, { status: 400 });
+      }
+      const countDate = clean(body.countDate, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(countDate)) {
+        return Response.json({ error: "กรุณาระบุวันที่ตรวจนับให้ถูกต้อง" }, { status: 400 });
+      }
+      const tag = await runtimeDb.prepare(`
+        SELECT t.id, t.tag_id AS tagId, t.material_code AS materialCode,
+          p.part_name AS partName, p.customer, t.job_no AS jobNo,
+          t.production_date AS productionDate, t.status,
+          t.remaining_qty AS remainingQty,
+          coalesce((SELECT sum(sp.picked_qty - sp.dispatched_qty) FROM stock_picks sp
+            WHERE sp.stock_tag_id = t.id AND sp.status IN ('staged', 'partial')), 0) AS stagedQty,
+          coalesce((SELECT sum(sa.qty) FROM stock_allocations sa
+            WHERE sa.stock_tag_id = t.id AND sa.status = 'reserved'), 0) AS legacyReservedQty
+        FROM stock_tags t
+        INNER JOIN stock_parts p ON p.material_code = t.material_code
+        WHERE t.tag_id = ?1 LIMIT 1
+      `).bind(tagId).first<{
+        id: number; tagId: string; materialCode: string; partName: string; customer: string;
+        jobNo: string; productionDate: string; status: string; remainingQty: number;
+        stagedQty: number; legacyReservedQty: number;
+      }>();
+      if (!tag) return Response.json({ error: "ไม่พบ KIT Stock Tag นี้ในระบบ" }, { status: 404 });
+      if (!['in_stock', 'depleted'].includes(tag.status)) {
+        return Response.json({
+          error: tag.status === "printed" ? "Tag นี้ยังไม่ได้รับเข้า Stock" : "Tag นี้ไม่อยู่ในสถานะที่ตรวจนับได้",
+        }, { status: 409 });
+      }
+      const systemQty = Number(tag.remainingQty || 0);
+      const reservedQty = Number(tag.stagedQty || 0) + Number(tag.legacyReservedQty || 0);
+      const hasCountedQty = body.countedQty !== undefined && body.countedQty !== "";
+      const countedQty = hasCountedQty ? Number(body.countedQty) : systemQty;
+      if (!Number.isInteger(countedQty) || countedQty < 0) {
+        return Response.json({ error: "ยอดนับจริงต้องเป็นจำนวนเต็มตั้งแต่ 0 ขึ้นไป" }, { status: 400 });
+      }
+      if (countedQty < reservedQty) {
+        return Response.json({
+          error: `ปรับ Tag เหลือ ${countedQty} ชิ้นไม่ได้ เพราะมีงานจัดรอขาย/จองอยู่ ${reservedQty} ชิ้น`,
+        }, { status: 409 });
+      }
+      const totalRow = await runtimeDb.prepare(`
+        SELECT coalesce(sum(remaining_qty), 0) AS totalQty
+        FROM stock_tags WHERE material_code = ?1 AND status IN ('in_stock', 'depleted')
+      `).bind(tag.materialCode).first<{ totalQty: number }>();
+      const materialTotalQty = Number(totalRow?.totalQty || 0);
+      const difference = countedQty - systemQty;
+      const materialTotalAfter = materialTotalQty + difference;
+      const preview = {
+        action: "preview_tag_count" as const,
+        tagId: tag.tagId, materialCode: tag.materialCode, partName: tag.partName,
+        customer: tag.customer || "", jobNo: tag.jobNo, productionDate: tag.productionDate,
+        status: tag.status, systemQty, countedQty, difference, reservedQty,
+        availableQty: Math.max(systemQty - reservedQty, 0), materialTotalQty,
+        materialTotalAfter, countDate,
+      };
+      if (action === "preview_tag_count") return Response.json(preview);
+
+      const reason = clean(body.reason, 500);
+      if (!reason) return Response.json({ error: "กรุณาระบุสาเหตุการปรับยอด" }, { status: 400 });
+      const adjustmentNo = createAdjustmentNo("TAGCOUNT");
+      await runtimeDb.batch([
+        runtimeDb.prepare(`
+          INSERT INTO stock_count_adjustments
+            (adjustment_no, count_date, material_code, system_qty, counted_qty,
+             difference, reason, adjusted_by_name, adjusted_by_code, adjusted_at)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, CURRENT_TIMESTAMP)
+        `).bind(adjustmentNo, countDate, tag.materialCode, systemQty, countedQty, difference, reason, user.displayName, user.employeeCode),
+        runtimeDb.prepare(`
+          UPDATE stock_tags
+          SET remaining_qty = ?1,
+            status = CASE WHEN ?1 = 0 THEN 'depleted' ELSE 'in_stock' END
+          WHERE id = ?2
+        `).bind(countedQty, tag.id),
+        runtimeDb.prepare(`
+          INSERT INTO stock_count_adjustment_lines
+            (adjustment_id, stock_tag_id, stock_tag_code, qty_change, before_qty, after_qty, created_at)
+          SELECT id, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP
+          FROM stock_count_adjustments WHERE adjustment_no = ?1
+        `).bind(adjustmentNo, tag.id, tag.tagId, difference, systemQty, countedQty),
+      ]);
+      await writeAuditLog(user, {
+        module: "stock", moduleLabel: "Stock", action: "tag_stock_count_adjustment", actionLabel: "ตรวจนับและปรับยอด Tag",
+        entityType: "stock_tag", entityId: tag.tagId,
+        summary: `ตรวจนับ Tag ${tag.tagId} · ${tag.materialCode} จาก ${systemQty} เป็น ${countedQty} ชิ้น (${difference >= 0 ? "+" : ""}${difference})`,
+        details: { adjustmentNo, tagId: tag.tagId, materialCode: tag.materialCode, jobNo: tag.jobNo, countDate, systemQty, countedQty, difference, reservedQty, materialTotalQty, materialTotalAfter, reason },
+        before: { tagId: tag.tagId, remainingQty: systemQty, materialTotalQty },
+        after: { tagId: tag.tagId, remainingQty: countedQty, materialTotalQty: materialTotalAfter },
+      }, request);
+      return Response.json({
+        ...preview, success: true, action: "tag_stock_count_adjusted", adjustmentNo, materialTotalAfter,
       }, { status: 201 });
     }
 
