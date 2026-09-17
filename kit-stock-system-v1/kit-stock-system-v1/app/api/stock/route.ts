@@ -116,6 +116,7 @@ export async function GET() {
       materialCode: stockTags.materialCode,
       partName: stockParts.partName,
       customer: stockParts.customer,
+      location: stockParts.location,
       qty: stockTags.qty,
       remainingQty: stockTags.remainingQty,
       reservedQty: sql<number>`coalesce(sum(case when ${stockAllocations.status} = 'reserved' then ${stockAllocations.qty} else 0 end), 0)

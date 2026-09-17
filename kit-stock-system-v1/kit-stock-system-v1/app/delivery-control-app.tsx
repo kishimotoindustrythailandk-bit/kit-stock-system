@@ -3289,6 +3289,73 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     </div>;
   }
 
+  async function exportStockExcel() {
+    try {
+      const xlsx = await import("xlsx");
+      const stockTags = stock.tags.filter((item) => item.status === "in_stock" || item.status === "depleted");
+      const summaryByPart = new Map<string, {
+        materialCode: string; partName: string; customer: string; location: string;
+        tagCount: number; totalQty: number; reservedQty: number; stockAreaQty: number;
+      }>();
+      for (const tag of stockTags) {
+        const totalQty = Number(tag.remainingQty || 0);
+        const reservedQty = Number(tag.reservedQty || 0);
+        const current = summaryByPart.get(tag.materialCode) || {
+          materialCode: tag.materialCode, partName: tag.partName || "", customer: tag.customer || "",
+          location: tag.location || "", tagCount: 0, totalQty: 0, reservedQty: 0, stockAreaQty: 0,
+        };
+        current.tagCount += 1;
+        current.totalQty += totalQty;
+        current.reservedQty += reservedQty;
+        current.stockAreaQty += Math.max(totalQty - reservedQty, 0);
+        if (!current.location && tag.location) current.location = tag.location;
+        summaryByPart.set(tag.materialCode, current);
+      }
+      const generatedAt = new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date());
+      const summaryRows = [
+        ["KIT Delivery Due Control — สรุปยอด Stock"],
+        ["วันที่และเวลาส่งออก", generatedAt],
+        ["จำนวน Part", summaryByPart.size],
+        ["จำนวน Tag", stockTags.length],
+        ["ยอดคงเหลือรวม (ชิ้น)", stockTags.reduce((sum, tag) => sum + Number(tag.remainingQty || 0), 0)],
+        [],
+        ["Material Code", "ชื่อชิ้นงาน", "ลูกค้า", "Location", "จำนวน Tag", "ยอดคงเหลือรวม", "จัดงาน/จองไว้", "อยู่ในพื้นที่ Stock"],
+        ...[...summaryByPart.values()]
+          .sort((left, right) => left.materialCode.localeCompare(right.materialCode))
+          .map((item) => [item.materialCode, item.partName, item.customer, item.location, item.tagCount, item.totalQty, item.reservedQty, item.stockAreaQty]),
+      ];
+      const detailRows = [
+        ["KIT Stock Tag", "Material Code", "ชื่อชิ้นงาน", "ลูกค้า", "Location", "Job", "วันที่ผลิต", "วันที่รับเข้า", "จำนวนเริ่มต้น", "ยอดคงเหลือรวม", "จัดงาน/จองไว้", "อยู่ในพื้นที่ Stock", "สถานะ"],
+        ...stockTags.map((tag) => {
+          const totalQty = Number(tag.remainingQty || 0);
+          const reservedQty = Number(tag.reservedQty || 0);
+          return [
+            tag.tagId, tag.materialCode, tag.partName || "", tag.customer || "", tag.location || "",
+            tag.jobNo, tag.productionDate, tag.receivedAt || "", Number(tag.qty || 0), totalQty,
+            reservedQty, Math.max(totalQty - reservedQty, 0),
+            tag.status === "depleted" ? "ขายออกหมด" : reservedQty > 0 ? "จัดงาน/จองบางส่วน" : "พร้อมใช้",
+          ];
+        }),
+      ];
+      const workbook = xlsx.utils.book_new();
+      const summarySheet = xlsx.utils.aoa_to_sheet(summaryRows);
+      const detailSheet = xlsx.utils.aoa_to_sheet(detailRows);
+      summarySheet["!cols"] = [22, 34, 22, 18, 14, 18, 18, 20].map((wch) => ({ wch }));
+      detailSheet["!cols"] = [30, 22, 34, 22, 18, 20, 14, 22, 16, 18, 18, 20, 20].map((wch) => ({ wch }));
+      xlsx.utils.book_append_sheet(workbook, summarySheet, "สรุปตาม Part");
+      xlsx.utils.book_append_sheet(workbook, detailSheet, "รายละเอียดตาม Tag");
+      const dateKey = new Date().toISOString().slice(0, 10);
+      xlsx.writeFile(workbook, `KIT_Stock_${dateKey}.xlsx`);
+      void recordClientAudit("export_stock_excel", `ดาวน์โหลด Excel ยอด Stock ${stockTags.length} Tag`, {
+        partCount: summaryByPart.size, tagCount: stockTags.length,
+        totalQty: stockTags.reduce((sum, tag) => sum + Number(tag.remainingQty || 0), 0),
+      });
+      setNotice({ type: "success", text: `ดาวน์โหลด Excel ยอด Stock แล้ว ${fmt(summaryByPart.size)} Part · ${fmt(stockTags.length)} Tag` });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ดาวน์โหลด Excel ยอด Stock ไม่สำเร็จ" });
+    }
+  }
+
   function renderStock() {
     const receivedStockTags = stock.tags.filter((item) => item.status === "in_stock" || item.status === "depleted");
     const onHand = receivedStockTags.reduce((sum, item) => sum + Number(item.remainingQty), 0);
@@ -3324,7 +3391,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <form className="stock-receive-form" onSubmit={receiveStockTag}><input ref={stockScanInputRef} value={stockScan} onChange={(e) => updateStockScannerValue(e.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void receiveStockTag(value); } }} placeholder="เช่น TG-20250901-0001" autoComplete="off" /><button className="button primary" disabled={!stockScan.trim() || stockSaving}>{stockSaving ? "กำลังตรวจสอบ…" : "ตรวจสอบก่อนรับเข้า"}</button></form>
           <div className="stock-guide"><b>↕ ขั้นตอนการทำงาน</b><p>สแกน Tag ทีละใบ เพื่อบันทึกรับเข้า Stock เข้าระบบอัตโนมัติ</p></div>
         </Card>
-        <Card className="stock-latest-card" title="2. รายการ Stock ล่าสุด" action={<div className="stock-list-tools"><input value={tagSearch} onChange={(e) => setTagSearch(e.target.value)} placeholder="ค้นหา Tag / รายการสินค้า / Job..." /><button onClick={() => void loadStock()}>↻</button></div>}>
+        <Card className="stock-latest-card" title="2. รายการ Stock ล่าสุด" action={<div className="stock-list-tools"><button type="button" className="button users-excel-button" onClick={() => void exportStockExcel()}>▦ Excel</button><input value={tagSearch} onChange={(e) => setTagSearch(e.target.value)} placeholder="ค้นหา Tag / รายการสินค้า / Job..." /><button onClick={() => void loadStock()}>↻</button></div>}>
           {stockLoading ? <div className="inline-loading">กำลังโหลด Stock…</div> : recentStock.length ? <><div className="stock-latest-head"><span>Tag / QR</span><span>รายการสินค้า</span><span>Job</span><span>วันที่รับเข้า</span><span>สถานะ</span><span>คงเหลือ</span></div><div className="stock-latest-list">{recentStock.map((item) => {
             const itemAvailable = Math.max(Number(item.remainingQty) - Number(item.reservedQty), 0);
             const statusClass = item.status === "depleted" ? "depleted" : Number(item.reservedQty) ? "reserved" : "ready";
