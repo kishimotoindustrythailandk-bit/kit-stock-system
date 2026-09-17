@@ -353,27 +353,56 @@ export async function POST(request: Request) {
     }
     const scannedQty = currentQty + tag.qty;
     const status = scannedQty === due.reqQty ? "completed" : scannedQty > due.reqQty ? "over" : "partial";
-    await DB.batch([
-      ...consumed.map((item) => DB.prepare(`UPDATE stock_tags SET
-        remaining_qty = remaining_qty - ?1,
-        status = CASE WHEN remaining_qty - ?1 <= 0 THEN 'depleted' ELSE 'in_stock' END
-        WHERE id = ?2 AND remaining_qty >= ?1`).bind(item.qty, item.stockTagId)),
-      ...consumed.map((item) => DB.prepare(`UPDATE stock_picks SET
-        dispatched_qty = dispatched_qty + ?1,
-        status = CASE WHEN dispatched_qty + ?1 >= picked_qty THEN 'dispatched' ELSE 'partial' END,
-        updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?2 AND picked_qty - dispatched_qty >= ?1`).bind(item.qty, item.id)),
-      ...consumed.map((item) => DB.prepare(`INSERT INTO stock_dispatch_links
-        (customer_tag_id, pick_id, due_line_id, stock_tag_id, qty,
-         dispatched_by_name, dispatched_by_code, dispatched_at)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)`)
-        .bind(tag.tagId, item.id, due.id, item.stockTagId, item.qty, user.displayName, user.employeeCode)),
-      DB.prepare(`INSERT INTO delivery_tag_scans
-        (due_line_id, tag_id, raw_payload, qty, unit, location, scanned_by_name, scanned_by_email, created_at)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP)`)
-        .bind(due.id, tag.tagId, tag.rawPayload, tag.qty, tag.unit, tag.location, user.displayName, user.email),
-      DB.prepare("UPDATE delivery_due_lines SET status = ?1 WHERE id = ?2").bind(status, due.id),
-    ]);
+    try {
+      await DB.batch([
+        // เขียน Traceability ก่อนโดยตรวจยอดปัจจุบันซ้ำภายใน transaction เดียวกัน
+        // scalar subquery จะคืน NULL และชน NOT NULL constraint หากอีกเครื่องตัดยอดไปก่อน
+        // ทำให้ D1 rollback ทั้ง batch แทนการบันทึกขายออกเพียงบางส่วน
+        ...consumed.map((item) => DB.prepare(`INSERT INTO stock_dispatch_links
+          (customer_tag_id, pick_id, due_line_id, stock_tag_id, qty,
+           dispatched_by_name, dispatched_by_code, dispatched_at)
+          VALUES (
+            ?1, ?2, ?3,
+            (SELECT t.id
+             FROM stock_picks p
+             INNER JOIN stock_tags t ON t.id = p.stock_tag_id
+             INNER JOIN delivery_due_lines d ON d.id = ?3
+             WHERE p.id = ?2 AND p.stock_tag_id = ?4
+               AND p.status IN ('staged', 'partial')
+               AND p.picked_qty - p.dispatched_qty >= ?5
+               AND t.remaining_qty >= ?5
+               AND NOT EXISTS (SELECT 1 FROM delivery_tag_scans s WHERE s.tag_id = ?1)
+               AND d.req_qty - coalesce((
+                 SELECT sum(s.qty) FROM delivery_tag_scans s WHERE s.due_line_id = d.id
+               ), 0) >= ?6
+             LIMIT 1),
+            ?5, ?7, ?8, CURRENT_TIMESTAMP
+          )`)
+          .bind(tag.tagId, item.id, due.id, item.stockTagId, item.qty, tag.qty, user.displayName, user.employeeCode)),
+        ...consumed.map((item) => DB.prepare(`UPDATE stock_tags SET
+          remaining_qty = remaining_qty - ?1,
+          status = CASE WHEN remaining_qty - ?1 <= 0 THEN 'depleted' ELSE 'in_stock' END
+          WHERE id = ?2 AND remaining_qty >= ?1`).bind(item.qty, item.stockTagId)),
+        ...consumed.map((item) => DB.prepare(`UPDATE stock_picks SET
+          dispatched_qty = dispatched_qty + ?1,
+          status = CASE WHEN dispatched_qty + ?1 >= picked_qty THEN 'dispatched' ELSE 'partial' END,
+          updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?2 AND picked_qty - dispatched_qty >= ?1`).bind(item.qty, item.id)),
+        DB.prepare(`INSERT INTO delivery_tag_scans
+          (due_line_id, tag_id, raw_payload, qty, unit, location, scanned_by_name, scanned_by_email, created_at)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP)`)
+          .bind(due.id, tag.tagId, tag.rawPayload, tag.qty, tag.unit, tag.location, user.displayName, user.email),
+        DB.prepare("UPDATE delivery_due_lines SET status = ?1 WHERE id = ?2").bind(status, due.id),
+      ]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (/UNIQUE|NOT NULL|constraint/i.test(message)) {
+        return Response.json({
+          error: "ยอด Stock หรืองานที่จัดไว้มีการเปลี่ยนแปลงจากอีกเครื่อง หรือ Tag นี้ถูกขายออกแล้ว กรุณารีเฟรชและสแกนใหม่",
+        }, { status: 409 });
+      }
+      throw error;
+    }
     await writeAuditLog(user, {
       module: "dispatch", moduleLabel: "ตรวจและขายออก", action: "dispatch_stock", actionLabel: "ตรวจและขายออก",
       entityType: "customer_tag", entityId: tag.tagId,
