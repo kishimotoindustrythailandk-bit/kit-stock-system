@@ -475,23 +475,54 @@ export async function POST(request: Request) {
         }, { status: 400 });
       }
       const batchCode = createTagBatchCode();
-      const tags = [];
-      for (let boxNo = 1; boxNo <= boxCount; boxNo += 1) {
+      const tagDrafts = Array.from({ length: boxCount }, (_, index) => {
+        const boxNo = index + 1;
         const boxQty = boxNo < boxCount ? packQty : totalQty - (packQty * (boxCount - 1));
-        const tagId = createTagId(batchCode, boxNo, boxCount);
-        const [tag] = await db.insert(stockTags).values({
-          tagId, materialCode, qty: boxQty, remainingQty: boxQty, jobNo, productionDate,
-          status: "printed", printedByName: user.displayName,
-        }).returning();
-        tags.push({
-          ...tag,
-          boxNo,
-          boxCount,
-          deliveryQty: totalQty,
-          partName: part.partName,
-          customer: part.customer,
-          payload: `KITSTOCK|${tagId}|${materialCode}|${boxQty}|${jobNo}|${productionDate}`,
-        });
+        return { tagId: createTagId(batchCode, boxNo, boxCount), boxNo, qty: boxQty };
+      });
+      // สร้างทุก Tag ด้วย INSERT เดียวแบบ atomic: สำเร็จครบทั้ง Job หรือไม่สร้างเลย
+      // WHERE NOT EXISTS ป้องกันสองเครื่องสร้าง Job เดียวกันพร้อมกันโดยไม่ต้องพึ่งผลตรวจล่วงหน้า
+      const insertedResult = await runtimeDb.prepare(`
+        INSERT INTO stock_tags
+          (tag_id, material_code, qty, remaining_qty, job_no, production_date, status,
+           printed_by_name, received_by_name, received_by_code, received_at, created_at)
+        SELECT
+          json_extract(value, '$.tagId'), ?2,
+          cast(json_extract(value, '$.qty') AS INTEGER),
+          cast(json_extract(value, '$.qty') AS INTEGER),
+          ?3, ?4, 'printed', ?5, '', '', NULL, CURRENT_TIMESTAMP
+        FROM json_each(?1)
+        CROSS JOIN (
+          SELECT count(*) AS existing_job_count
+          FROM stock_tags WHERE upper(trim(job_no)) = ?3
+        ) AS job_guard
+        WHERE job_guard.existing_job_count = 0
+      `).bind(JSON.stringify(tagDrafts), materialCode, jobNo, productionDate, user.displayName).run();
+      if (Number(insertedResult.meta.changes || 0) !== boxCount) {
+        return Response.json({
+          error: `Job ${jobNo} มีอยู่ในระบบแล้ว หรือจำนวน Tag ที่สร้างไม่ครบ ระบบจึงยกเลิกทั้งรายการ กรุณาตรวจสอบ Job ก่อนบันทึก`,
+        }, { status: 409 });
+      }
+      const inserted = await runtimeDb.prepare(`
+        SELECT id, tag_id AS tagId, material_code AS materialCode, qty,
+          remaining_qty AS remainingQty, job_no AS jobNo, production_date AS productionDate,
+          status, printed_by_name AS printedByName, received_by_name AS receivedByName,
+          received_at AS receivedAt, created_at AS createdAt
+        FROM stock_tags WHERE tag_id LIKE ?1 ORDER BY id ASC
+      `).bind(`${batchCode}-%`).all();
+      const draftById = new Map(tagDrafts.map((item) => [item.tagId, item]));
+      const tags = (inserted.results || []).map((tag) => {
+        const draft = draftById.get(String(tag.tagId));
+        const boxNo = draft?.boxNo || 0;
+        const boxQty = Number(tag.qty || draft?.qty || 0);
+        return {
+          ...tag, boxNo, boxCount, deliveryQty: totalQty,
+          partName: part.partName, customer: part.customer,
+          payload: `KITSTOCK|${tag.tagId}|${materialCode}|${boxQty}|${jobNo}|${productionDate}`,
+        };
+      });
+      if (tags.length !== boxCount) {
+        throw new Error("สร้าง Tag สำเร็จในฐานข้อมูล แต่โหลดรายการกลับมาไม่ครบ กรุณารีเฟรชหน้าพิมพ์ Tag");
       }
       await writeAuditLog(user, {
         module: "tags", moduleLabel: "พิมพ์ Tag", action: "create_tags", actionLabel: "สร้างและพิมพ์ Tag",
