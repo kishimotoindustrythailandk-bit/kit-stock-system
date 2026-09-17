@@ -129,6 +129,7 @@ type StockCountPreview = {
   action: "preview_tag_count"; tagId: string; materialCode: string; partName: string;
   customer: string; jobNo: string; productionDate: string; status: string;
   systemQty: number; countedQty: number; difference: number; reservedQty: number;
+  stockAreaSystemQty: number; stockAreaCountedQty: number; newTotalQty: number;
   availableQty: number; materialTotalQty: number; materialTotalAfter: number; countDate: string;
 };
 type StockPayload = {
@@ -1788,11 +1789,11 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       const data = await response.json() as StockCountPreview & { error?: string };
       if (!response.ok) throw new Error(data.error || "ตรวจสอบ KIT Stock Tag ไม่สำเร็จ");
       setStockCountForm((current) => ({
-        ...current, rawPayload: data.tagId, countedQty: String(data.systemQty),
+        ...current, rawPayload: data.tagId, countedQty: String(data.stockAreaSystemQty),
         reason: defaultStockCountReason(0),
       }));
       setStockCountPreview(data);
-      setNotice({ type: "success", text: `พบ Tag ${data.tagId} · ยอดในระบบ ${fmt(data.systemQty)} ชิ้น กรุณาตรวจนับและแก้ไขยอดจริง` });
+      setNotice({ type: "success", text: `พบ Tag ${data.tagId} · ควรอยู่ในพื้นที่ Stock ${fmt(data.stockAreaSystemQty)} ชิ้น · จัดงาน/จองไว้ ${fmt(data.reservedQty)} ชิ้น` });
     } catch (caught) {
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบ KIT Stock Tag ไม่สำเร็จ" });
     } finally {
@@ -3275,12 +3276,12 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           <button type="button" className="stock-camera-zone" onClick={() => { setCameraPurpose("stock-count"); setCameraOpen(true); }}><span>⌗</span><b>สแกน Tag ที่ต้องการตรวจนับ</b><small>สแกนและบันทึกให้เสร็จทีละ Tag</small></button>
           <div className="stock-management-fields">
             <label className="wide"><span>KIT Stock Tag *</span><div className="stock-receive-form"><input ref={stockCountInputRef} required value={stockCountForm.rawPayload} onChange={(event) => { setStockCountPreview(null); setStockCountForm((current) => ({ ...current, rawPayload: event.target.value.toUpperCase() })); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void loadStockCountTag(value); } }} placeholder="สแกนหรือพิมพ์รหัส KIT Stock Tag" autoComplete="off" /><button type="button" className="button secondary" disabled={!stockCountForm.rawPayload.trim() || stockManagementSaving} onClick={() => void loadStockCountTag()}>{stockManagementSaving ? "กำลังตรวจสอบ…" : "ตรวจสอบ Tag"}</button></div></label>
-            {preview && <><label><span>Part / Material</span><input value={`${preview.materialCode} · ${preview.partName}`} readOnly /></label><label><span>Job</span><input value={preview.jobNo || "—"} readOnly /></label><label><span>ยอดใน Tag ก่อนตรวจนับ</span><input value={`${fmt(preview.systemQty)} ชิ้น`} readOnly /></label><label><span>ยอด Stock รวมก่อนปรับ</span><input value={`${fmt(preview.materialTotalQty)} ชิ้น`} readOnly /></label></>}
-            <label><span>ยอดนับจริงของ Tag *</span><input required disabled={!preview} type="number" min={preview?.reservedQty || 0} step={1} inputMode="numeric" value={stockCountForm.countedQty} onChange={(event) => { const countedQty = event.target.value.replace(/[^0-9]/g, ""); const difference = Number(countedQty || 0) - Number(preview?.systemQty || 0); setStockCountForm((current) => ({ ...current, countedQty, reason: defaultStockCountReason(difference) })); }} placeholder="จำนวนที่นับได้จาก Tag นี้" /></label>
+            {preview && <><label><span>Part / Material</span><input value={`${preview.materialCode} · ${preview.partName}`} readOnly /></label><label><span>Job</span><input value={preview.jobNo || "—"} readOnly /></label><label><span>ควรอยู่ในพื้นที่ Stock</span><input value={`${fmt(preview.stockAreaSystemQty)} ชิ้น`} readOnly /></label><label><span>นำไปจัดงาน/จองไว้</span><input value={`${fmt(preview.reservedQty)} ชิ้น`} readOnly /></label><label><span>ยอดรวมในระบบก่อนปรับ</span><input value={`${fmt(preview.systemQty)} ชิ้น`} readOnly /></label><label><span>ยอด Stock รวมทุก Tag</span><input value={`${fmt(preview.materialTotalQty)} ชิ้น`} readOnly /></label></>}
+            <label><span>ยอดที่นับได้ในพื้นที่ Stock *</span><input required disabled={!preview} type="number" min={0} step={1} inputMode="numeric" value={stockCountForm.countedQty} onChange={(event) => { const countedQty = event.target.value.replace(/[^0-9]/g, ""); const difference = Number(countedQty || 0) - Number(preview?.stockAreaSystemQty || 0); setStockCountForm((current) => ({ ...current, countedQty, reason: defaultStockCountReason(difference) })); }} placeholder="นับเฉพาะสินค้าที่อยู่ในพื้นที่ Stock" /></label>
             <label><span>วันที่ตรวจนับ *</span><input required type="date" value={stockCountForm.countDate} onChange={(event) => setStockCountForm((current) => ({ ...current, countDate: event.target.value }))} /></label>
             <label className="wide"><span>สาเหตุการปรับยอด *</span><input required value={stockCountForm.reason} onChange={(event) => setStockCountForm((current) => ({ ...current, reason: event.target.value }))} /></label>
           </div>
-          {preview && <p className="stock-count-safety"><b>Tag นี้มีงานจัดรอขาย/จอง {fmt(preview.reservedQty)} ชิ้น</b><span>ยอดนับจริงต้องไม่น้อยกว่ายอดที่จองไว้</span></p>}
+          {preview && <div className="stock-count-safety"><b>Tag นี้นำออกไปจัดงาน/จองแล้ว {fmt(preview.reservedQty)} ชิ้น</b><span>กรอกเฉพาะยอดที่พบในพื้นที่ Stock ระบบจะนำยอดจัดงาน/จองมารวมให้อัตโนมัติ และไม่อนุญาตให้แก้ยอดจองจากหน้านี้</span></div>}
           <button className="button stock-count-preview-button" disabled={!preview || stockManagementSaving || stockCountForm.countedQty === ""}>{stockManagementSaving ? "กำลังตรวจสอบ…" : "ตรวจสอบยอดก่อนบันทึก →"}</button>
         </form>
         <div className="stock-management-history"><div><b>ประวัติปรับยอดทีละ Tag ล่าสุด</b>{stock.countAdjustments.slice(0, 10).map((item) => { const line = stock.countAdjustmentLines.find((entry) => entry.adjustmentId === item.id); return <article key={item.id}><span><b>{line?.stockTagCode || item.materialCode}</b><small>{item.adjustmentNo} · {item.reason}</small></span><em className={item.difference < 0 ? "minus" : item.difference > 0 ? "plus" : "equal"}>{item.difference > 0 ? "+" : ""}{fmt(item.difference)}</em><small>{item.adjustedByName} · {formatDateTime(item.adjustedAt)}</small></article>; })}{!stock.countAdjustments.length && <p>ยังไม่มีรายการ</p>}</div></div>
@@ -4138,11 +4139,11 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <div className="stock-count-content">
         <section><small>KIT STOCK TAG</small><h4>{stockCountPreview.tagId}</h4><p>{stockCountPreview.materialCode} · {stockCountPreview.partName} · Job {stockCountPreview.jobNo}</p></section>
         <div className="stock-count-compare">
-          <article><small>ยอดเดิมใน Tag</small><b>{fmt(stockCountPreview.systemQty)}</b><em>ชิ้น</em></article><span>→</span>
-          <article><small>ยอดนับจริง</small><b>{fmt(stockCountPreview.countedQty)}</b><em>ชิ้น</em></article>
-          <article className={stockCountPreview.difference < 0 ? "negative" : stockCountPreview.difference > 0 ? "positive" : "equal"}><small>ผลต่าง</small><b>{stockCountPreview.difference > 0 ? "+" : ""}{fmt(stockCountPreview.difference)}</b><em>ชิ้น</em></article>
+          <article><small>ควรอยู่ในพื้นที่ Stock</small><b>{fmt(stockCountPreview.stockAreaSystemQty)}</b><em>ชิ้น</em></article><span>→</span>
+          <article><small>นับได้ในพื้นที่ Stock</small><b>{fmt(stockCountPreview.stockAreaCountedQty)}</b><em>ชิ้น</em></article>
+          <article className={stockCountPreview.difference < 0 ? "negative" : stockCountPreview.difference > 0 ? "positive" : "equal"}><small>ผลต่าง Stock</small><b>{stockCountPreview.difference > 0 ? "+" : ""}{fmt(stockCountPreview.difference)}</b><em>ชิ้น</em></article>
         </div>
-        <div className="stock-count-safety"><b>ยอด Stock รวม {fmt(stockCountPreview.materialTotalQty)} → {fmt(stockCountPreview.materialTotalAfter)} ชิ้น</b><span>Tag นี้มีงานจัดรอขาย/จอง {fmt(stockCountPreview.reservedQty)} ชิ้น</span></div>
+        <div className="stock-count-safety"><b>ยอดรวมใหม่ของ Tag = {fmt(stockCountPreview.stockAreaCountedQty)} ใน Stock + {fmt(stockCountPreview.reservedQty)} จัดงาน/จอง = {fmt(stockCountPreview.newTotalQty)} ชิ้น</b><span>ยอด Stock รวมทุก Tag {fmt(stockCountPreview.materialTotalQty)} → {fmt(stockCountPreview.materialTotalAfter)} ชิ้น</span></div>
         <p className="stock-count-reason"><b>สาเหตุ:</b> {stockCountForm.reason}</p>
       </div>
       <footer><button type="button" className="button secondary" onClick={() => setStockCountConfirmOpen(false)}>กลับไปแก้ไข</button><button type="button" className="button confirm-stock-count-button" disabled={stockManagementSaving || !stockCountForm.reason.trim()} onClick={() => void confirmStockCountAdjustment()}>{stockManagementSaving ? "กำลังบันทึก…" : "✓ ยืนยันปรับยอด Tag และ Stock"}</button></footer>
