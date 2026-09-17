@@ -135,7 +135,9 @@ export async function GET() {
       .innerJoin(stockParts, eq(stockParts.materialCode, stockTags.materialCode))
       .leftJoin(stockAllocations, eq(stockAllocations.stockTagId, stockTags.id))
       .groupBy(stockTags.id)
-      .orderBy(desc(stockTags.id)).limit(250);
+      // ต้องคืน Tag ครบทั้งหมด เพราะหน้า Stock และไฟล์ Excel ใช้ชุดข้อมูลนี้คำนวณยอดรวม
+      // การจำกัด 250 แถวทำให้ยอดคงเหลือ ยอดจอง และยอดในพื้นที่ Stock ต่ำกว่าฐานข้อมูลจริง
+      .orderBy(desc(stockTags.id));
     const allocations = await db.select({
       id: stockAllocations.id,
       customerTagId: stockAllocations.customerTagId,
