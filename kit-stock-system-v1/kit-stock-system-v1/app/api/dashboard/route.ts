@@ -19,6 +19,10 @@ export async function GET(request: Request) {
     const selectedDate = validDate(new URL(request.url).searchParams.get("date"));
     const nowKey = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 16);
 
+    type DashboardDue = {
+      id: number; materialCode: string; partName: string; fact: string;
+      deliveryDate: string; deliveryTime: string; reqQty: number; sentQty: number; arrangedQty: number;
+    };
     const [dueResult, stockResult, processResult, facResult, forecastResult, activityResult] = await Promise.all([
       DB.prepare(`
         SELECT d.id, d.material_code AS materialCode, d.material_description AS partName,
@@ -30,7 +34,7 @@ export async function GET(request: Request) {
         FROM delivery_due_lines d
         WHERE d.delivery_date = ?1
         ORDER BY d.delivery_time, d.id
-      `).bind(selectedDate).all(),
+      `).bind(selectedDate).all<DashboardDue>(),
       DB.prepare(`
         WITH tag_balance AS (
           SELECT t.id, t.status, t.qty, t.remaining_qty AS remainingQty,

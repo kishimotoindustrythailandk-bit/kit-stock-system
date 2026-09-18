@@ -23,14 +23,16 @@ const fmt = (value: unknown) => new Intl.NumberFormat("th-TH").format(Number(val
 const pct = (value: number, total: number) => total ? Math.round(value / total * 1000) / 10 : 0;
 const thaiDate = (value: string) => value ? new Intl.DateTimeFormat("th-TH", { day: "numeric", month: "short", year: "2-digit" }).format(new Date(`${value}T00:00:00+07:00`)) : "—";
 const thaiDateTime = (value: string | Date) => new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Bangkok" }).format(new Date(value));
+const DEFAULT_DATE = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
 export default function DashboardControlCenter({ userName, canOpen, onNavigate }: {
   userName: string;
   canOpen: (page: TargetPage) => boolean;
   onNavigate: (page: TargetPage, filter?: DetailFilter) => void;
 }) {
-  const initialDate = useMemo(() => new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10), []);
+  const initialDate = useMemo(() => DEFAULT_DATE, []);
   const [selectedDate, setSelectedDate] = useState(initialDate);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -43,8 +45,6 @@ export default function DashboardControlCenter({ userName, canOpen, onNavigate }
 
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true);
-    setError("");
     fetch(`/api/dashboard?date=${encodeURIComponent(selectedDate)}`, { cache: "no-store", signal: controller.signal })
       .then(async (response) => {
         const payload = await response.json() as DashboardData & { error?: string };
@@ -56,10 +56,10 @@ export default function DashboardControlCenter({ userName, canOpen, onNavigate }
       })
       .finally(() => setLoading(false));
     return () => controller.abort();
-  }, [selectedDate]);
+  }, [selectedDate, refreshKey]);
 
   if (loading && !data) return <div className={styles.state}><span /><b>กำลังรวบรวมข้อมูลจริงจากระบบ…</b></div>;
-  if (error && !data) return <div className={`${styles.state} ${styles.error}`}><b>โหลด Control Center ไม่สำเร็จ</b><small>{error}</small><button onClick={() => setSelectedDate((value) => `${value}`)}>ลองใหม่</button></div>;
+  if (error && !data) return <div className={`${styles.state} ${styles.error}`}><b>โหลด Control Center ไม่สำเร็จ</b><small>{error}</small><button onClick={() => { setLoading(true); setError(""); setRefreshKey((value) => value + 1); }}>ลองใหม่</button></div>;
   if (!data) return null;
 
   const open = (page: TargetPage, filter?: DetailFilter) => canOpen(page) && onNavigate(page, filter);
@@ -79,7 +79,7 @@ export default function DashboardControlCenter({ userName, canOpen, onNavigate }
     <section className={styles.hero}>
       <div><small>KIT DELIVERY DUE CONTROL</small><h2>สวัสดีครับ {userName}</h2><p>Control Center ภาพรวมตั้งแต่แผนงานจนถึงส่งออก</p></div>
       <div className={styles.heroBrand}><b>Deliver Right</b><span>Move Forward</span></div>
-      <div className={styles.clock}><small>วันที่และเวลา</small><b>{thaiDateTime(clock)}</b><label>วันที่ Due <input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value || initialDate)} /></label></div>
+      <div className={styles.clock}><small>วันที่และเวลา</small><b>{thaiDateTime(clock)}</b><label>วันที่ Due <input type="date" value={selectedDate} onChange={(event) => { setLoading(true); setError(""); setSelectedDate(event.target.value || initialDate); }} /></label></div>
     </section>
 
     <section className={styles.kpis}>
