@@ -192,10 +192,16 @@ export async function GET() {
         r.qty, r.job_no AS jobNo, r.production_date AS productionDate,
         r.reference_no AS referenceNo, r.note,
         r.received_by_name AS receivedByName, r.received_by_code AS receivedByCode,
-        r.received_at AS receivedAt
+        r.received_at AS receivedAt,
+        coalesce(tx.transaction_no, '') AS transactionNo,
+        coalesce(tx.total_qty, r.qty) AS transactionTotalQty,
+        coalesce(tx.pack_qty, r.qty) AS packQty,
+        coalesce(tx.tag_count, 1) AS tagCount,
+        coalesce(tx.duplicate_confirmed, 0) AS duplicateConfirmed
       FROM stock_manual_receipts r
       LEFT JOIN stock_parts p ON p.material_code = r.material_code
-      ORDER BY r.id DESC LIMIT 100
+      LEFT JOIN stock_manual_receive_transactions tx ON tx.id = r.transaction_id
+      ORDER BY r.id DESC LIMIT 200
     `).all();
     const countAdjustments = await DB.prepare(`
       SELECT a.id, a.adjustment_no AS adjustmentNo, a.count_date AS countDate,
@@ -689,14 +695,9 @@ export async function POST(request: Request) {
       const productionDate = clean(body.productionDate, 10);
       const referenceNo = clean(body.referenceNo, 160);
       const note = clean(body.note, 500);
+      const confirmDuplicateJob = body.confirmDuplicateJob === true;
       if (!materialCode || !Number.isInteger(qty) || qty <= 0 || !jobNo || !/^\d{4}-\d{2}-\d{2}$/.test(productionDate)) {
         return Response.json({ error: "กรุณาเลือก Part ระบุจำนวน Job/เอกสารอ้างอิง และวันที่ผลิตให้ครบ" }, { status: 400 });
-      }
-      const existingJob = await findExistingStockJob(runtimeDb, jobNo);
-      if (existingJob) {
-        return Response.json({
-          error: `Job ${jobNo} มีอยู่ในระบบแล้วกับ Part ${existingJob.materialCode} (Tag ${existingJob.tagId}) กรุณาตรวจสอบ Job ก่อนบันทึก`,
-        }, { status: 409 });
       }
       const part = await runtimeDb.prepare(`
         SELECT material_code AS materialCode, part_name AS partName, customer,
@@ -707,20 +708,72 @@ export async function POST(request: Request) {
       const packQty = Number(part.standardQty || 0);
       if (!Number.isInteger(packQty) || packQty <= 0) {
         return Response.json({
-          error: `Part ${materialCode} ยังไม่ได้กำหนดจำนวนสูงสุดต่อกล่อง กรุณาแก้ไขทะเบียน Part ก่อน`,
+          error: `Part ${materialCode} ยังไม่ได้กำหนดจำนวนบรรจุต่อกล่อง กรุณาตั้งค่าในทะเบียน Part ก่อน`,
         }, { status: 409 });
       }
+
+      const conflictingPart = await runtimeDb.prepare(`
+        SELECT material_code AS materialCode, tag_id AS tagId
+        FROM stock_tags WHERE upper(job_no) = ?1 AND material_code <> ?2
+        ORDER BY id DESC LIMIT 1
+      `).bind(jobNo, materialCode).first<{ materialCode: string; tagId: string }>();
+      if (conflictingPart) {
+        return Response.json({
+          code: "job_used_by_other_part",
+          error: `Job ${jobNo} ถูกใช้กับ Part ${conflictingPart.materialCode} แล้ว กรุณาตรวจสอบ Part และ Job ก่อนรับเข้า`,
+        }, { status: 409 });
+      }
+      const existing = await runtimeDb.prepare(`
+        SELECT coalesce(sum(qty), 0) AS receivedQty, count(*) AS tagCount,
+          max(received_at) AS lastReceivedAt
+        FROM stock_manual_receipts
+        WHERE material_code = ?1 AND upper(job_no) = ?2
+      `).bind(materialCode, jobNo).first<{ receivedQty: number; tagCount: number; lastReceivedAt: string | null }>();
+      const previousQty = Number(existing?.receivedQty || 0);
+      const previousTagCount = Number(existing?.tagCount || 0);
+      if (previousTagCount > 0 && !confirmDuplicateJob) {
+        return Response.json({
+          code: "duplicate_job_confirmation_required",
+          error: `Job ${jobNo} ของ Part ${materialCode} เคยรับเข้าแล้ว กรุณายืนยันก่อนรับเพิ่ม`,
+          duplicate: {
+            materialCode, partName: part.partName, jobNo,
+            previousQty, previousTagCount, incomingQty: qty,
+            incomingTagCount: Math.ceil(qty / packQty),
+            totalAfter: previousQty + qty,
+            lastReceivedAt: existing?.lastReceivedAt || "",
+          },
+        }, { status: 409 });
+      }
+
       const boxCount = Math.ceil(qty / packQty);
       if (boxCount > 200) {
         return Response.json({
-          error: `จำนวน ${qty} ชิ้นต้องสร้าง ${boxCount} Tag เกินขีดจำกัด 200 Tag ต่อครั้ง กรุณาแบ่งรับเข้าเป็นคนละ Job`,
+          error: `จำนวน ${qty} ชิ้นต้องสร้าง ${boxCount} Tag เกินขีดจำกัด 200 Tag ต่อครั้ง กรุณาแบ่งรับเข้าเป็นหลายรายการ`,
         }, { status: 400 });
       }
+      const tagQtys = Array.from({ length: boxCount }, (_, index) =>
+        index < boxCount - 1 ? packQty : qty - (packQty * (boxCount - 1)),
+      );
+      if (tagQtys.some((item) => item <= 0) || tagQtys.reduce((sum, item) => sum + item, 0) !== qty) {
+        return Response.json({ error: "ผลรวมจำนวนของ Tag ไม่ตรงกับจำนวนรับเข้า ระบบจึงยกเลิกรายการ" }, { status: 500 });
+      }
+
       const batchCode = createTagBatchCode();
+      const transactionNo = `RCV-${batchCode}`;
       const tagIds: string[] = [];
-      const statements: D1PreparedStatement[] = [];
+      const statements: D1PreparedStatement[] = [
+        runtimeDb.prepare(`
+          INSERT INTO stock_manual_receive_transactions
+            (transaction_no, material_code, total_qty, pack_qty, tag_count, job_no,
+             production_date, reference_no, note, duplicate_confirmed,
+             received_by_name, received_by_code, received_at)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, CURRENT_TIMESTAMP)
+        `).bind(transactionNo, materialCode, qty, packQty, boxCount, jobNo,
+          productionDate, referenceNo, note, previousTagCount > 0 ? 1 : 0,
+          user.displayName, user.employeeCode),
+      ];
       for (let boxNo = 1; boxNo <= boxCount; boxNo += 1) {
-        const boxQty = boxNo < boxCount ? packQty : qty - (packQty * (boxCount - 1));
+        const boxQty = tagQtys[boxNo - 1];
         const tagId = createTagId(batchCode, boxNo, boxCount);
         tagIds.push(tagId);
         statements.push(
@@ -733,11 +786,13 @@ export async function POST(request: Request) {
           runtimeDb.prepare(`
             INSERT INTO stock_manual_receipts
               (stock_tag_id, tag_id, material_code, qty, job_no, production_date,
-               reference_no, note, received_by_name, received_by_code, received_at)
-            SELECT id, tag_id, material_code, qty, job_no, production_date,
-              ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP
-            FROM stock_tags WHERE tag_id = ?1
-          `).bind(tagId, referenceNo, note, user.displayName, user.employeeCode),
+               reference_no, note, received_by_name, received_by_code, received_at, transaction_id)
+            SELECT t.id, t.tag_id, t.material_code, t.qty, t.job_no, t.production_date,
+              ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP, tx.id
+            FROM stock_tags t
+            INNER JOIN stock_manual_receive_transactions tx ON tx.transaction_no = ?6
+            WHERE t.tag_id = ?1
+          `).bind(tagId, referenceNo, note, user.displayName, user.employeeCode, transactionNo),
           runtimeDb.prepare(`
             INSERT INTO stock_receipt_adjustments
               (stock_tag_id, tag_id, original_qty, received_qty, ng_qty,
@@ -754,18 +809,22 @@ export async function POST(request: Request) {
           received_by_name AS receivedByName, received_at AS receivedAt, created_at AS createdAt
         FROM stock_tags WHERE tag_id LIKE ?1 ORDER BY id ASC
       `).bind(`${batchCode}-%`).all();
+      if ((inserted.results || []).length !== boxCount) {
+        return Response.json({ error: "จำนวน Tag ที่สร้างไม่ครบ กรุณาติดต่อผู้ดูแลระบบพร้อมเลขที่ " + transactionNo }, { status: 500 });
+      }
       const tags = (inserted.results || []).map((tag) => ({
         ...tag, partName: part.partName, customer: part.customer, reservedQty: 0,
         receivedQty: Number(tag.qty), ngQty: 0,
       }));
       await writeAuditLog(user, {
         module: "stock", moduleLabel: "Stock", action: "manual_receive_stock", actionLabel: "คีย์รับงานเข้า Stock",
-        entityType: "stock_tag_batch", entityId: batchCode,
-        summary: `คีย์รับ ${materialCode} จำนวน ${qty} ชิ้น · ${boxCount} Tag · Job ${jobNo}`,
-        details: { tagIds, materialCode, totalQty: qty, packQty, boxCount, jobNo, productionDate, referenceNo, note },
+        entityType: "stock_receive_transaction", entityId: transactionNo,
+        summary: `คีย์รับ ${materialCode} จำนวน ${qty} ชิ้น · ${boxCount} Tag · Job ${jobNo}${previousTagCount ? " · ยืนยัน Job ซ้ำ" : ""}`,
+        details: { transactionNo, tagIds, materialCode, totalQty: qty, packQty, boxCount, jobNo, productionDate, referenceNo, note, duplicateConfirmed: previousTagCount > 0, previousQty },
       }, request);
       return Response.json({
-        success: true, tag: tags[0], tags, totalQty: qty, packQty, boxCount,
+        success: true, transactionNo, tag: tags[0], tags, totalQty: qty, packQty, boxCount,
+        duplicateConfirmed: previousTagCount > 0,
       }, { status: 201 });
     }
 
