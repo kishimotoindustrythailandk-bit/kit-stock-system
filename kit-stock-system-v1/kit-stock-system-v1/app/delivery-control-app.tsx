@@ -3,6 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import DashboardControlCenter from "./dashboard-control-center";
 
 type PageKey = "dashboard" | "stock" | "manual-stock" | "stock-count" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
 
@@ -711,6 +712,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [arrangedPage, setArrangedPage] = useState(1);
   const [arrangementPreview, setArrangementPreview] = useState<ArrangementPreview | null>(null);
   const [filterDate, setFilterDate] = useState("");
+  const [dashboardStatusFilter, setDashboardStatusFilter] = useState<"all" | "completed" | "pending" | "over">("all");
   const [planPage, setPlanPage] = useState(1);
   const [planPageSize, setPlanPageSize] = useState(10);
   const [filterFact, setFilterFact] = useState("ALL");
@@ -2418,8 +2420,12 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     return (!filterDate || due.deliveryDate === filterDate)
       && (filterFact === "ALL" || due.fact === filterFact)
       && (filterTime === "ALL" || due.deliveryTime === filterTime)
+      && (dashboardStatusFilter === "all"
+        || (dashboardStatusFilter === "completed" && stateOf(due, new Date(deadlineClock)) === "completed")
+        || (dashboardStatusFilter === "pending" && stateOf(due, new Date(deadlineClock)) !== "completed")
+        || (dashboardStatusFilter === "over" && stateOf(due, new Date(deadlineClock)) === "over"))
       && (!search || [due.materialCode, due.materialDescription, due.doNo, String(due.seq), due.line, due.shop].some((value) => value.toUpperCase().includes(search)));
-  }), [payload.dues, filterDate, filterFact, filterTime, query]);
+  }), [payload.dues, filterDate, filterFact, filterTime, query, dashboardStatusFilter, deadlineClock]);
 
   const overdueDues = useMemo(() => {
     if (!deadlineClock) return [];
@@ -2838,130 +2844,19 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }
 
   function renderDashboard() {
-    // renderDashboard() เป็นฟังก์ชันธรรมดาที่ถูกเรียกแบบมีเงื่อนไข ห้ามใช้ hook ในนี้
-    const remainingItems = summary.partial + summary.pending;
-    const share = (value: number) => (summary.items ? Math.round((value / summary.items) * 1000) / 10 : 0);
-
-    // สามสถานะนี้เป็นสี "สถานะ" ไม่ใช่สีแยกชุดข้อมูล เขียว/ส้ม/แดงจึงสื่อความหมายตรงตัว
-    // ผ่านการตรวจค่าความต่างสำหรับผู้มีภาวะตาบอดสีแล้ว (ค่าต่างต่ำสุด 18.3)
-    const segments = [
-      { key: "completed", label: "ส่งออกครบ", value: summary.completed, className: "ok" },
-      { key: "remaining", label: "ค้างเหลือ", value: remainingItems, className: "warn" },
-      { key: "over", label: "เกินดิวจัดส่ง", value: summary.over, className: "crit" },
-    ].filter((item) => item.value > 0);
-
-    // โดนัทวาดด้วย SVG เส้นรอบวง 2πr โดย r = 54
-    const CIRCUMFERENCE = 2 * Math.PI * 54;
-    const GAP = segments.length > 1 ? 3 : 0;
-    let offset = 0;
-    const arcs = segments.map((item) => {
-      const length = summary.items ? (item.value / summary.items) * CIRCUMFERENCE : 0;
-      const arc = { ...item, length: Math.max(length - GAP, 0.5), offset };
-      offset += length;
-      return arc;
-    });
-
-    const overdueIds = new Set(overdueDues.map((due) => due.id));
-    const pendingDues = [
-      ...overdueDues,
-      ...filtered
-        .filter((due) => !overdueIds.has(due.id) && ["partial", "pending"].includes(stateOf(due)))
-        .slice()
-        .sort((a, b) => a.deliveryDate.localeCompare(b.deliveryDate) || a.deliveryTime.localeCompare(b.deliveryTime)),
-    ].slice(0, 5);
-    const todayKey = bangkokDateTimeKey(new Date(deadlineClock)).slice(0, 10);
-    const soonDate = new Date(`${todayKey}T00:00:00Z`);
-    soonDate.setUTCDate(soonDate.getUTCDate() + 2);
-    const soonKey = soonDate.toISOString().slice(0, 10);
-    const urgency = (due: DueLine) => {
-      if (overdueIds.has(due.id) || due.deliveryDate <= todayKey) return "hot";
-      if (due.deliveryDate <= soonKey) return "soon";
-      return "";
-    };
-
-    const scannedToday = payload.scans.filter((scan) => isToday(scan.createdAt));
-    const plannedPieces = payload.dues.reduce((sum, due) => sum + Number(due.reqQty || 0), 0);
-
-    return <div className="home">
-      {overdueDues.length > 0 && <div className="overdue-alert-group">
-        {allowedPages.has("plan") ? <button className="overdue-alert" onClick={showOverduePlan}>
-          <span>!</span><div><b>แจ้งเตือน: มีงานเกินดิวจัดส่ง {fmt(overdueDues.length)} รายการ</b><small>เลยวันและเวลาจัดส่งแล้ว แต่ยอดส่งยังไม่ครบ กดเพื่อดูรายการทั้งหมด</small></div><strong>ดูรายการ →</strong>
-        </button> : <div className="overdue-alert" role="status">
-          <span>!</span><div><b>แจ้งเตือน: มีงานเกินดิวจัดส่ง {fmt(overdueDues.length)} รายการ</b><small>เลยวันและเวลาจัดส่งแล้ว แต่ยอดส่งยังไม่ครบ</small></div>
-        </div>}
-        {renderOverdueSoundControl()}
-      </div>}
-      <div className="stat-row">
-        <article className="stat-tile blue"><span className="stat-icon">▤</span><div><small>Due ทั้งหมด</small><b>{fmt(summary.items)}</b><em>รายการ</em></div></article>
-        <article className="stat-tile green"><span className="stat-icon">✓</span><div><small>ส่งออกแล้ว</small><b>{fmt(summary.completed)}</b><em>รายการ · {share(summary.completed)}%</em></div></article>
-        <article className="stat-tile orange"><span className="stat-icon">◷</span><div><small>ค้างตัดยอด</small><b>{fmt(remainingItems)}</b><em>รายการ</em></div></article>
-        <article className="stat-tile red"><span className="stat-icon">!</span><div><small>เกินดิวจัดส่ง</small><b>{fmt(overdueDues.length)}</b><em>รายการทั้งหมด</em></div></article>
-      </div>
-
-      <div className="home-grid">
-        <Card title="สถานะส่งงานตาม Due" className="chart-card">
-          {summary.items ? <>
-            <div className="chart-body">
-            <div className="donut-wrap">
-              <svg viewBox="0 0 120 120" className="donut-svg" role="img" aria-label={`ส่งออกครบ ${summary.completed} ค้างเหลือ ${remainingItems} เกินดิวจัดส่ง ${summary.over} จากทั้งหมด ${summary.items} รายการ`}>
-                <circle className="donut-track" cx="60" cy="60" r="54" />
-                {arcs.map((arc) => <circle
-                  key={arc.key}
-                  className={`donut-arc ${arc.className}`}
-                  cx="60" cy="60" r="54"
-                  strokeDasharray={`${arc.length} ${CIRCUMFERENCE - arc.length}`}
-                  strokeDashoffset={-arc.offset}
-                ><title>{arc.label} {fmt(arc.value)} รายการ ({share(arc.value)}%)</title></circle>)}
-              </svg>
-              <div className="donut-center"><b>{fmt(summary.items)}</b><small>รายการ</small></div>
-            </div>
-            <ul className="donut-legend">
-              <li><i className="ok" /><span>ส่งออกครบ</span><b>{fmt(summary.completed)}</b><em>{share(summary.completed)}%</em></li>
-              <li><i className="warn" /><span>ค้างเหลือ</span><b>{fmt(remainingItems)}</b><em>{share(remainingItems)}%</em></li>
-              <li><i className="crit" /><span>เกินดิวจัดส่ง</span><b>{fmt(summary.over)}</b><em>{share(summary.over)}%</em></li>
-            </ul>
-            </div>
-            <footer className="chart-foot">
-              <small>อัปเดตล่าสุด {dueLoadedAt ? formatDateTime(dueLoadedAt) : "—"}</small>
-              <button className="tiny-button" onClick={() => void loadDue()}>↻ รีเฟรช</button>
-            </footer>
-          </> : <Empty title="ยังไม่มีข้อมูล Due" text="นำเข้าแผนส่งงานเพื่อเริ่มดูภาพรวม" />}
-        </Card>
-
-        <Card title="Due ที่ค้างตัดยอด (รายการล่าสุด)" action={allowedPages.has("plan") ? <button className="text-button" onClick={() => go("plan")}>ดูทั้งหมด →</button> : undefined}>
-          {pendingDues.length ? <div className="pending-list">{pendingDues.map((due) => <button key={due.id} className={`pending-row ${overdueIds.has(due.id) ? "overdue" : ""}`} onClick={overdueIds.has(due.id) ? showOverduePlan : () => go("plan")} disabled={!allowedPages.has("plan")}>
-            <span className={`date-pill ${urgency(due)}`}>{formatDate(due.deliveryDate)} · {due.deliveryTime}</span>
-            <span className="pending-main"><b>{due.materialCode}</b><small>{due.materialDescription || `${due.fact}${due.line ? ` / ${due.line}` : ""}`}</small></span>
-            <span className="pending-qty">{fmt(Math.max(Number(due.reqQty) - Number(due.scannedQty), 0))}</span>
-          </button>)}</div> : <Empty title="ไม่มี Due ค้าง" text="ทุกรายการตามตัวกรองปัจจุบันตัดยอดครบแล้ว" />}
-        </Card>
-
-        <div className="home-side">
-          <Card title="เมนูด่วน">
-            <div className="quick-tiles">
-              {allowedPages.has("plan") && <button className="qt blue" onClick={() => go("plan")}><span>⇧</span>นำเข้าแผนงาน</button>}
-              {allowedPages.has("tags") && <button className="qt purple" onClick={() => go("tags")}><span>▤</span>สร้างและพิมพ์ Tag</button>}
-              {allowedPages.has("stock") && <button className="qt green" onClick={() => go("stock")}><span>▦</span>รับเข้า Stock</button>}
-              {workflowPage && <button className="qt orange" onClick={() => go(workflowPage)}><span>⌗</span>{workflowPage === "dispatch" ? "ตรวจและขายออก" : "จัดงาน"}</button>}
-            </div>
-          </Card>
-          <Card title="อัปเดตล่าสุด" action={<button className="text-button" onClick={() => go("history")}>ดูทั้งหมด →</button>}>
-            {payload.scans.length ? <ol className="feed">{payload.scans.slice(0, 5).map((scan) => <li key={scan.id}>
-              <time>{formatTime(scan.createdAt)}</time>
-              <i className="feed-dot ok" />
-              <div><b>สแกน Tag {scan.tagId}</b><small>{scan.fact} · {scan.materialCode} · {fmt(scan.qty)} {scan.unit}</small></div>
-            </li>)}</ol> : <Empty title="ยังไม่มีความเคลื่อนไหว" text="รายการสแกนล่าสุดจะแสดงที่นี่" />}
-          </Card>
-        </div>
-      </div>
-
-      <div className="stat-row bottom">
-        <article className="stat-tile blue"><span className="stat-icon">▣</span><div><small>สแกนแล้ววันนี้</small><b>{fmt(scannedToday.length)}</b><em>รายการ</em></div></article>
-        <article className="stat-tile purple"><span className="stat-icon">▥</span><div><small>FAC ทั้งหมด</small><b>{fmt(facts.length)}</b><em>โรงงาน</em></div></article>
-        <article className="stat-tile teal"><span className="stat-icon">◈</span><div><small>รายการทั้งหมด</small><b>{fmt(payload.dues.length)}</b><em>รายการ</em></div></article>
-        <article className="stat-tile amber"><span className="stat-icon">□</span><div><small>ชิ้นงานตามแผน</small><b>{fmt(plannedPieces)}</b><em>ชิ้น</em></div></article>
-      </div>
-    </div>;
+    return <DashboardControlCenter
+      userName={user.displayName}
+      canOpen={(target) => allowedPages.has(target)}
+      onNavigate={(target, detail) => {
+        setFilterDate(detail?.date || "");
+        setFilterFact(detail?.fact || "ALL");
+        setFilterTime("ALL");
+        setQuery("");
+        setDashboardStatusFilter(detail?.status || "all");
+        setPlanPage(1);
+        go(target);
+      }}
+    />;
   }
 
   function renderParts() {
