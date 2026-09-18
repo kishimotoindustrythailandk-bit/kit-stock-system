@@ -63,9 +63,9 @@ export async function GET(request: Request) {
       DB.prepare(`
         SELECT d.fact,
           count(*) AS dueTotal,
-          sum(CASE WHEN sentQty >= d.req_qty THEN 1 ELSE 0 END) AS completed,
-          sum(CASE WHEN sentQty < d.req_qty THEN 1 ELSE 0 END) AS pending,
-          sum(CASE WHEN sentQty < d.req_qty AND (d.delivery_date || 'T' || substr(d.delivery_time || ':00',1,5)) < ?2 THEN 1 ELSE 0 END) AS overdue
+          sum(CASE WHEN coalesce(s.sentQty, 0) >= d.req_qty THEN 1 ELSE 0 END) AS completed,
+          sum(CASE WHEN coalesce(s.sentQty, 0) < d.req_qty THEN 1 ELSE 0 END) AS pending,
+          sum(CASE WHEN coalesce(s.sentQty, 0) < d.req_qty AND (d.delivery_date || 'T' || substr(d.delivery_time || ':00',1,5)) < ?2 THEN 1 ELSE 0 END) AS overdue
         FROM delivery_due_lines d
         LEFT JOIN (SELECT due_line_id, sum(qty) AS sentQty FROM delivery_tag_scans GROUP BY due_line_id) s ON s.due_line_id = d.id
         WHERE d.delivery_date = ?1
@@ -84,7 +84,7 @@ export async function GET(request: Request) {
           WHERE f.delivery_date >= ?1 GROUP BY f.delivery_date ORDER BY f.delivery_date LIMIT 7
         )
         SELECT daily.date, daily.forecastQty,
-          max(stock.available - sum(daily.forecastQty) OVER (ORDER BY daily.date ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS availableQty
+          max(stock.available - coalesce(sum(daily.forecastQty) OVER (ORDER BY daily.date ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0), 0) AS availableQty
         FROM daily CROSS JOIN stock
       `).bind(selectedDate).all(),
       DB.prepare(`

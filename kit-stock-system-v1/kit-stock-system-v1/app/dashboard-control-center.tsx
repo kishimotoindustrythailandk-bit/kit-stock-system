@@ -68,7 +68,7 @@ export default function DashboardControlCenter({ userName, canOpen, onNavigate }
     ? `conic-gradient(#24b469 0 ${pct(data.dueStatus.completed, total)}%, #f5a623 ${pct(data.dueStatus.completed, total)}% ${pct(data.dueStatus.completed + data.dueStatus.waiting, total)}%, #ef4056 ${pct(data.dueStatus.completed + data.dueStatus.waiting, total)}% 100%)`
     : "#e8eff8";
   const maxChart = Math.max(1, ...data.forecast.flatMap((item) => [Number(item.forecastQty), Number(item.availableQty)]));
-  const alerts = [
+  const alerts: Array<{ label: string; value: number; tone: string; page: TargetPage; status?: DetailFilter["status"] }> = [
     { label: "Due ค้างส่ง", value: data.kpis.pending, tone: "warn", page: "plan" as TargetPage, status: "pending" as const },
     { label: "ใกล้/เกินคิว", value: data.kpis.overdue, tone: "danger", page: "plan" as TargetPage, status: "over" as const },
     { label: "Stock ต่ำกว่า Forecast", value: data.forecast.filter((row) => Number(row.availableQty) < Number(row.forecastQty)).length, tone: "warn", page: "forecast" as TargetPage },
