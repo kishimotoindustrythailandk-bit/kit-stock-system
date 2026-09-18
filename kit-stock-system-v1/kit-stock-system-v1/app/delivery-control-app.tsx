@@ -116,6 +116,17 @@ type StockManualReceipt = {
   id: number; stockTagId: number; tagId: string; materialCode: string; partName: string;
   qty: number; jobNo: string; productionDate: string; referenceNo: string; note: string;
   receivedByName: string; receivedByCode: string; receivedAt: string;
+  transactionNo: string; transactionTotalQty: number; packQty: number; tagCount: number;
+  duplicateConfirmed: number;
+};
+type ManualDuplicateJob = {
+  materialCode: string; partName: string; jobNo: string; previousQty: number;
+  previousTagCount: number; incomingQty: number; incomingTagCount: number;
+  totalAfter: number; lastReceivedAt: string;
+};
+type ManualReceiptSuccess = {
+  transactionNo: string; tags: StockTag[]; totalQty: number; packQty: number;
+  boxCount: number; duplicateConfirmed: boolean;
 };
 type StockCountAdjustment = {
   id: number; adjustmentNo: string; countDate: string; materialCode: string; partName: string;
@@ -773,6 +784,9 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [stockManualEntry, setStockManualEntry] = useState(false);
   const [lastStockReceipt, setLastStockReceipt] = useState<{ tagId: string; materialCode: string; jobNo: string; qty: number } | null>(null);
   const [manualStockForm, setManualStockForm] = useState({ materialCode: "", qty: "", jobNo: "", productionDate: new Date().toISOString().slice(0, 10), referenceNo: "", note: "" });
+  const [manualDuplicateJob, setManualDuplicateJob] = useState<ManualDuplicateJob | null>(null);
+  const [manualReceiptSuccess, setManualReceiptSuccess] = useState<ManualReceiptSuccess | null>(null);
+  const [manualTransactionOpen, setManualTransactionOpen] = useState("");
   const [stockCountForm, setStockCountForm] = useState({ rawPayload: "", countedQty: "", countDate: new Date().toISOString().slice(0, 10), reason: "บันทึกยอดตรวจนับ Stock สิ้นเดือน" });
   const [stockCountPreview, setStockCountPreview] = useState<StockCountPreview | null>(null);
   const [stockCountConfirmOpen, setStockCountConfirmOpen] = useState(false);
@@ -1779,26 +1793,45 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }
 
 
-  async function saveManualStockReceipt(event: FormEvent) {
-    event.preventDefault();
+  async function submitManualStockReceipt(confirmDuplicateJob = false) {
     if (stockManagementSaving) return;
     setStockManagementSaving(true);
     try {
       const response = await fetch("/api/stock", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "manual_receive", ...manualStockForm, qty: Number(manualStockForm.qty || 0) }),
+        body: JSON.stringify({
+          action: "manual_receive", ...manualStockForm,
+          qty: Number(manualStockForm.qty || 0), confirmDuplicateJob,
+        }),
       });
-      const data = await response.json() as { tag?: StockTag; tags?: StockTag[]; totalQty?: number; packQty?: number; boxCount?: number; error?: string };
+      const data = await response.json() as ManualReceiptSuccess & {
+        duplicate?: ManualDuplicateJob; code?: string; error?: string;
+      };
+      if (response.status === 409 && data.code === "duplicate_job_confirmation_required" && data.duplicate) {
+        setManualDuplicateJob(data.duplicate);
+        return;
+      }
       if (!response.ok) throw new Error(data.error || "คีย์รับงานเข้า Stock ไม่สำเร็จ");
-      setManualStockForm((current) => ({ ...current, materialCode: "", qty: "", jobNo: "", referenceNo: "", note: "" }));
-      const createdTagCount = Number(data.boxCount || data.tags?.length || (data.tag ? 1 : 0));
-      setNotice({ type: "success", text: `รับเข้า Stock แบบคีย์เอง ${fmt(Number(data.totalQty || 0))} ชิ้น · แบ่งตามจำนวนต่อกล่องและสร้าง KIT Tag ${fmt(createdTagCount)} ใบแล้ว` });
+      setManualDuplicateJob(null);
+      setManualReceiptSuccess(data);
+      setManualStockForm((current) => ({
+        ...current, materialCode: "", qty: "", jobNo: "", referenceNo: "", note: "",
+      }));
+      setNotice({
+        type: "success",
+        text: `รับเข้า Stock ${fmt(Number(data.totalQty || 0))} ชิ้น และสร้าง ${fmt(Number(data.boxCount || data.tags?.length || 0))} Tag สำเร็จ`,
+      });
       await loadStock();
     } catch (caught) {
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "คีย์รับงานเข้า Stock ไม่สำเร็จ" });
     } finally {
       setStockManagementSaving(false);
     }
+  }
+
+  async function saveManualStockReceipt(event: FormEvent) {
+    event.preventDefault();
+    await submitManualStockReceipt(false);
   }
 
   function defaultStockCountReason(difference: number) {
@@ -3180,24 +3213,67 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const activeStockParts = stock.parts.filter((part) => part.active).sort((left, right) => left.materialCode.localeCompare(right.materialCode));
     const selectedPart = activeStockParts.find((part) => part.materialCode === manualStockForm.materialCode.trim().toUpperCase());
     const totalQty = Number(manualStockForm.qty || 0);
-    const tagCount = selectedPart?.standardQty && totalQty > 0 ? Math.ceil(totalQty / selectedPart.standardQty) : 0;
-    return <div className="stock-home">
-      <Card className="stock-management-card" title="รับงานเข้า Stock แบบคีย์เอง">
-        <form className="stock-management-panel manual" onSubmit={saveManualStockReceipt}>
-          <header><span>＋</span><div><b>คีย์รับเข้าและสร้าง KIT Tag</b><small>ระบบแบ่งจำนวนตามจำนวนบรรจุต่อกล่องของ Part และสร้าง Tag ให้ครบทุกกล่อง</small></div></header>
-          <div className="stock-management-fields">
-            <label><span>Part / Material *</span><input required list="manual-stock-part-options" value={manualStockForm.materialCode} onChange={(event) => setManualStockForm((current) => ({ ...current, materialCode: event.target.value.toUpperCase() }))} placeholder="พิมพ์รหัส/ชื่อ หรือเลือก Part" autoComplete="off" spellCheck={false} /><datalist id="manual-stock-part-options">{activeStockParts.map((part) => <option key={part.materialCode} value={part.materialCode}>{part.partName}{part.customer ? ` · ${part.customer}` : ""}</option>)}</datalist></label>
-            <label><span>จำนวนต่อกล่อง / Tag ที่จะสร้าง</span><input value={selectedPart ? `${fmt(selectedPart.standardQty)} ชิ้น/กล่อง${tagCount ? ` · ${fmt(tagCount)} Tag` : ""}` : ""} placeholder="เลือก Part และกรอกจำนวนก่อน" readOnly /></label>
-            <label><span>จำนวนรับเข้า *</span><input required type="number" min={1} step={1} inputMode="numeric" value={manualStockForm.qty} onChange={(event) => setManualStockForm((current) => ({ ...current, qty: event.target.value.replace(/[^0-9]/g, "") }))} placeholder="จำนวนชิ้น" /></label>
-            <label><span>Job / เอกสารอ้างอิง *</span><input required value={manualStockForm.jobNo} onChange={(event) => setManualStockForm((current) => ({ ...current, jobNo: event.target.value.toUpperCase() }))} placeholder="เช่น JOB-260904-001 (ห้ามซ้ำ)" /></label>
-            <label><span>วันที่ผลิต *</span><input required type="date" value={manualStockForm.productionDate} onChange={(event) => setManualStockForm((current) => ({ ...current, productionDate: event.target.value }))} /></label>
-            <label><span>เลขที่ใบรับ / อ้างอิง</span><input value={manualStockForm.referenceNo} onChange={(event) => setManualStockForm((current) => ({ ...current, referenceNo: event.target.value }))} placeholder="ไม่บังคับ" /></label>
-            <label className="wide"><span>หมายเหตุ</span><input value={manualStockForm.note} onChange={(event) => setManualStockForm((current) => ({ ...current, note: event.target.value }))} placeholder="ระบุที่มาของงานหรือรายละเอียดเพิ่มเติม" /></label>
+    const packQty = Number(selectedPart?.standardQty || 0);
+    const tagCount = packQty > 0 && totalQty > 0 ? Math.ceil(totalQty / packQty) : 0;
+    const tagQtys = tagCount ? Array.from({ length: tagCount }, (_, index) => index < tagCount - 1 ? packQty : totalQty - (packQty * (tagCount - 1))) : [];
+    const tagTotal = tagQtys.reduce((sum, qty) => sum + qty, 0);
+    const canSubmit = Boolean(selectedPart && packQty > 0 && totalQty > 0 && manualStockForm.jobNo.trim() && manualStockForm.productionDate && tagTotal === totalQty);
+
+    const transactions = Array.from(stock.manualReceipts.reduce((map, item) => {
+      const key = item.transactionNo || `legacy-${item.id}`;
+      const current = map.get(key);
+      if (current) current.items.push(item);
+      else map.set(key, { key, items: [item] });
+      return map;
+    }, new Map<string, { key: string; items: StockManualReceipt[] }>()).values()).slice(0, 20);
+    const openedTransaction = transactions.find((item) => item.key === manualTransactionOpen);
+
+    return <div className="stock-home manual-stock-page">
+      <Card className="stock-management-card manual-stock-card" title="รับเข้า Stock แบบคีย์เอง">
+        <form onSubmit={saveManualStockReceipt}>
+          <div className="manual-stock-workspace">
+            <section className="manual-stock-entry">
+              <header><span>1</span><div><b>คีย์รับเข้าและสร้าง KIT Tag</b><small>เลือก Part ระบุจำนวนรับเข้า และระบบจะแบ่ง Tag ตามจำนวนบรรจุต่อกล่อง</small></div></header>
+              <div className="stock-management-fields">
+                <label className="wide"><span>Part / Material *</span><input required list="manual-stock-part-options" value={manualStockForm.materialCode} onChange={(event) => setManualStockForm((current) => ({ ...current, materialCode: event.target.value.toUpperCase() }))} placeholder="ค้นหา Part No. / Material Code / Description" autoComplete="off" spellCheck={false} /><datalist id="manual-stock-part-options">{activeStockParts.map((part) => <option key={part.materialCode} value={part.materialCode}>{part.partName}{part.customer ? ` · ${part.customer}` : ""}</option>)}</datalist></label>
+                {selectedPart && <div className="manual-part-summary wide"><PartImage materialCode={selectedPart.materialCode} compact /><span><b>{selectedPart.materialCode}</b><small>{selectedPart.partName}</small><em>จำนวนบรรจุต่อกล่อง: {packQty > 0 ? `${fmt(packQty)} ชิ้น` : "ยังไม่ได้กำหนด"}</em></span></div>}
+                {selectedPart && packQty <= 0 && <p className="manual-stock-error wide">Part นี้ยังไม่ได้กำหนดจำนวนบรรจุต่อกล่อง กรุณาตั้งค่าในทะเบียน Part ก่อน</p>}
+                <label><span>จำนวนรับเข้า *</span><input required type="number" min={1} step={1} inputMode="numeric" value={manualStockForm.qty} onChange={(event) => setManualStockForm((current) => ({ ...current, qty: event.target.value.replace(/[^0-9]/g, "") }))} placeholder="จำนวนชิ้น" /></label>
+                <label><span>Job / เอกสารอ้างอิง *</span><input required value={manualStockForm.jobNo} onChange={(event) => setManualStockForm((current) => ({ ...current, jobNo: event.target.value.toUpperCase() }))} placeholder="เช่น JOB-260918-001" /></label>
+                <label><span>วันที่ผลิต *</span><input required type="date" value={manualStockForm.productionDate} onChange={(event) => setManualStockForm((current) => ({ ...current, productionDate: event.target.value }))} /></label>
+                <label><span>เลขที่ใบรับ / อ้างอิง</span><input value={manualStockForm.referenceNo} onChange={(event) => setManualStockForm((current) => ({ ...current, referenceNo: event.target.value }))} placeholder="ไม่บังคับ" /></label>
+                <label className="wide"><span>หมายเหตุ</span><input value={manualStockForm.note} onChange={(event) => setManualStockForm((current) => ({ ...current, note: event.target.value }))} placeholder="ระบุหมายเหตุ (ถ้ามี)" /></label>
+              </div>
+            </section>
+
+            <section className="manual-tag-preview">
+              <header><span>2</span><div><b>สรุปการสร้าง Tag</b><small>Preview คำนวณจาก Part Master และจำนวนรับเข้าจริง</small></div></header>
+              <div className="manual-preview-kpis">
+                <span><small>จำนวนรับเข้า</small><b>{fmt(totalQty)}</b><em>ชิ้น</em></span>
+                <span><small>บรรจุต่อกล่อง</small><b>{fmt(packQty)}</b><em>ชิ้น/กล่อง</em></span>
+                <span><small>สร้างทั้งหมด</small><b>{fmt(tagCount)}</b><em>Tag</em></span>
+              </div>
+              <div className="manual-preview-list">
+                <b>รายละเอียด Tag ที่จะสร้าง</b>
+                {tagQtys.length ? <div className="manual-preview-scroll"><table><thead><tr><th>ลำดับ</th><th>จำนวนต่อ Tag</th><th>หมายเหตุ</th></tr></thead><tbody>{tagQtys.map((qty, index) => <tr key={index}><td>{index + 1}</td><td>{fmt(qty)} ชิ้น</td><td>{qty === packQty ? "เต็มกล่อง" : "กล่องไม่เต็ม (ส่วนที่เหลือ)"}</td></tr>)}</tbody></table></div> : <p>เลือก Part และกรอกจำนวนรับเข้าเพื่อดู Preview</p>}
+              </div>
+              {tagQtys.length > 0 && <div className={tagTotal === totalQty ? "manual-total-ok" : "manual-stock-error"}>{tagTotal === totalQty ? "✓" : "!"} ผลรวมจำนวนทุก Tag = {fmt(tagTotal)} ชิ้น</div>}
+            </section>
           </div>
-          <button className="button primary stock-management-submit" disabled={stockManagementSaving}>{stockManagementSaving ? "กำลังบันทึก…" : `✓ บันทึกรับเข้าและสร้าง ${fmt(tagCount)} Tag`}</button>
+          <button className="button primary stock-management-submit manual-stock-submit" disabled={!canSubmit || stockManagementSaving}>{stockManagementSaving ? "กำลังบันทึก…" : canSubmit ? `✓ รับเข้า Stock ${fmt(totalQty)} ชิ้น และสร้าง ${fmt(tagCount)} Tag` : !selectedPart ? "กรุณาเลือก Part" : packQty <= 0 ? "Part ยังไม่มี Packing Qty" : totalQty <= 0 ? "กรุณากรอกจำนวนรับเข้า" : !manualStockForm.jobNo.trim() ? "กรุณากรอก Job" : "กรุณากรอกข้อมูลให้ครบ"}</button>
         </form>
-        <div className="stock-management-history"><div><b>รับเข้าแบบคีย์ล่าสุด</b>{stock.manualReceipts.slice(0, 10).map((item) => <article key={item.id}><span><b>{item.materialCode}</b><small>{item.jobNo} · {item.tagId}</small></span><em className="plus">+{fmt(item.qty)}</em><small>{item.receivedByName} · {formatDateTime(item.receivedAt)}</small></article>)}{!stock.manualReceipts.length && <p>ยังไม่มีรายการ</p>}</div></div>
+
+        <section className="manual-receipt-history">
+          <header><b>รับเข้าแบบคีย์ล่าสุด</b><small>แสดงล่าสุด {Math.min(transactions.length, 20)} รายการ</small></header>
+          <div className="manual-history-scroll"><table><thead><tr><th>เวลา</th><th>Part / Description</th><th>Job</th><th>จำนวนรับเข้า</th><th>บรรจุต่อกล่อง</th><th>Tag ที่สร้าง</th><th>วันที่ผลิต</th><th>ผู้ทำรายการ</th><th>จัดการ</th></tr></thead><tbody>{transactions.map((transaction) => { const first = transaction.items[0]; return <tr key={transaction.key}><td>{formatTime(first.receivedAt)}</td><td><b>{first.materialCode}</b><small>{first.partName}</small></td><td>{first.jobNo}{first.duplicateConfirmed ? <small className="duplicate-badge">ยืนยัน Job ซ้ำ</small> : null}</td><td>{fmt(first.transactionTotalQty || transaction.items.reduce((sum, item) => sum + Number(item.qty), 0))}</td><td>{fmt(first.packQty)}</td><td><button type="button" className="link-button" onClick={() => setManualTransactionOpen(transaction.key)}>{fmt(first.tagCount || transaction.items.length)} Tag</button></td><td>{formatDate(first.productionDate)}</td><td>{first.receivedByName}</td><td><button type="button" className="icon-button" onClick={() => setManualTransactionOpen(transaction.key)}>•••</button></td></tr>; })}</tbody></table>{!transactions.length && <p className="manual-empty">ยังไม่มีรายการรับเข้าแบบคีย์</p>}</div>
+        </section>
       </Card>
+
+      {manualDuplicateJob && <div className="modal-backdrop"><section className="manual-confirm-modal"><header><span>!</span><div><b>พบ Job ซ้ำ</b><small>กรุณาตรวจสอบก่อนรับเข้าเพิ่ม</small></div></header><p>Job <b>{manualDuplicateJob.jobNo}</b> ของ Part <b>{manualDuplicateJob.materialCode}</b> เคยรับเข้าแล้ว</p><div className="duplicate-summary"><span>รับแล้ว<b>{fmt(manualDuplicateJob.previousQty)} ชิ้น</b><small>{fmt(manualDuplicateJob.previousTagCount)} Tag</small></span><span>ครั้งนี้<b>+{fmt(manualDuplicateJob.incomingQty)} ชิ้น</b><small>{fmt(manualDuplicateJob.incomingTagCount)} Tag</small></span><span>หลังยืนยัน<b>{fmt(manualDuplicateJob.totalAfter)} ชิ้น</b></span></div><footer><button type="button" className="button secondary" disabled={stockManagementSaving} onClick={() => setManualDuplicateJob(null)}>ยกเลิก</button><button type="button" className="button primary" disabled={stockManagementSaving} onClick={() => void submitManualStockReceipt(true)}>{stockManagementSaving ? "กำลังบันทึก…" : "ยืนยันรับเข้าเพิ่ม"}</button></footer></section></div>}
+
+      {manualReceiptSuccess && <div className="modal-backdrop"><section className="manual-success-modal"><header><span>✓</span><div><b>รับเข้า Stock สำเร็จ</b><small>{manualReceiptSuccess.transactionNo}</small></div></header><dl><div><dt>Part</dt><dd>{manualReceiptSuccess.tags[0]?.materialCode}</dd></div><div><dt>จำนวนรับเข้า</dt><dd>{fmt(manualReceiptSuccess.totalQty)} ชิ้น</dd></div><div><dt>สร้าง KIT Tag</dt><dd>{fmt(manualReceiptSuccess.boxCount)} Tag</dd></div></dl><footer><button type="button" className="button primary" onClick={() => void printStockTags(manualReceiptSuccess.tags)}>พิมพ์ Tag ทั้งหมด</button><button type="button" className="button secondary" onClick={() => { setManualTransactionOpen(manualReceiptSuccess.transactionNo); setManualReceiptSuccess(null); }}>ดู Tag</button><button type="button" className="button secondary" onClick={() => setManualReceiptSuccess(null)}>รับเข้ารายการใหม่</button></footer></section></div>}
+
+      {openedTransaction && <div className="modal-backdrop" onMouseDown={() => setManualTransactionOpen("")}><section className="manual-tags-modal" onMouseDown={(event) => event.stopPropagation()}><header><div><b>Tag จากรายการ {openedTransaction.items[0].transactionNo || "เดิม"}</b><small>{openedTransaction.items[0].materialCode} · Job {openedTransaction.items[0].jobNo}</small></div><button type="button" onClick={() => setManualTransactionOpen("")}>×</button></header><div>{openedTransaction.items.map((item) => <article key={item.id}><b>{item.tagId}</b><span>{fmt(item.qty)} ชิ้น</span></article>)}</div><footer><button type="button" className="button primary" onClick={() => { const ids = new Set(openedTransaction.items.map((item) => item.tagId)); void printStockTags(stock.tags.filter((tag) => ids.has(tag.tagId))); }}>พิมพ์ Tag ทั้งหมด</button></footer></section></div>}
     </div>;
   }
 
