@@ -525,7 +525,7 @@ export async function POST(request: Request) {
           status, printed_by_name AS printedByName, received_by_name AS receivedByName,
           received_at AS receivedAt, created_at AS createdAt
         FROM stock_tags WHERE tag_id LIKE ?1 ORDER BY id ASC
-      `).bind(`${batchCode}-%`).all();
+      `).bind(`${batchCode}-%`).all<{\n        id: number; tagId: string; materialCode: string; qty: number; remainingQty: number;\n        jobNo: string; productionDate: string; status: string; printedByName: string;\n        receivedByName: string; receivedAt: string | null; createdAt: string;\n      }>();
       const draftById = new Map(tagDrafts.map((item) => [item.tagId, item]));
       const tags = (inserted.results || []).map((tag) => {
         const draft = draftById.get(String(tag.tagId));
