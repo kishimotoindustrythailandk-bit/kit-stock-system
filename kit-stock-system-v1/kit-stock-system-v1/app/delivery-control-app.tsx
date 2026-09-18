@@ -175,14 +175,18 @@ type ForecastCoverage = {
   coveredThroughDate: string; coveredThroughTime: string; shortageDate: string;
   shortageTime: string; firstShortageQty: number; totalShortage: number;
   remainingStockAfterForecast: number; status: "covered" | "shortage" | "no_stock";
+  factories: string[]; daysToShortage: number | null;
+  riskGroup: "overdue" | "within3" | "within7" | "within14" | "over14";
 };
 type ForecastSummary = {
   materialCount: number; stockQty: number; outstandingQty: number; overdueQty: number;
   totalShortage: number; coveredMaterials: number; shortageMaterials: number;
+  riskGroups: Record<"overdue" | "within3" | "within7" | "within14" | "over14", number>;
 };
+type ForecastTrend = { date: string; demandQty: number; cumulativeDemand: number; projectedStock: number; shortageParts: number };
 type ForecastPayload = {
   activeImport: ForecastImport | null; imports: ForecastImport[];
-  coverage: ForecastCoverage[]; summary: ForecastSummary | null; error?: string;
+  coverage: ForecastCoverage[]; summary: ForecastSummary | null; trend?: ForecastTrend[]; calculatedAt?: string; error?: string;
 };
 type ForecastUploadRow = {
   sourceKey: string; materialCode: string; description: string; deliveryDate: string;
@@ -190,7 +194,7 @@ type ForecastUploadRow = {
 };
 type ForecastPreview = {
   fileName: string; sourceCalculatedAt: string; sourceLabel: string; sourceRowCount: number;
-  materialCount: number; totalQty: number; rows: ForecastUploadRow[];
+  materialCount: number; totalQty: number; duplicateRowCount: number; rows: ForecastUploadRow[];
 };
 type UserRole = "production" | "stock" | "qc" | "delivery" | "dispatcher" | "inspector";
 type UserForm = { id?: number; employeeCode: string; displayName: string; email: string; role: UserRole; pin: string; active: boolean; permissions: PageKey[] };
@@ -470,16 +474,22 @@ async function parseForecastFile(file: File): Promise<ForecastPreview> {
   }
   const grouped = new Map<string, ForecastUploadRow>();
   let sourceRowCount = 0;
+  let invalidRowCount = 0;
+  let duplicateRowCount = 0;
   for (const cells of rows.slice(2)) {
     const materialCode = String(cells[column("Material")] || "").trim().toUpperCase();
     const deliveryDate = normalizeForecastDate(String(cells[column("Delivery Date")] || ""));
     const deliveryTime = normalizeForecastTime(String(cells[column("Delivery Time")] || ""));
     const prodQty = number(cells[column("Prod.Qty.")]);
-    if (!materialCode || !deliveryDate || !deliveryTime || prodQty <= 0) continue;
+    if (!cells.some((cell) => String(cell || "").trim())) continue;
+    if (!materialCode || !deliveryDate || !deliveryTime || prodQty <= 0) {
+      invalidRowCount += 1;
+      continue;
+    }
     sourceRowCount += 1;
     const sourceKey = `${materialCode}|${deliveryDate}|${deliveryTime}`;
     const existing = grouped.get(sourceKey);
-    if (existing) existing.prodQty += prodQty;
+    if (existing) { existing.prodQty += prodQty; duplicateRowCount += 1; }
     else grouped.set(sourceKey, {
       sourceKey, materialCode, deliveryDate, deliveryTime, prodQty,
       description: String(cells[column("Description")] || "").trim(),
@@ -494,6 +504,7 @@ async function parseForecastFile(file: File): Promise<ForecastPreview> {
     || left.deliveryDate.localeCompare(right.deliveryDate)
     || left.deliveryTime.localeCompare(right.deliveryTime)
   );
+  if (invalidRowCount > 0) throw new Error(`พบข้อมูลผิดรูปแบบ ${invalidRowCount} แถว กรุณาตรวจ Part No., วันที่, เวลา และ Quantity`);
   if (!uploadRows.length) throw new Error("ไม่พบรายการ Forecast ที่มียอดมากกว่า 0");
   return {
     fileName: file.name,
@@ -502,6 +513,7 @@ async function parseForecastFile(file: File): Promise<ForecastPreview> {
     sourceRowCount,
     materialCount: new Set(uploadRows.map((row) => row.materialCode)).size,
     totalQty: uploadRows.reduce((sum, row) => sum + row.prodQty, 0),
+    duplicateRowCount,
     rows: uploadRows,
   };
 }
@@ -697,7 +709,10 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [forecastImporting, setForecastImporting] = useState(false);
   const [forecastProgress, setForecastProgress] = useState(0);
   const [forecastSearch, setForecastSearch] = useState("");
-  const [forecastStatus, setForecastStatus] = useState<"all" | "covered" | "shortage" | "overdue">("all");
+  const [forecastStatus, setForecastStatus] = useState<"all" | "overdue" | "within3" | "within7" | "within14" | "over14" | "shortage" | "covered">("all");
+  const [forecastFactory, setForecastFactory] = useState("ALL");
+  const [forecastRange, setForecastRange] = useState<7 | 14 | 30>(14);
+  const [forecastDragActive, setForecastDragActive] = useState(false);
   const [rawTag, setRawTag] = useState("");
   const [tagPreview, setTagPreview] = useState<TagPreview | null>(null);
   const [dispatchConfirmation, setDispatchConfirmation] = useState<VerifyResult | null>(null);
@@ -910,6 +925,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         imports: data.imports || [],
         coverage: data.coverage || [],
         summary: data.summary || null,
+        trend: data.trend || [],
+        calculatedAt: data.calculatedAt,
       });
     } catch (caught) {
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "โหลด Forecast Stock ไม่สำเร็จ" });
@@ -932,22 +949,30 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     }
   }
 
-  async function selectForecastFile(event: ChangeEvent<HTMLInputElement>) {
-    const selected = event.target.files?.[0] || null;
+  async function prepareForecastFile(selected: File | null) {
     setForecastFile(selected);
     setForecastPreview(null);
     if (!selected) return;
+    if (!selected.name.toLowerCase().endsWith(".csv")) {
+      setForecastFile(null);
+      setNotice({ type: "error", text: "รองรับเฉพาะไฟล์ Forecast .csv" });
+      return;
+    }
     setForecastParsing(true);
     try {
       const parsed = await parseForecastFile(selected);
       setForecastPreview(parsed);
     } catch (caught) {
       setForecastFile(null);
-      event.target.value = "";
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "อ่านไฟล์ Forecast ไม่สำเร็จ" });
     } finally {
       setForecastParsing(false);
     }
+  }
+
+  async function selectForecastFile(event: ChangeEvent<HTMLInputElement>) {
+    await prepareForecastFile(event.target.files?.[0] || null);
+    event.target.value = "";
   }
 
   async function importForecast() {
@@ -3711,34 +3736,56 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   }
 
   function renderForecast() {
-    const summaryData = forecast.summary || { materialCount: 0, stockQty: 0, outstandingQty: 0, overdueQty: 0, totalShortage: 0, coveredMaterials: 0, shortageMaterials: 0 };
+    const emptyRisk = { overdue: 0, within3: 0, within7: 0, within14: 0, over14: 0 };
+    const summaryData = forecast.summary || { materialCount: 0, stockQty: 0, outstandingQty: 0, overdueQty: 0, totalShortage: 0, coveredMaterials: 0, shortageMaterials: 0, riskGroups: emptyRisk };
+    const risk = summaryData.riskGroups || emptyRisk;
     const needle = forecastSearch.trim().toLowerCase();
+    const factories = [...new Set(forecast.coverage.flatMap((item) => item.factories || []).filter(Boolean))].sort();
     const rows = forecast.coverage.filter((item) => {
-      const matchesSearch = !needle || [item.materialCode, item.description].some((value) => value.toLowerCase().includes(needle));
+      const matchesSearch = !needle || [item.materialCode, item.description, ...(item.factories || [])].some((value) => value.toLowerCase().includes(needle));
       const matchesStatus = forecastStatus === "all"
-        || (forecastStatus === "overdue" ? item.overdueQty > 0 : forecastStatus === "covered" ? item.status === "covered" : item.status !== "covered");
-      return matchesSearch && matchesStatus;
+        || (["overdue", "within3", "within7", "within14", "over14"].includes(forecastStatus) ? item.riskGroup === forecastStatus
+          : forecastStatus === "covered" ? item.status === "covered" : item.status !== "covered");
+      const matchesFactory = forecastFactory === "ALL" || (item.factories || []).includes(forecastFactory);
+      return matchesSearch && matchesStatus && matchesFactory;
+    }).sort((a, b) => {
+      const rank = { overdue: 0, within3: 1, within7: 2, within14: 3, over14: 4 };
+      return rank[a.riskGroup] - rank[b.riskGroup] || (a.shortageDate || "9999").localeCompare(b.shortageDate || "9999") || a.materialCode.localeCompare(b.materialCode);
     });
     const statusLabel = (item: ForecastCoverage) => item.status === "covered" ? "Stock เพียงพอ" : item.status === "no_stock" ? "ไม่มี Stock" : "Stock ไม่พอ";
-    const coverageLabel = (item: ForecastCoverage) => {
-      if (item.status === "covered") return "ครบทุกวันที่มีในไฟล์";
-      if (!item.coveredThroughDate) return "ยังส่งไม่ได้";
-      return `${formatDate(item.coveredThroughDate)} ${item.coveredThroughTime}`;
-    };
+    const priorityLabel = (item: ForecastCoverage) => item.riskGroup === "overdue" ? "ขาดแล้ว" : item.riskGroup === "within3" ? "ขาดภายใน 3 วัน" : item.riskGroup === "within7" ? "ขาดภายใน 7 วัน" : item.riskGroup === "within14" ? "รองรับภายใน 14 วัน" : "เพียงพอ";
+    const trend = (forecast.trend || []).slice(0, forecastRange);
+    const trendMax = Math.max(...trend.flatMap((item) => [item.cumulativeDemand, item.projectedStock]), 1);
+    const setFilter = (next: typeof forecastStatus) => setForecastStatus((current) => current === next ? "all" : next);
+    const riskCards: Array<{ key: typeof forecastStatus; label: string; value: number; tone: string; icon: string }> = [
+      { key: "overdue", label: "ขาดแล้ว", value: risk.overdue, tone: "red", icon: "!" },
+      { key: "within3", label: "จะขาดภายใน 3 วัน", value: risk.within3, tone: "orange", icon: "◷" },
+      { key: "within7", label: "จะขาดภายใน 7 วัน", value: risk.within7, tone: "yellow", icon: "⌛" },
+      { key: "within14", label: "รองรับได้ภายใน 14 วัน", value: risk.within14, tone: "green", icon: "✓" },
+      { key: "over14", label: "เพียงพอมากกว่า 14 วัน", value: risk.over14, tone: "mint", icon: "✓" },
+    ];
     return <div className="forecast-page">
+      <section className="forecast-hero">
+        <div><span className="forecast-hero-icon">▥</span><div><h2>Forecast Stock</h2><p>วางแผนการผลิตล่วงหน้า ป้องกันปัญหา Stock ไม่เพียงพอ</p></div></div>
+        <button className="button secondary" disabled={forecastLoading} onClick={() => void loadForecast()}>↻ รีเฟรชข้อมูล</button>
+      </section>
       <div className="metrics five forecast-metrics">
-        <MetricCard tone="blue" icon="▧" label="Part ใน Forecast" value={fmt(summaryData.materialCount)} suffix="รายการ" />
-        <MetricCard tone="purple" icon="□" label="งานค้างต้องส่ง" value={fmt(summaryData.outstandingQty)} suffix="ชิ้น" />
-        <MetricCard tone="red" icon="!" label="ยอดเลยกำหนด" value={fmt(summaryData.overdueQty)} suffix="ชิ้น" />
-        <MetricCard tone="green" icon="✓" label="Stock เพียงพอ" value={fmt(summaryData.coveredMaterials)} suffix="Part" />
-        <MetricCard tone="orange" icon="◷" label="Stock ไม่พอ" value={fmt(summaryData.shortageMaterials)} suffix="Part" />
+        <button className={`forecast-metric-button ${forecastStatus === "all" ? "active" : ""}`} onClick={() => setForecastStatus("all")}><MetricCard tone="blue" icon="▧" label="จำนวน Part ใน Forecast" value={fmt(summaryData.materialCount)} suffix="Part" /></button>
+        <button className={`forecast-metric-button ${forecastStatus === "covered" ? "active" : ""}`} onClick={() => setFilter("covered")}><MetricCard tone="green" icon="✓" label="Stock เพียงพอ" value={fmt(summaryData.coveredMaterials)} suffix="Part" /></button>
+        <button className={`forecast-metric-button ${forecastStatus === "shortage" ? "active" : ""}`} onClick={() => setFilter("shortage")}><MetricCard tone="red" icon="!" label="ต้องผลิตเพิ่ม" value={fmt(summaryData.shortageMaterials)} suffix="Part" /></button>
+        <button className={`forecast-metric-button ${forecastStatus === "within3" ? "active" : ""}`} onClick={() => setFilter("within3")}><MetricCard tone="orange" icon="◷" label="คาดว่าจะขาดภายใน 3 วัน" value={fmt(risk.within3)} suffix="Part" /></button>
+        <button className={`forecast-metric-button ${forecastStatus === "overdue" ? "active" : ""}`} onClick={() => setFilter("overdue")}><MetricCard tone="red" icon="▣" label="ขาดแล้ว" value={fmt(risk.overdue)} suffix="Part" /></button>
       </div>
 
-      {user.role === "admin" && <Card className="forecast-import-card" title="นำเข้า Forecast รายวันจากลูกค้า">
+      <div className="forecast-top-grid">
+      {user.role === "admin" && <Card className="forecast-import-card" title="▣ นำเข้า Forecast ใหม่">
         <div className="forecast-import-layout">
-          <label className="forecast-file-picker">
+          <label className={`forecast-file-picker ${forecastDragActive ? "drag-active" : ""}`}
+            onDragOver={(event) => { event.preventDefault(); setForecastDragActive(true); }}
+            onDragLeave={() => setForecastDragActive(false)}
+            onDrop={(event) => { event.preventDefault(); setForecastDragActive(false); void prepareForecastFile(event.dataTransfer.files?.[0] || null); }}>
             <span>▧</span>
-            <div><b>{forecastFile?.name || "เลือกไฟล์ Forecast .csv"}</b><small>ไฟล์ใหม่จะเป็น Forecast ชุดปัจจุบันแทนชุดเดิม และเก็บชุดเดิมไว้ในประวัติ</small></div>
+            <div><b>{forecastFile?.name || "ลากไฟล์มาวางที่นี่ หรือเลือกไฟล์"}</b><small>รองรับ Forecast .csv · ตรวจ Format, Column, Part, วันที่, Quantity ก่อนนำเข้า</small></div>
             <input type="file" accept=".csv,text/csv" disabled={forecastImporting} onChange={(event) => void selectForecastFile(event)} />
           </label>
           {forecastParsing && <div className="forecast-parsing">กำลังอ่านและรวมรายการตาม Material / วันที่ / เวลา…</div>}
@@ -3748,41 +3795,55 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
             <div><small>รวมเป็นช่วงส่ง</small><b>{fmt(forecastPreview.rows.length)}</b></div>
             <div><small>จำนวน Part</small><b>{fmt(forecastPreview.materialCount)}</b></div>
             <div><small>ยอด Forecast</small><b>{fmt(forecastPreview.totalQty)} ชิ้น</b></div>
+            {forecastPreview.duplicateRowCount > 0 && <div><small>แถวซ้ำที่รวมยอดแล้ว</small><b>{fmt(forecastPreview.duplicateRowCount)} แถว</b></div>}
           </div>}
           {forecastImporting && <div className="forecast-progress"><span><i style={{ width: `${forecastProgress}%` }} /></span><b>{forecastProgress}%</b><small>กำลังนำเข้า กรุณาอย่าปิดหน้านี้</small></div>}
           <div className="forecast-import-actions">
-            <p><b>หมายเหตุ:</b> วันที่ที่ผ่านมาในไฟล์จะถือเป็นงานค้างที่ยังต้องส่ง และถูกนำมาหัก Stock ก่อนวันถัดไป</p>
+            <p><b>Cut-off:</b> ยอดขายออกหลัง Last Calculate DO จะถูกหักจาก Forecast เก่าก่อน จึงไม่สร้าง Demand ซ้ำ</p>
             <button className="button primary" disabled={!forecastPreview || forecastParsing || forecastImporting} onClick={() => void importForecast()}>{forecastImporting ? "กำลังนำเข้า…" : "⇧ ยืนยันใช้ Forecast ชุดนี้"}</button>
           </div>
         </div>
       </Card>}
 
-      <Card title="Forecast ชุดปัจจุบัน" action={<button className="button secondary" disabled={forecastLoading} onClick={() => void loadForecast()}>↻ รีเฟรช</button>}>
+      <Card className="forecast-current-card" title="▤ Forecast ชุดปัจจุบัน">
         {forecastLoading ? <div className="loading-state"><span /><p>กำลังคำนวณ Forecast เทียบ Stock…</p></div>
           : forecast.activeImport ? <div className="forecast-active">
             <div><small>ชื่อไฟล์</small><b>{forecast.activeImport.fileName}</b></div>
             <div><small>Last Calculate DO</small><b>{formatDateTime(forecast.activeImport.sourceCalculatedAt)}</b></div>
             <div><small>ผู้นำเข้า</small><b>{forecast.activeImport.importedByName}</b></div>
             <div><small>นำเข้าเมื่อ</small><b>{formatDateTime(forecast.activeImport.createdAt)}</b></div>
+            <span className="forecast-status covered">● ใช้งานอยู่</span>
           </div> : <Empty title="ยังไม่มี Forecast ชุดปัจจุบัน" text={user.role === "admin" ? "เลือกไฟล์ CSV จากลูกค้าเพื่อนำเข้าข้อมูล" : "กรุณาให้ Admin นำเข้าไฟล์ Forecast"} />}
       </Card>
+      </div>
 
-      {forecast.activeImport && <Card className="forecast-coverage-card" title="Stock ส่งได้ถึงวันไหน" action={<div className="forecast-filters"><input value={forecastSearch} onChange={(event) => setForecastSearch(event.target.value)} placeholder="⌕ ค้นหา Part / Description" /><select value={forecastStatus} onChange={(event) => setForecastStatus(event.target.value as typeof forecastStatus)}><option value="all">ทุกสถานะ</option><option value="overdue">มีงานเลยกำหนด</option><option value="shortage">Stock ไม่พอ</option><option value="covered">Stock เพียงพอ</option></select></div>}>
-        <div className="forecast-method-note">คำนวณแบบเก่าก่อนใหม่: งานวันที่ผ่านมาเป็นงานค้าง · ใช้ Stock คงเหลือจริง · หักยอดขายออกหลังเวลา Last Calculate DO เพื่อไม่ให้นับซ้ำ</div>
-        {rows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table forecast-table"><thead><tr><th>Part / Description</th><th className="num">Stock</th><th className="num">งานค้างทั้งหมด</th><th className="num">เลยกำหนด</th><th>Stock ส่งได้ถึง</th><th>เริ่มขาดวันที่</th><th className="num">ขาดรวม</th><th>สถานะ</th></tr></thead><tbody>{rows.map((item) => <tr key={item.materialCode} className={item.overdueQty > 0 ? "forecast-overdue-row" : ""}>
+      {forecast.activeImport && <Card className="forecast-trend-card" title="แนวโน้ม Forecast เทียบ Stock พร้อมใช้" action={<div className="forecast-range">{([7, 14, 30] as const).map((range) => <button key={range} className={forecastRange === range ? "active" : ""} onClick={() => setForecastRange(range)}>{range} วัน</button>)}</div>}>
+        <div className="forecast-chart-legend"><span><i className="demand" />Forecast สะสม</span><span><i className="stock" />Stock พร้อมใช้</span><span><i className="shortage" />Part เริ่มขาด</span></div>
+        {trend.length ? <div className="forecast-chart">{trend.map((item) => <div className="forecast-chart-column" key={item.date}>
+          <div className="forecast-chart-bars"><i className="demand" style={{ height: `${Math.max(3, item.cumulativeDemand / trendMax * 100)}%` }} title={`Forecast ${fmt(item.cumulativeDemand)}`} /><i className="stock" style={{ height: `${Math.max(3, item.projectedStock / trendMax * 100)}%` }} title={`Stock ${fmt(item.projectedStock)}`} /></div>
+          <b className={item.shortageParts ? "danger" : ""}>{fmt(item.shortageParts)}</b><small>{formatDate(item.date).slice(0, 5)}</small>
+        </div>)}</div> : <Empty title="ยังไม่มีข้อมูลในช่วงเวลานี้" text="กราฟจะแสดงหลังมี Forecast ตั้งแต่วันปัจจุบันเป็นต้นไป" />}
+      </Card>}
+
+      {forecast.activeImport && <section className="forecast-risk-section"><h3>สรุปความเสี่ยงตามช่วงเวลา</h3><div className="forecast-risk-grid">{riskCards.map((item) => <button key={item.key} className={`forecast-risk-card ${item.tone} ${forecastStatus === item.key ? "active" : ""}`} onClick={() => setFilter(item.key)}><span>{item.icon}</span><div><small>{item.label}</small><b>{fmt(item.value)} <em>Part</em></b></div><i>›</i></button>)}</div></section>}
+
+      {forecast.activeImport && <Card className="forecast-coverage-card" title={`รายการ Part ตามความเสี่ยง · ${fmt(rows.length)} Part`} action={<div className="forecast-filters"><input value={forecastSearch} onChange={(event) => setForecastSearch(event.target.value)} placeholder="⌕ Part No. / Description / Job" /><select value={forecastStatus} onChange={(event) => setForecastStatus(event.target.value as typeof forecastStatus)}><option value="all">ทั้งหมด</option><option value="overdue">ขาดแล้ว</option><option value="within3">ขาดภายใน 3 วัน</option><option value="within7">ขาดภายใน 7 วัน</option><option value="covered">เพียงพอ</option></select>{factories.length > 0 && <select value={forecastFactory} onChange={(event) => setForecastFactory(event.target.value)}><option value="ALL">ทุก FAC</option>{factories.map((factory) => <option key={factory} value={factory}>{factory}</option>)}</select>}</div>}>
+        <div className="forecast-method-note">Available Stock = ของที่อยู่ในพื้นที่ Stock จริง − ยอดจัดงาน/จองค้าง · วันที่เริ่มขาดคำนวณจาก Forecast ตามลำดับวัน · อัปเดตจากข้อมูลจริงทุกครั้งที่รีเฟรช</div>
+        {rows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table forecast-table"><thead><tr><th>Priority</th><th>Part / Description</th><th>Job / FAC</th><th className="num">Forecast รวม</th><th className="num">Stock พร้อมใช้</th><th className="num">ขาด / เกิน</th><th>เริ่มขาดวันที่</th><th className="num">ต้องผลิตเพิ่ม</th><th>สถานะ</th></tr></thead><tbody>{rows.map((item) => <tr key={item.materialCode} className={item.riskGroup === "overdue" ? "forecast-overdue-row" : ""}>
+          <td data-label="Priority"><span className={`forecast-priority ${item.riskGroup}`}>{priorityLabel(item)}</span></td>
           <td data-label="Part / Description"><b>{item.materialCode}</b><small>{item.description || "—"}</small>{item.dispatchedAfterImport > 0 && <em>ขายออกหลังไฟล์แล้ว {fmt(item.dispatchedAfterImport)} ชิ้น</em>}</td>
-          <td data-label="Stock" className="num"><b>{fmt(item.stockQty)}</b></td>
-          <td data-label="งานค้างทั้งหมด" className="num"><b>{fmt(item.outstandingQty)}</b></td>
-          <td data-label="เลยกำหนด" className={`num ${item.overdueQty > 0 ? "danger" : ""}`}>{fmt(item.overdueQty)}</td>
-          <td data-label="Stock ส่งได้ถึง"><b className={item.status === "covered" ? "forecast-covered-text" : ""}>{coverageLabel(item)}</b></td>
+          <td data-label="Job / FAC"><b>—</b><small>{(item.factories || []).join(", ") || "ไม่ระบุ FAC"}</small></td>
+          <td data-label="Forecast รวม" className="num"><b>{fmt(item.outstandingQty)}</b></td>
+          <td data-label="Stock พร้อมใช้" className="num"><b className="forecast-covered-text">{fmt(item.stockQty)}</b></td>
+          <td data-label="ขาด / เกิน" className={`num ${item.stockQty - item.outstandingQty < 0 ? "danger" : ""}`}><b>{fmt(item.stockQty - item.outstandingQty)}</b></td>
           <td data-label="เริ่มขาดวันที่">{item.shortageDate ? <><b>{formatDate(item.shortageDate)}</b><small>{item.shortageTime} · ขาดครั้งแรก {fmt(item.firstShortageQty)} ชิ้น</small></> : "—"}</td>
-          <td data-label="ขาดรวม" className={`num ${item.totalShortage > 0 ? "danger" : ""}`}><b>{fmt(item.totalShortage)}</b></td>
+          <td data-label="ต้องผลิตเพิ่ม" className={`num ${item.totalShortage > 0 ? "danger" : ""}`}><b>{fmt(item.totalShortage)}</b></td>
           <td data-label="สถานะ"><span className={`forecast-status ${item.status}`}>{statusLabel(item)}</span></td>
         </tr>)}</tbody></table></div> : <Empty title="ไม่พบรายการตามตัวกรอง" text="ลองเปลี่ยนคำค้นหาหรือสถานะ" />}
       </Card>}
 
-      {forecast.imports.length > 0 && <Card title="ประวัติไฟล์ Forecast">
-        <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>ไฟล์</th><th>เวลาที่ลูกค้าคำนวณ</th><th className="num">Part</th><th className="num">ยอดรวม</th><th>ผู้นำเข้า / เวลา</th><th>สถานะ</th></tr></thead><tbody>{forecast.imports.map((item) => <tr key={item.id}><td data-label="ไฟล์"><b>{item.fileName}</b></td><td data-label="เวลาที่ลูกค้าคำนวณ">{formatDateTime(item.sourceCalculatedAt)}</td><td data-label="Part" className="num">{fmt(item.materialCount)}</td><td data-label="ยอดรวม" className="num">{fmt(item.totalQty)}</td><td data-label="ผู้นำเข้า / เวลา"><b>{item.importedByName}</b><small>{formatDateTime(item.createdAt)}</small></td><td data-label="สถานะ"><span className={`forecast-status ${item.status === "active" ? "covered" : "archived"}`}>{item.status === "active" ? "ใช้งานอยู่" : "เก็บประวัติ"}</span></td></tr>)}</tbody></table></div>
+      {forecast.imports.length > 0 && <Card className="forecast-history-card" title="ประวัติไฟล์ Forecast">
+        <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>ชื่อไฟล์</th><th>วันที่นำเข้า</th><th>ผู้นำเข้า</th><th>Last Calculate DO</th><th className="num">จำนวน Part</th><th>สถานะ</th></tr></thead><tbody>{forecast.imports.map((item) => <tr key={item.id}><td data-label="ชื่อไฟล์"><b>{item.fileName}</b></td><td data-label="วันที่นำเข้า">{formatDateTime(item.createdAt)}</td><td data-label="ผู้นำเข้า">{item.importedByName}</td><td data-label="Last Calculate DO">{formatDateTime(item.sourceCalculatedAt)}</td><td data-label="จำนวน Part" className="num">{fmt(item.materialCount)}</td><td data-label="สถานะ"><span className={`forecast-status ${item.status === "active" ? "covered" : "archived"}`}>{item.status === "active" ? "ใช้งานอยู่" : "ประวัติ"}</span></td></tr>)}</tbody></table></div>
       </Card>}
     </div>;
   }
