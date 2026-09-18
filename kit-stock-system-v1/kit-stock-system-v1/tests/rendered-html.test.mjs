@@ -376,7 +376,7 @@ test("uses page permissions for normal workflows while preserving Admin-only ope
   const duePost = sourceSection(dueApi, "export async function POST", "} catch (error)");
   const stockGet = sourceSection(stockApi, "export async function GET", "export async function POST");
   const closeJobAction = sourceSection(stockApi, 'if (action === "close_job")', 'if (action === "reopen_ng_job")');
-  const manualReceiveAction = sourceSection(stockApi, 'if (action === "manual_receive")', 'if (action === "preview_stock_count"');
+  const manualReceiveAction = sourceSection(stockApi, 'if (action === "manual_receive")', 'if (action === "preview_tag_count"');
 
   assert.match(appSource, /const hasDueDataPermission/);
   assert.match(appSource, /if \(!hasDueDataPermission\)/);
@@ -392,7 +392,11 @@ test("uses page permissions for normal workflows while preserving Admin-only ope
   assert.match(stockGet, /parts, tags: \[\], allocations: \[\], picks: \[\], dispatchLinks: \[\], jobClosures: \[\]/);
   assert.match(closeJobAction, /if \(!hasPermission\(user, "stock"\)\)/);
   assert.doesNotMatch(closeJobAction, /user\.role/);
-  assert.match(manualReceiveAction, /if \(!hasPermission\(user, "stock"\)\)/);
+  assert.match(manualReceiveAction, /if \(!hasPermission\(user, "manual-stock"\)\)/);
+  assert.match(manualReceiveAction, /duplicate_job_confirmation_required/);
+  assert.match(manualReceiveAction, /confirmDuplicateJob/);
+  assert.match(manualReceiveAction, /stock_manual_receive_transactions/);
+  assert.match(manualReceiveAction, /tagQtys\.reduce/);
   assert.doesNotMatch(manualReceiveAction, /user\.role/);
 
   assert.match(replacementsApi, /function canAccess[\s\S]*return hasPermission\(user, "replacement"\)/);
