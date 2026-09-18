@@ -126,6 +126,7 @@ type StockCountAdjustmentLine = {
   id: number; adjustmentId: number; stockTagId: number; stockTagCode: string;
   qtyChange: number; beforeQty: number; afterQty: number; createdAt: string;
 };
+type StockMovementDay = { date: string; receivedQty: number; arrangedQty: number; adjustedQty: number };
 type StockCountPreview = {
   action: "preview_tag_count"; tagId: string; materialCode: string; partName: string;
   customer: string; jobNo: string; productionDate: string; status: string;
@@ -138,6 +139,7 @@ type StockPayload = {
   picks: StockPick[]; dispatchLinks: StockDispatchLink[]; jobClosures: StockJobClosure[];
   manualReceipts: StockManualReceipt[]; countAdjustments: StockCountAdjustment[];
   countAdjustmentLines: StockCountAdjustmentLine[];
+  movementDays: StockMovementDay[];
 };
 type ArrangementPreview = {
   action: "staged";
@@ -751,7 +753,10 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [partBundleFailed, setPartBundleFailed] = useState<Array<{ name: string; reason: string }>>([]);
   const [partImageNeedle, setPartImageNeedle] = useState("");
   const [deletingImportId, setDeletingImportId] = useState<number | null>(null);
-  const [stock, setStock] = useState<StockPayload>({ parts: [], tags: [], allocations: [], picks: [], dispatchLinks: [], jobClosures: [], manualReceipts: [], countAdjustments: [], countAdjustmentLines: [] });
+  const [stock, setStock] = useState<StockPayload>({ parts: [], tags: [], allocations: [], picks: [], dispatchLinks: [], jobClosures: [], manualReceipts: [], countAdjustments: [], countAdjustmentLines: [], movementDays: [] });
+  const [stockListExpanded, setStockListExpanded] = useState(false);
+  const [stockManualEntry, setStockManualEntry] = useState(false);
+  const [lastStockReceipt, setLastStockReceipt] = useState<{ tagId: string; materialCode: string; jobNo: string; qty: number } | null>(null);
   const [manualStockForm, setManualStockForm] = useState({ materialCode: "", qty: "", jobNo: "", productionDate: new Date().toISOString().slice(0, 10), referenceNo: "", note: "" });
   const [stockCountForm, setStockCountForm] = useState({ rawPayload: "", countedQty: "", countDate: new Date().toISOString().slice(0, 10), reason: "บันทึกยอดตรวจนับ Stock สิ้นเดือน" });
   const [stockCountPreview, setStockCountPreview] = useState<StockCountPreview | null>(null);
@@ -885,7 +890,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         parts: data.parts || [], tags: data.tags || [], allocations: data.allocations || [],
         picks: data.picks || [], dispatchLinks: data.dispatchLinks || [], jobClosures: data.jobClosures || [],
         manualReceipts: data.manualReceipts || [], countAdjustments: data.countAdjustments || [],
-        countAdjustmentLines: data.countAdjustmentLines || [],
+        countAdjustmentLines: data.countAdjustmentLines || [], movementDays: data.movementDays || [],
       });
     } catch (caught) {
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "โหลด Stock ไม่สำเร็จ" });
@@ -2280,8 +2285,17 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       setStockReceiveQty("");
       setStockReceiveProductionDate("");
       const ngQty = Number(data.ngQty || 0);
+      setLastStockReceipt({
+        tagId: data.tag?.tagId || stockReceivePreview.tag.tagId,
+        materialCode: data.tag?.materialCode || stockReceivePreview.tag.materialCode,
+        jobNo: data.tag?.jobNo || stockReceivePreview.tag.jobNo,
+        qty: Number(data.receivedQty || receivedQty),
+      });
       setNotice({ type: "success", text: `รับ Tag ${data.tag?.tagId || ""} เข้า Stock ${fmt(Number(data.receivedQty || receivedQty))} ชิ้น${ngQty ? ` · NG ${fmt(ngQty)} ชิ้น` : ""}` });
       void loadStock();
+      if (!window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) {
+        window.setTimeout(() => stockScanInputRef.current?.focus(), 120);
+      }
     } catch (caught) {
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "รับเข้า Stock ไม่สำเร็จ" });
     } finally {
@@ -3253,52 +3267,56 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
 
   function renderStock() {
     const receivedStockTags = stock.tags.filter((item) => item.status === "in_stock" || item.status === "depleted");
-    const onHand = receivedStockTags.reduce((sum, item) => sum + Number(item.remainingQty), 0);
     const reserved = receivedStockTags.reduce((sum, item) => sum + Number(item.reservedQty), 0);
-    const available = Math.max(onHand - reserved, 0);
+    const available = receivedStockTags.reduce((sum, item) => sum + Math.max(Number(item.remainingQty) - Number(item.reservedQty), 0), 0);
     const awaitingReceipt = stock.tags.filter((item) => item.status === "printed").length;
-    const todayKey = new Date().toISOString().slice(0, 10);
-    const receivedToday = receivedStockTags.filter((item) => (item.receivedAt || "").slice(0, 10) === todayKey).reduce((sum, item) => sum + Number(item.receivedQty ?? item.qty), 0);
-    const dispatchedToday = stock.dispatchLinks.filter((item) => (item.dispatchedAt || "").slice(0, 10) === todayKey).reduce((sum, item) => sum + Number(item.qty), 0);
+    const abnormalTags = stock.tags.filter((item) => item.status === "ng"
+      || Number(item.remainingQty) < 0 || Number(item.remainingQty) > Number(item.qty)
+      || Number(item.reservedQty) < 0 || Number(item.reservedQty) > Number(item.remainingQty));
+    const ngQty = stock.tags.reduce((sum, item) => sum + Number(item.ngQty || 0), 0);
+    const todayKey = bangkokDateTimeKey().slice(0, 10);
+    const todayMovement = stock.movementDays.find((item) => item.date === todayKey) || { date: todayKey, receivedQty: 0, arrangedQty: 0, adjustedQty: 0 };
     const stockNeedle = tagSearch.trim().toLowerCase();
-    const recentStock = receivedStockTags.filter((item) => !stockNeedle || [item.tagId, item.materialCode, item.partName, item.jobNo].some((value) => String(value || "").toLowerCase().includes(stockNeedle))).slice(0, 6);
-    const totalForChart = Math.max(onHand, 1);
+    const matchingStock = stock.tags.filter((item) => !stockNeedle || [item.tagId, item.materialCode, item.partName, item.jobNo].some((value) => String(value || "").toLowerCase().includes(stockNeedle)));
+    const recentStock = matchingStock.slice(0, stockListExpanded || stockNeedle ? 50 : 6);
+    const totalForChart = Math.max(available + reserved + ngQty, 1);
     const readyPercent = Math.round((available / totalForChart) * 100);
     const reservedPercent = Math.round((reserved / totalForChart) * 100);
-    const trendDays = Array.from({ length: 7 }, (_, offset) => {
-      const date = new Date();
-      date.setDate(date.getDate() - (6 - offset));
-      const key = date.toISOString().slice(0, 10);
-      return { key, label: String(date.getDate()) + "/" + String(date.getMonth() + 1), qty: receivedStockTags.filter((item) => (item.receivedAt || "").slice(0, 10) === key).reduce((sum, item) => sum + Number(item.receivedQty ?? item.qty), 0) };
-    });
-    const trendMax = Math.max(...trendDays.map((item) => item.qty), 1);
+    const ngPercent = Math.max(100 - readyPercent - reservedPercent, 0);
+    const trendDays = stock.movementDays.map((item) => ({ ...item,
+      receivedQty: Number(item.receivedQty || 0), arrangedQty: Number(item.arrangedQty || 0), adjustedQty: Number(item.adjustedQty || 0),
+      label: formatDate(item.date).replace(/\s/g, ""),
+    }));
+    const trendMax = Math.max(...trendDays.flatMap((item) => [item.receivedQty, item.arrangedQty, Math.abs(item.adjustedQty)]), 1);
     return <div className="stock-home">
       <div className="stock-stat-row">
-        <article className="stock-stat blue"><span>◇</span><div><small>Tag รอรับเข้า</small><b>{fmt(awaitingReceipt)}</b><em>ใบ</em></div><button onClick={() => go("tags")}>ดูรายละเอียด →</button></article>
-        <article className="stock-stat green"><span>□</span><div><small>Stock คงเหลือ</small><b>{fmt(onHand)}</b><em>ชิ้น</em></div><button onClick={() => void loadStock()}>ดูรายละเอียด →</button></article>
-        <article className="stock-stat orange"><span>⇧</span><div><small>รอขายออก</small><b>{fmt(reserved)}</b><em>ชิ้น</em></div><button onClick={() => go("arrange")}>ดูรายละเอียด →</button></article>
-        <article className="stock-stat red"><span>✓</span><div><small>พร้อมจัดงาน</small><b>{fmt(available)}</b><em>ชิ้น</em></div><button onClick={() => go("arrange")}>ดูรายละเอียด →</button></article>
+        <article className="stock-stat blue"><span>▦</span><div><small>Tag รอรับเข้า</small><b>{fmt(awaitingReceipt)}</b><em>ใบ</em></div><button onClick={() => { setTagSearch(""); setStockListExpanded(true); }}>ดูรายการ →</button></article>
+        <article className="stock-stat green"><span>▣</span><div><small>Stock พร้อมใช้</small><b>{fmt(available)}</b><em>ชิ้น · อยู่ในพื้นที่ Stock จริง</em></div><button onClick={() => { setTagSearch(""); setStockListExpanded(true); }}>ดูรายการ →</button></article>
+        <article className="stock-stat orange"><span>⇥</span><div><small>ถูกจัดงานแล้ว</small><b>{fmt(reserved)}</b><em>ชิ้น · ออกจากพื้นที่ Stock แล้ว</em></div><button onClick={() => go("arrange")}>ดูรายการ →</button></article>
+        <article className="stock-stat red"><span>!</span><div><small>Stock ผิดปกติ</small><b>{fmt(abnormalTags.length)}</b><em>รายการ</em></div><button onClick={() => { setTagSearch(""); setStockListExpanded(true); }}>ตรวจสอบ →</button></article>
       </div>
       <div className="stock-main-grid">
-        <Card className="stock-receive-card" title="1. สแกน Tag เพื่อรับเข้า Stock">
-          <button type="button" className="stock-camera-zone" onClick={() => { setCameraPurpose("stock"); setCameraOpen(true); }}><span>⌗</span><b>พร้อมสแกน Tag</b><small>นำ Tag มาแตะที่เครื่องสแกน</small></button>
-          <div className="stock-scan-count"><i /> สแกนแล้ว {fmt(receivedStockTags.length)} ใบ</div>
-          <form className="stock-receive-form" onSubmit={receiveStockTag}><input ref={stockScanInputRef} value={stockScan} onChange={(e) => updateStockScannerValue(e.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void receiveStockTag(value); } }} placeholder="เช่น TG-20250901-0001" autoComplete="off" /><button className="button primary" disabled={!stockScan.trim() || stockSaving}>{stockSaving ? "กำลังตรวจสอบ…" : "ตรวจสอบก่อนรับเข้า"}</button></form>
-          <div className="stock-guide"><b>↕ ขั้นตอนการทำงาน</b><p>สแกน Tag ทีละใบ เพื่อบันทึกรับเข้า Stock เข้าระบบอัตโนมัติ</p></div>
+        <Card className="stock-receive-card" title={<span className="stock-card-title"><i>⌗</i> รับเข้า Stock (สแกน Tag)</span>} action={<span className="stock-scanner-ready"><i /> พร้อมสแกน</span>}>
+          <button type="button" className="stock-camera-zone" onClick={() => { setCameraPurpose("stock"); setCameraOpen(true); }}><span>▥</span><b>{stockSaving ? "กำลังตรวจสอบ Tag…" : "พร้อมสแกน Tag"}</b><small>ยิง Barcode/QR Scanner หรือแตะเพื่อเปิดกล้อง</small></button>
+          <div className="stock-scan-separator"><span>หรือ</span></div>
+          <form className="stock-receive-form" onSubmit={receiveStockTag}><input ref={stockScanInputRef} value={stockScan} inputMode={stockManualEntry ? "text" : "none"} onFocus={() => { if (!stockManualEntry && window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) stockScanInputRef.current?.blur(); }} onChange={(e) => updateStockScannerValue(e.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void receiveStockTag(value); } }} placeholder="ใส่รหัส Tag ด้วยมือ" autoComplete="off" /><button className="button primary" disabled={!stockScan.trim() || stockSaving}>{stockSaving ? "กำลังตรวจสอบ…" : "ตรวจสอบและรับเข้า"}</button></form>
+          <button type="button" className="stock-manual-toggle" onClick={() => { setStockManualEntry((current) => !current); window.setTimeout(() => stockScanInputRef.current?.focus(), 50); }}>{stockManualEntry ? "ปิดแป้นพิมพ์ / ใช้ Scanner" : "⌨ กรอก Tag ด้วยมือ"}</button>
+          {lastStockReceipt ? <div className="stock-receive-success"><b>✓ รับเข้า Stock สำเร็จ</b><span>Tag: {lastStockReceipt.tagId}</span><span>Material: {lastStockReceipt.materialCode}</span><span>Job: {lastStockReceipt.jobNo}</span><strong>จำนวน: {fmt(lastStockReceipt.qty)} ชิ้น</strong></div> : <div className="stock-guide"><b>ℹ พร้อมรับ Tag ต่อเนื่อง</b><p>ระบบตรวจ Tag ซ้ำ สถานะ Job และสิทธิ์ก่อนบันทึกทุกครั้ง</p></div>}
         </Card>
-        <Card className="stock-latest-card" title="2. รายการ Stock ล่าสุด" action={<div className="stock-list-tools"><button type="button" className="button users-excel-button" onClick={() => void exportStockExcel()}>▦ Excel</button><input value={tagSearch} onChange={(e) => setTagSearch(e.target.value)} placeholder="ค้นหา Tag / รายการสินค้า / Job..." /><button onClick={() => void loadStock()}>↻</button></div>}>
+        <Card className="stock-latest-card" title="รายการ Stock ล่าสุด" action={<div className="stock-list-tools"><button type="button" className="button users-excel-button" onClick={() => void exportStockExcel()}>▦ Excel</button><input value={tagSearch} onChange={(e) => { setTagSearch(e.target.value); setStockListExpanded(Boolean(e.target.value)); }} placeholder="ค้นหา Tag / Part No. / Job..." /><button onClick={() => void loadStock()}>↻</button></div>}>
           {stockLoading ? <div className="inline-loading">กำลังโหลด Stock…</div> : recentStock.length ? <><div className="stock-latest-head"><span>Tag / QR</span><span>รายการสินค้า</span><span>Job</span><span>วันที่รับเข้า</span><span>สถานะ</span><span>คงเหลือ</span></div><div className="stock-latest-list">{recentStock.map((item) => {
             const itemAvailable = Math.max(Number(item.remainingQty) - Number(item.reservedQty), 0);
-            const statusClass = item.status === "depleted" ? "depleted" : Number(item.reservedQty) ? "reserved" : "ready";
-            const statusText = item.status === "depleted" ? "ขายออกหมด" : Number(item.reservedQty) ? "รอขายออก" : "พร้อมจัดงาน";
-            return <button key={item.id} className="stock-latest-row" onClick={() => setTagSearch(item.tagId)}><span className="tag-cell"><i>▦</i><b>{item.tagId}</b></span><span><b>{item.materialCode}</b><small>{item.partName}</small></span><span><b>{item.jobNo}</b></span><span><b>{item.receivedAt ? formatDate(item.receivedAt) : "—"}</b></span><span><em className={"stock-state " + statusClass}>{statusText}</em></span><span className="remain-cell"><b>{fmt(itemAvailable)}</b> ชิ้น <i>›</i></span></button>;
-          })}</div><button className="stock-view-all" onClick={() => setTagSearch("")}>ดูรายการทั้งหมด →</button></> : <Empty title="ยังไม่มี Stock" text={stockNeedle ? "ไม่พบรายการที่ค้นหา" : "ยิง Tag รับงานเข้า Stock แล้วรายการจะแสดงที่นี่"} />}
+            const isAbnormal = item.status === "ng" || Number(item.remainingQty) < 0 || Number(item.remainingQty) > Number(item.qty) || Number(item.reservedQty) > Number(item.remainingQty);
+            const statusClass = isAbnormal ? "abnormal" : item.status === "printed" ? "waiting" : item.status === "depleted" ? "depleted" : Number(item.reservedQty) ? "reserved" : "ready";
+            const statusText = isAbnormal ? "ผิดปกติ" : item.status === "printed" ? "รอรับเข้า" : item.status === "depleted" ? "ขายออกหมด" : Number(item.reservedQty) ? (itemAvailable ? "จัดบางส่วน" : "จัดงานแล้ว") : "พร้อมใช้";
+            return <button key={item.id} className="stock-latest-row" onClick={() => { setTagSearch(item.tagId); setStockListExpanded(true); }}><span className="tag-cell"><i>▦</i><b>{item.tagId}</b></span><span><b>{item.materialCode}</b><small>{item.partName}</small></span><span><b>{item.jobNo}</b></span><span><b>{item.receivedAt ? formatDateTime(item.receivedAt) : "—"}</b></span><span><em className={"stock-state " + statusClass}>{statusText}</em></span><span className="remain-cell"><b>{fmt(itemAvailable)}</b> ชิ้น <i>›</i></span></button>;
+          })}</div>{matchingStock.length > 6 && <button className="stock-view-all" onClick={() => { setTagSearch(""); setStockListExpanded((current) => !current); }}>{stockListExpanded ? "ย่อรายการ ↑" : `ดูทั้งหมด ${fmt(matchingStock.length)} Tag →`}</button>}</> : <Empty title="ยังไม่มี Stock" text={stockNeedle ? "ไม่พบรายการที่ค้นหา" : "ยิง Tag รับงานเข้า Stock แล้วรายการจะแสดงที่นี่"} />}
         </Card>
       </div>
       <div className="stock-analytics-grid">
-        <Card className="stock-status-card" title="3. สรุปสถานะ Stock"><div className="stock-donut-wrap"><div className="stock-donut" style={{ "--ready-stock": String(readyPercent * 3.6) + "deg" } as React.CSSProperties}><span><b>{fmt(onHand)}</b><small>ชิ้น</small></span></div><ul><li><i className="ready" /><span>พร้อมจัดงาน</span><b>{fmt(available)} ชิ้น</b><em>{readyPercent}%</em></li><li><i className="reserved" /><span>รอขายออก</span><b>{fmt(reserved)} ชิ้น</b><em>{reservedPercent}%</em></li></ul></div></Card>
-        <Card className="stock-trend-card" title="แนวโน้ม 7 วันที่ผ่านมา"><div className="stock-trend-chart">{trendDays.map((item) => <div key={item.key} className="trend-column"><b>{item.qty ? fmt(item.qty) : ""}</b><i style={{ height: String(Math.max((item.qty / trendMax) * 100, 4)) + "%" }} /><span>{item.label}</span></div>)}</div></Card>
-        <aside className="stock-today-card"><div><span className="blue">⇩</span><p><small>รับเข้า (วันนี้)</small><b>{fmt(receivedToday)} ชิ้น</b></p></div><div><span className="green">⇧</span><p><small>เบิกออก (วันนี้)</small><b>{fmt(dispatchedToday)} ชิ้น</b></p></div><div><span className="purple">▤</span><p><small>คงเหลือรวม</small><b>{fmt(onHand)} ชิ้น</b></p></div></aside>
+        <Card className="stock-status-card" title="สรุปสถานะ Stock"><div className="stock-donut-wrap"><div className="stock-donut" style={{ "--ready-stock": String(readyPercent * 3.6) + "deg", "--reserved-stock": String((readyPercent + reservedPercent) * 3.6) + "deg" } as React.CSSProperties}><span><b>{fmt(available + reserved + ngQty)}</b><small>ยอดติดตามรวม</small></span></div><ul><li><i className="ready" /><span>พร้อมใช้</span><b>{fmt(available)} ชิ้น</b><em>{readyPercent}%</em></li><li><i className="reserved" /><span>ถูกจัดงานแล้ว</span><b>{fmt(reserved)} ชิ้น</b><em>{reservedPercent}%</em></li><li><i className="abnormal" /><span>งาน NG/ผิดปกติ</span><b>{fmt(ngQty)} ชิ้น</b><em>{ngPercent}%</em></li></ul></div></Card>
+        <Card className="stock-trend-card" title="Stock Movement (7 วันที่ผ่านมา)" action={<div className="stock-movement-legend"><span><i className="received" />รับเข้า</span><span><i className="arranged" />จัดออก</span><span><i className="adjusted" />ปรับยอด</span></div>}><div className="stock-trend-chart">{trendDays.map((item) => <div key={item.date} className="trend-column"><span className="movement-bars"><i className="received" style={{ height: String(Math.max((item.receivedQty / trendMax) * 100, item.receivedQty ? 5 : 0)) + "%" }} /><i className="arranged" style={{ height: String(Math.max((item.arrangedQty / trendMax) * 100, item.arrangedQty ? 5 : 0)) + "%" }} /><i className="adjusted" style={{ height: String(Math.max((Math.abs(item.adjustedQty) / trendMax) * 100, item.adjustedQty ? 5 : 0)) + "%" }} /></span><small>{item.label}</small></div>)}</div></Card>
+        <aside className="stock-today-card"><header>จำนวนตามสถานะ (วันนี้)</header><div><span className="green">⇩</span><p><small>รับเข้า (วันนี้)</small><b>{fmt(todayMovement.receivedQty)} ชิ้น</b></p></div><div><span className="orange">⇧</span><p><small>จัดออก (วันนี้)</small><b>{fmt(todayMovement.arrangedQty)} ชิ้น</b></p></div><div><span className="purple">⚙</span><p><small>ปรับยอด (วันนี้)</small><b>{todayMovement.adjustedQty > 0 ? "+" : ""}{fmt(todayMovement.adjustedQty)} ชิ้น</b></p></div></aside>
       </div>
       <Card title="Traceability: Tag ลูกค้า ↔ KIT Tag ↔ Job">
         {stock.dispatchLinks.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>Tag ลูกค้า</th><th>KIT Tag / Job</th><th>Part / Due</th><th>ผลิต / รับเข้า</th><th className="num">จำนวน</th><th>ผู้จัด / ผู้ตรวจ</th></tr></thead><tbody>{stock.dispatchLinks.slice(0, 50).map((item) => <tr key={item.id}><td data-label="Tag ลูกค้า"><b>{item.customerTagId}</b></td><td data-label="KIT Tag / Job"><b>{item.stockTagCode}</b><small>Job {item.jobNo}</small></td><td data-label="Part / Due"><b>{item.materialCode}</b><small>{item.fact} / {item.line || "—"} · DO {item.doNo}</small></td><td data-label="ผลิต / รับเข้า"><b>{formatDate(item.productionDate)}</b><small>{item.receivedAt ? formatDateTime(item.receivedAt) : "—"}</small></td><td data-label="จำนวน" className="num"><b>{fmt(item.qty)}</b></td><td data-label="ผู้จัด / ผู้ตรวจ"><b>{item.pickedByName}</b><small>{item.dispatchedByName} · {formatDateTime(item.dispatchedAt)}</small></td></tr>)}</tbody></table></div> : <Empty title="ยังไม่มี Traceability ขายออก" text="เมื่อผู้ตรวจยิง Tag ลูกค้า ระบบจะแสดง KIT Tag, Job, วันที่ผลิต และวันที่รับเข้าที่ใช้จริง" />}

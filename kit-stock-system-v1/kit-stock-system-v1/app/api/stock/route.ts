@@ -214,10 +214,26 @@ export async function GET() {
         before_qty AS beforeQty, after_qty AS afterQty, created_at AS createdAt
       FROM stock_count_adjustment_lines ORDER BY id DESC LIMIT 400
     `).all();
+    const movementDays = await DB.prepare(`
+      WITH RECURSIVE days(offset, movementDate) AS (
+        SELECT 6, date('now', '+7 hours', '-6 days')
+        UNION ALL
+        SELECT offset - 1, date(movementDate, '+1 day') FROM days WHERE offset > 0
+      )
+      SELECT movementDate AS date,
+        coalesce((SELECT sum(r.received_qty) FROM stock_receipt_adjustments r
+          WHERE date(datetime(r.received_at, '+7 hours')) = movementDate), 0) AS receivedQty,
+        coalesce((SELECT sum(p.picked_qty) FROM stock_picks p
+          WHERE date(datetime(p.picked_at, '+7 hours')) = movementDate), 0) AS arrangedQty,
+        coalesce((SELECT sum(a.difference) FROM stock_count_adjustments a
+          WHERE date(datetime(a.adjusted_at, '+7 hours')) = movementDate), 0) AS adjustedQty
+      FROM days ORDER BY movementDate
+    `).all();
     return Response.json({
       parts, tags, allocations, picks: picks.results, dispatchLinks: dispatchLinks.results,
       jobClosures: jobClosures.results, manualReceipts: manualReceipts.results,
       countAdjustments: countAdjustments.results, countAdjustmentLines: countAdjustmentLines.results,
+      movementDays: movementDays.results,
     });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "โหลดข้อมูล Stock ไม่สำเร็จ" }, { status: 500 });
