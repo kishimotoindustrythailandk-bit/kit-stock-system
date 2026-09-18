@@ -36,7 +36,10 @@ type LineRecord = {
   deliveryDate: string;
   deliveryTime: string;
   prodQty: number;
+  factory: string;
 };
+
+type RiskGroup = "overdue" | "within3" | "within7" | "within14" | "over14";
 
 function clean(value: unknown, max = 180) {
   return String(value ?? "").trim().slice(0, max);
@@ -63,6 +66,12 @@ function toSqliteUtc(value: unknown) {
 
 function bangkokNowKey() {
   return new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 19);
+}
+
+function dayDistance(fromDate: string, toDate: string) {
+  const from = Date.parse(`${fromDate}T00:00:00Z`);
+  const to = Date.parse(`${toDate}T00:00:00Z`);
+  return Math.round((to - from) / 86_400_000);
 }
 
 function mapImport(row: Record<string, unknown>): ImportRecord {
@@ -118,16 +127,23 @@ export async function GET() {
     const [lineResult, stockResult, dispatchResult] = await Promise.all([
       DB.prepare(`
         SELECT material_code AS materialCode, description, delivery_date AS deliveryDate,
-          delivery_time AS deliveryTime, SUM(prod_qty) AS prodQty
+          delivery_time AS deliveryTime, factory, SUM(prod_qty) AS prodQty
         FROM forecast_lines WHERE import_id = ?1
-        GROUP BY material_code, description, delivery_date, delivery_time
+        GROUP BY material_code, description, delivery_date, delivery_time, factory
         ORDER BY material_code, delivery_date, delivery_time
       `).bind(activeImport.id).all<LineRecord>(),
       DB.prepare(`
-        SELECT material_code AS materialCode, SUM(remaining_qty) AS stockQty
-        FROM stock_tags
-        WHERE status IN ('in_stock', 'depleted') AND remaining_qty > 0
-        GROUP BY material_code
+        SELECT tag.material_code AS materialCode,
+          SUM(MAX(tag.remaining_qty
+            - COALESCE((SELECT SUM(MAX(pick.picked_qty - pick.dispatched_qty, 0))
+                FROM stock_picks pick
+                WHERE pick.stock_tag_id = tag.id AND pick.status IN ('staged', 'partial')), 0)
+            - COALESCE((SELECT SUM(allocation.qty)
+                FROM stock_allocations allocation
+                WHERE allocation.stock_tag_id = tag.id AND allocation.status = 'reserved'), 0), 0)) AS stockQty
+        FROM stock_tags tag
+        WHERE tag.status IN ('in_stock', 'depleted') AND tag.remaining_qty > 0
+        GROUP BY tag.material_code
       `).all<{ materialCode: string; stockQty: number }>(),
       DB.prepare(`
         SELECT due.material_code AS materialCode, SUM(scan.qty) AS dispatchedQty
@@ -151,6 +167,7 @@ export async function GET() {
     }
 
     const nowKey = bangkokNowKey();
+    const today = nowKey.slice(0, 10);
     const coverage = [...grouped.entries()].map(([materialCode, rows]) => {
       const stockQty = stockByMaterial.get(materialCode) || 0;
       const dispatchedAfterImport = dispatchedByMaterial.get(materialCode) || 0;
@@ -195,6 +212,14 @@ export async function GET() {
         }
       }
 
+      const shortageKey = shortageDate ? `${shortageDate}T${shortageTime}` : "";
+      const daysToShortage = shortageDate ? dayDistance(today, shortageDate) : null;
+      const riskGroup: RiskGroup = shortageKey && shortageKey < nowKey ? "overdue"
+        : daysToShortage !== null && daysToShortage <= 3 ? "within3"
+        : daysToShortage !== null && daysToShortage <= 7 ? "within7"
+        : daysToShortage !== null && daysToShortage <= 14 ? "within14"
+        : "over14";
+
       return {
         materialCode,
         description: rows.find((row) => row.description)?.description || "",
@@ -210,6 +235,9 @@ export async function GET() {
         firstShortageQty,
         totalShortage,
         remainingStockAfterForecast: stockToApply,
+        factories: [...new Set(rows.map((row) => row.factory).filter(Boolean))],
+        daysToShortage,
+        riskGroup,
         status: totalShortage > 0 ? (stockQty > 0 ? "shortage" : "no_stock") : "covered",
       };
     }).sort((left, right) =>
@@ -226,10 +254,30 @@ export async function GET() {
       total.totalShortage += row.totalShortage;
       if (row.status === "covered") total.coveredMaterials += 1;
       else total.shortageMaterials += 1;
+      total.riskGroups[row.riskGroup] += 1;
       return total;
-    }, { materialCount: 0, stockQty: 0, outstandingQty: 0, overdueQty: 0, totalShortage: 0, coveredMaterials: 0, shortageMaterials: 0 });
+    }, { materialCount: 0, stockQty: 0, outstandingQty: 0, overdueQty: 0, totalShortage: 0, coveredMaterials: 0, shortageMaterials: 0, riskGroups: { overdue: 0, within3: 0, within7: 0, within14: 0, over14: 0 } as Record<RiskGroup, number> });
 
-    return Response.json({ activeImport, imports, coverage, summary });
+    const dates = [...new Set(lineRows.map((row) => row.deliveryDate).filter((date) => date >= today))].sort().slice(0, 30);
+    const dailyDemand = new Map<string, number>();
+    for (const row of lineRows) {
+      if (row.deliveryDate >= today) dailyDemand.set(row.deliveryDate, (dailyDemand.get(row.deliveryDate) || 0) + Number(row.prodQty || 0));
+    }
+    let cumulativeDemand = 0;
+    const totalAvailableStock = stockRows.reduce((sum, row) => sum + Number(row.stockQty || 0), 0);
+    const trend = dates.map((date) => {
+      const demandQty = dailyDemand.get(date) || 0;
+      cumulativeDemand += demandQty;
+      return {
+        date,
+        demandQty,
+        cumulativeDemand,
+        projectedStock: Math.max(totalAvailableStock - cumulativeDemand, 0),
+        shortageParts: coverage.filter((row) => row.shortageDate && row.shortageDate <= date).length,
+      };
+    });
+
+    return Response.json({ activeImport, imports, coverage, summary, trend, calculatedAt: nowKey });
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : "โหลด Forecast ไม่สำเร็จ";
     const migrationHint = /no such table/i.test(message) ? " กรุณารัน migration 0019 ก่อนใช้งาน" : "";
