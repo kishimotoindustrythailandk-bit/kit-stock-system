@@ -186,23 +186,41 @@ export async function GET() {
         closed_at AS closedAt
       FROM stock_job_closures ORDER BY id DESC LIMIT 50
     `).all();
-    const manualReceipts = await DB.prepare(`
-      SELECT r.id, r.stock_tag_id AS stockTagId, r.tag_id AS tagId,
-        r.material_code AS materialCode, coalesce(p.part_name, '') AS partName,
-        r.qty, r.job_no AS jobNo, r.production_date AS productionDate,
-        r.reference_no AS referenceNo, r.note,
-        r.received_by_name AS receivedByName, r.received_by_code AS receivedByCode,
-        r.received_at AS receivedAt,
-        coalesce(tx.transaction_no, '') AS transactionNo,
-        coalesce(tx.total_qty, r.qty) AS transactionTotalQty,
-        coalesce(tx.pack_qty, r.qty) AS packQty,
-        coalesce(tx.tag_count, 1) AS tagCount,
-        coalesce(tx.duplicate_confirmed, 0) AS duplicateConfirmed
-      FROM stock_manual_receipts r
-      LEFT JOIN stock_parts p ON p.material_code = r.material_code
-      LEFT JOIN stock_manual_receive_transactions tx ON tx.id = r.transaction_id
-      ORDER BY r.id DESC LIMIT 200
-    `).all();
+    let manualReceipts: { results: unknown[] };
+    try {
+      manualReceipts = await DB.prepare(`
+        SELECT r.id, r.stock_tag_id AS stockTagId, r.tag_id AS tagId,
+          r.material_code AS materialCode, coalesce(p.part_name, '') AS partName,
+          r.qty, r.job_no AS jobNo, r.production_date AS productionDate,
+          r.reference_no AS referenceNo, r.note,
+          r.received_by_name AS receivedByName, r.received_by_code AS receivedByCode,
+          r.received_at AS receivedAt,
+          coalesce(tx.transaction_no, '') AS transactionNo,
+          coalesce(tx.total_qty, r.qty) AS transactionTotalQty,
+          coalesce(tx.pack_qty, r.qty) AS packQty,
+          coalesce(tx.tag_count, 1) AS tagCount,
+          coalesce(tx.duplicate_confirmed, 0) AS duplicateConfirmed
+        FROM stock_manual_receipts r
+        LEFT JOIN stock_parts p ON p.material_code = r.material_code
+        LEFT JOIN stock_manual_receive_transactions tx ON tx.id = r.transaction_id
+        ORDER BY r.id DESC LIMIT 200
+      `).all();
+    } catch {
+      // During a rolling deploy, keep Stock readable until migration 0026 is applied.
+      manualReceipts = await DB.prepare(`
+        SELECT r.id, r.stock_tag_id AS stockTagId, r.tag_id AS tagId,
+          r.material_code AS materialCode, coalesce(p.part_name, '') AS partName,
+          r.qty, r.job_no AS jobNo, r.production_date AS productionDate,
+          r.reference_no AS referenceNo, r.note,
+          r.received_by_name AS receivedByName, r.received_by_code AS receivedByCode,
+          r.received_at AS receivedAt, '' AS transactionNo,
+          r.qty AS transactionTotalQty, r.qty AS packQty, 1 AS tagCount,
+          0 AS duplicateConfirmed
+        FROM stock_manual_receipts r
+        LEFT JOIN stock_parts p ON p.material_code = r.material_code
+        ORDER BY r.id DESC LIMIT 100
+      `).all();
+    }
     const countAdjustments = await DB.prepare(`
       SELECT a.id, a.adjustment_no AS adjustmentNo, a.count_date AS countDate,
         a.material_code AS materialCode, coalesce(p.part_name, '') AS partName,
