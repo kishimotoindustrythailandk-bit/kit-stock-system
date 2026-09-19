@@ -276,7 +276,7 @@ test("separates Stock receiving from Tag printing and Job management", async () 
   assert.match(tagsSection, /Tag ที่สร้างแล้ว/);
   assert.match(tagsSection, /ปิดรับเข้า Job \/ จัดการงาน NG/);
   assert.doesNotMatch(tagsSection, /รับเข้า Stock \(สแกน Tag\)/);
-  assert.match(stockSection, /สแกน Tag เพื่อรับเข้า Stock/);
+  assert.match(stockSection, /รับเข้า Stock \(สแกน Tag\)/);
   assert.doesNotMatch(stockSection, /ปิดรับเข้า Job \/ จัดการงาน NG/);
 });
 
@@ -497,8 +497,7 @@ test("Stock scanner unlocks after slow requests and refreshes Stock in the backg
   assert.match(previewScan, /controller\.abort\(\), 12_000/);
   assert.match(previewScan, /signal: controller\.signal/);
   assert.match(previewScan, /caught\.name === "AbortError"/);
-  assert.match(previewScan, /setStockScan\(""\)/);
-  assert.match(previewScan, /stockScanInputRef\.current\?\.focus\(\)/);
+  assert.match(previewScan, /stockScanInputRef\.current\?\.select\(\)/);
   assert.match(confirmScan, /void loadStock\(\)/);
   assert.doesNotMatch(confirmScan, /await loadStock\(\)/);
 });
