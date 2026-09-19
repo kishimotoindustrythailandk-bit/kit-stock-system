@@ -269,7 +269,8 @@ export async function GET() {
       .orderBy(desc(deliveryTagReceipts.id)).limit(100);
     return Response.json({ dues, imports, scans, receipts });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "โหลดข้อมูล Due ไม่สำเร็จ" }, { status: 500 });
+    console.error("due GET failed", error);
+    return Response.json({ error: "โหลดข้อมูล Due ไม่สำเร็จ" }, { status: 500 });
   }
 }
 
@@ -303,6 +304,16 @@ export async function POST(request: Request) {
         await db.update(deliveryDueLines).set({ deliveryDate: tag.deliveryDate })
           .where(eq(deliveryDueLines.id, matchedDue.id));
         due = { ...matchedDue, deliveryDate: tag.deliveryDate };
+        // เดิมการแก้วันที่ Due (กรณีวัน/เดือนสลับในไฟล์นำเข้า) ทำแบบเงียบ ๆ ไม่มีร่องรอย
+        // บันทึก audit ไว้ให้ตรวจย้อนหลังได้ว่าใคร/เมื่อไร แก้จากค่าใดเป็นค่าใด
+        await writeAuditLog(user, {
+          module: "dispatch", moduleLabel: "ตรวจและขายออก",
+          action: "correct_due_date", actionLabel: "แก้วันที่ Due (วัน/เดือนสลับ)",
+          entityType: "delivery_due_line", entityId: matchedDue.id,
+          summary: `แก้วันที่ Due ${matchedDue.materialCode} จาก ${matchedDue.deliveryDate} เป็น ${tag.deliveryDate} (ให้ตรงกับ Tag ลูกค้า ${tag.tagId})`,
+          before: { deliveryDate: matchedDue.deliveryDate },
+          after: { deliveryDate: tag.deliveryDate },
+        }, request);
       }
     }
     const [currentRow] = await db.select({ total: sql<number>`coalesce(sum(${deliveryTagScans.qty}), 0)` })
@@ -419,6 +430,12 @@ export async function POST(request: Request) {
       due: { ...due, status, scannedQty, remainingQty: Math.max(due.reqQty - scannedQty, 0), projectedQty: scannedQty, remainingAfter: Math.max(due.reqQty - scannedQty, 0), projectedStatus: status },
     }, { status: 201 });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "ตัดยอด Tag ไม่สำเร็จ" }, { status: 500 });
+    // เก็บ error จริงไว้ที่ Workers Logs แต่ไม่ส่งข้อความ D1 ดิบ (ชื่อตาราง/constraint)
+    // กลับหาผู้ใช้ ยังคงข้อความที่ระบบตั้งใจโยนเอง (เช่น QR ผิดรูปแบบ) ให้แสดงได้ตามเดิม
+    console.error("due POST failed", error);
+    const raw = error instanceof Error ? error.message : "";
+    const safeMessage = raw && !/D1_|SQLITE|no such|constraint|syntax error|UNIQUE|NOT NULL/i.test(raw)
+      ? raw : "ตัดยอด Tag ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง";
+    return Response.json({ error: safeMessage }, { status: 500 });
   }
 }

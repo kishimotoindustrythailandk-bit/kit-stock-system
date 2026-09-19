@@ -80,7 +80,8 @@ export async function GET() {
     ]);
     return Response.json({ requests: requests.results, issues: issues.results });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "โหลดงานทดแทนไม่สำเร็จ" }, { status: 500 });
+    console.error("replacements GET failed", error);
+    return Response.json({ error: "โหลดงานทดแทนไม่สำเร็จ" }, { status: 500 });
   }
 }
 
@@ -289,6 +290,10 @@ export async function POST(request: Request) {
 
     return Response.json({ error: "ไม่รู้จักคำสั่งงานทดแทน" }, { status: 400 });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "บันทึกงานทดแทนไม่สำเร็จ" }, { status: 500 });
+    console.error("replacements POST failed", error);
+    const raw = error instanceof Error ? error.message : "";
+    const safeMessage = raw && !/D1_|SQLITE|no such|constraint|syntax error|UNIQUE|NOT NULL/i.test(raw)
+      ? raw : "บันทึกงานทดแทนไม่สำเร็จ";
+    return Response.json({ error: safeMessage }, { status: 500 });
   }
 }

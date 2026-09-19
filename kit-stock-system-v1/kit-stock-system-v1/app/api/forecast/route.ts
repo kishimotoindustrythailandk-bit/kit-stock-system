@@ -279,9 +279,10 @@ export async function GET() {
 
     return Response.json({ activeImport, imports, coverage, summary, trend, calculatedAt: nowKey });
   } catch (caught) {
-    const message = caught instanceof Error ? caught.message : "โหลด Forecast ไม่สำเร็จ";
-    const migrationHint = /no such table/i.test(message) ? " กรุณารัน migration 0019 ก่อนใช้งาน" : "";
-    return Response.json({ error: `${message}${migrationHint}` }, { status: 500 });
+    console.error("forecast GET failed", caught);
+    const raw = caught instanceof Error ? caught.message : "";
+    const migrationHint = /no such table/i.test(raw) ? " กรุณารัน migration 0019 ก่อนใช้งาน" : "";
+    return Response.json({ error: `โหลด Forecast ไม่สำเร็จ${migrationHint}` }, { status: 500 });
   }
 }
 
@@ -380,8 +381,9 @@ export async function POST(request: Request) {
 
     return Response.json({ error: "ไม่รู้จักคำสั่ง Forecast" }, { status: 400 });
   } catch (caught) {
-    const message = caught instanceof Error ? caught.message : "นำเข้า Forecast ไม่สำเร็จ";
-    const migrationHint = /no such table/i.test(message) ? " กรุณารัน migration 0019 ก่อนใช้งาน" : "";
-    return Response.json({ error: `${message}${migrationHint}` }, { status: 500 });
+    console.error("forecast POST failed", caught);
+    const raw = caught instanceof Error ? caught.message : "";
+    const migrationHint = /no such table/i.test(raw) ? " กรุณารัน migration 0019 ก่อนใช้งาน" : "";
+    return Response.json({ error: `นำเข้า Forecast ไม่สำเร็จ${migrationHint}` }, { status: 500 });
   }
 }
