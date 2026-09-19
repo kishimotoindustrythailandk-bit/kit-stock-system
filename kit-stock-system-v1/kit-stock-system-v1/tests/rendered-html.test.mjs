@@ -495,7 +495,7 @@ test("Stock scanner unlocks after slow requests and refreshes Stock in the backg
   const confirmScan = sourceSection(appSource, "async function confirmReceiveStockTag", "async function closeStockJob");
 
   assert.match(previewScan, /new AbortController\(\)/);
-  assert.match(previewScan, /controller\.abort\(\), 12000/);
+  assert.match(previewScan, /controller\\.abort\\(\\), 10000/);
   assert.match(previewScan, /signal: controller\.signal/);
   assert.match(previewScan, /caught\.name === "AbortError"/);
   assert.match(previewScan, /setStockScan\(""\)/);
