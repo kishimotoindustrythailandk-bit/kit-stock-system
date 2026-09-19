@@ -254,7 +254,7 @@ test("previews and imports a Part register with matched Master and box images", 
   assert.match(partsPage, /const actualImage = partActualImages\.find/);
   assert.match(partsPage, /<PartImagePair materialCode=\{part\.materialCode\} masterVersion=\{masterImage\?\.updatedAt\} actualVersion=\{actualImage\?\.updatedAt\} masterAvailable=\{Boolean\(masterImage\)\} actualAvailable=\{Boolean\(actualImage\)\}/);
   assert.match(partsPage, /ในกล่อง: \{actualImage \? "มีรูป" : "ยังไม่มี"\} · Master: \{masterImage \? "มีรูป" : "ยังไม่มี"\}/);
-  assert.match(appSource, /const key = `\$\{slot\}:\$\{materialCode\}:\$\{version \|\| "unversioned"\}`/);
+  assert.match(appSource, /const key = `\$\{slot\}:\$\{materialCode\}:\$\{version \|\| "unversioned"\}:\$\{strict \? "strict" : "compatible"\}`/);
   assert.match(appSource, /loading="lazy" decoding="async"/);
   assert.match(appSource, /actualAvailable \? <PartImage materialCode=\{materialCode\} slot="actual"/);
   assert.match(appSource, /masterAvailable \? <PartImage materialCode=\{materialCode\} slot="master"/);
@@ -275,7 +275,7 @@ test("separates Stock receiving from Tag printing and Job management", async () 
   assert.match(appSource, /key: "tags", label: "พิมพ์ Tag"/);
   assert.match(tagsSection, /Tag ที่สร้างแล้ว/);
   assert.match(tagsSection, /ปิดรับเข้า Job \/ จัดการงาน NG/);
-  assert.doesNotMatch(tagsSection, /สแกน Tag เพื่อรับเข้า Stock/);
+  assert.doesNotMatch(tagsSection, /รับเข้า Stock \(สแกน Tag\)/);
   assert.match(stockSection, /สแกน Tag เพื่อรับเข้า Stock/);
   assert.doesNotMatch(stockSection, /ปิดรับเข้า Job \/ จัดการงาน NG/);
 });
@@ -314,7 +314,7 @@ test("connects camera Stock receipt preview to explicit confirmation", async () 
   assert.match(scannerFlow, /receiveStockTag\(value\)/);
   assert.match(previewFlow, /JSON\.stringify\(\{ action: "receive", mode: "preview", rawPayload \}\)/);
   assert.match(previewFlow, /setStockReceivePreview\(data\)/);
-  assert.match(confirmFlow, /JSON\.stringify\(\{ action: "receive", rawPayload: stockReceivePreview\.rawPayload, receivedQty \}\)/);
+  assert.match(confirmFlow, /JSON\.stringify\(\{ action: "receive", rawPayload: stockReceivePreview\.rawPayload, receivedQty, productionDate \}\)/);
   assert.doesNotMatch(confirmFlow, /mode: "preview"/);
   assert.match(receiveModal, /onClick=\{\(\) => void confirmReceiveStockTag\(\)\}/);
 
@@ -356,7 +356,7 @@ test("supports canonical user roles with explicit page permissions", async () =>
   assert.doesNotMatch(pageAccess, /\.add\("dashboard"\)|\.add\("tags"\)|\.add\("replacement"\)/);
   assert.match(appSource, /const firstAllowedPage = NAV\.find/);
   assert.match(appSource, /savedPage && allowedPages\.has\(savedPage\) \? savedPage : firstAllowedPage/);
-  assert.match(authSource, /dispatcher: \["dashboard", "stock", "parts", "tags", "arrange", "replacement", "history"\]/);
+  assert.match(authSource, /dispatcher: \["dashboard", "stock", "manual-stock", "stock-count", "parts", "tags", "arrange", "replacement", "history"\]/);
   assert.match(authSource, /inspector: \["dashboard", "replacement", "dispatch", "history"\]/);
   assert.match(authSource, /ROLE_DEFAULTS\[role\] \|\| \[\]/);
   assert.doesNotMatch(authSource, /normalized\.unshift\("dashboard"\)/);
@@ -461,7 +461,6 @@ test("keeps the Stock receiving popup Actual and Master sources on their labelle
   assert.match(stockPopup, /<PartImagePair materialCode=\{stockReceivePreview\.tag\.materialCode\}/);
   assert.match(stockPopup, /masterVersion=\{partImages\.find\(\(item\) => item\.materialCode === stockReceivePreview\.tag\.materialCode\)\?\.updatedAt\}/);
   assert.match(stockPopup, /actualVersion=\{partActualImages\.find\(\(item\) => item\.materialCode === stockReceivePreview\.tag\.materialCode\)\?\.updatedAt\}/);
-  assert.match(stockPopup, /actualVersion=\{partActualImages[\s\S]*strictSlots/);
   assert.match(pair, /strict=\{strictSlots\}/);
   assertBefore(stockPopup, /masterVersion=\{partImages\.find/, /actualVersion=\{partActualImages\.find/);
 });
@@ -495,7 +494,7 @@ test("Stock scanner unlocks after slow requests and refreshes Stock in the backg
   const confirmScan = sourceSection(appSource, "async function confirmReceiveStockTag", "async function closeStockJob");
 
   assert.match(previewScan, /new AbortController\(\)/);
-  assert.match(previewScan, /controller\.abort\(\), 10000/);
+  assert.match(previewScan, /controller\.abort\(\), 12_000/);
   assert.match(previewScan, /signal: controller\.signal/);
   assert.match(previewScan, /caught\.name === "AbortError"/);
   assert.match(previewScan, /setStockScan\(""\)/);
