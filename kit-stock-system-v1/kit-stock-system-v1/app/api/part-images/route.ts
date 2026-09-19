@@ -1,4 +1,5 @@
 import { getCurrentUser, hasPermission } from "../../cloudflare-auth";
+import { safeErrorMessage } from "../../api-error";
 import { getRuntimeEnv } from "../../../runtime/env";
 import { writeAuditLog } from "../../audit-log";
 
@@ -159,7 +160,8 @@ export async function GET(request: Request) {
 
     return new Response(object.body, { headers });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "โหลดรูปชิ้นงานไม่สำเร็จ" }, { status: 500 });
+    console.error("part-images GET failed", error);
+    return Response.json({ error: safeErrorMessage(error, "โหลดรูปชิ้นงานไม่สำเร็จ") }, { status: 500 });
   }
 }
 
@@ -202,7 +204,8 @@ export async function POST(request: Request) {
   } catch (error) {
     const { BUCKET } = getRuntimeEnv();
     if (newObjectKey && BUCKET) await BUCKET.delete(newObjectKey).catch(() => undefined);
-    return Response.json({ error: error instanceof Error ? error.message : "อัปโหลดรูปไม่สำเร็จ" }, { status: 400 });
+    console.error("part-images POST failed", error);
+    return Response.json({ error: safeErrorMessage(error, "อัปโหลดรูปไม่สำเร็จ") }, { status: 400 });
   }
 }
 
@@ -228,6 +231,7 @@ export async function DELETE(request: Request) {
     }, request);
     return Response.json({ success: true, slot });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "ลบรูปไม่สำเร็จ" }, { status: 400 });
+    console.error("part-images DELETE failed", error);
+    return Response.json({ error: safeErrorMessage(error, "ลบรูปไม่สำเร็จ") }, { status: 400 });
   }
 }

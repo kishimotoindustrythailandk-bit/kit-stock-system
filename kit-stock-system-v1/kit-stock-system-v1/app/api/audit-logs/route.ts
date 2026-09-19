@@ -1,4 +1,5 @@
 import { getCurrentUser, hasPermission } from "../../cloudflare-auth";
+import { safeErrorMessage } from "../../api-error";
 import { getRuntimeEnv } from "../../../runtime/env";
 import { writeAuditLog } from "../../audit-log";
 
@@ -50,6 +51,7 @@ export async function POST(request: Request) {
     }, request);
     return Response.json({ success: true });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "บันทึกประวัติไม่สำเร็จ" }, { status: 500 });
+    console.error("audit-logs failed", error);
+    return Response.json({ error: safeErrorMessage(error, "บันทึกประวัติไม่สำเร็จ") }, { status: 500 });
   }
 }

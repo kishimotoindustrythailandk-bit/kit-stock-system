@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import { safeErrorMessage } from "../../api-error";
 import { getCurrentUser, hasPermission } from "../../cloudflare-auth";
 import { getDb } from "../../../db";
 import { deliveryImports } from "../../../db/schema";
@@ -215,6 +216,7 @@ export async function DELETE(request: Request) {
     }, request);
     return Response.json({ success: true, deleted: target, scanCount, receiptCount, stockCount });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "ลบข้อมูลนำเข้าไม่สำเร็จ" }, { status: 500 });
+    console.error("due-import DELETE failed", error);
+    return Response.json({ error: safeErrorMessage(error, "ลบข้อมูลนำเข้าไม่สำเร็จ") }, { status: 500 });
   }
 }

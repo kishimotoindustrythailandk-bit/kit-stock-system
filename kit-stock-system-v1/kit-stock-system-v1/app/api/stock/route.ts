@@ -4,6 +4,7 @@ import { getDb } from "../../../db";
 import { stockAllocations, stockParts, stockTags } from "../../../db/schema";
 import { getRuntimeEnv } from "../../../runtime/env";
 import { writeAuditLog } from "../../audit-log";
+import { safeErrorMessage } from "../../api-error";
 
 function clean(value: unknown, max = 160) {
   return String(value ?? "").trim().slice(0, max);
@@ -260,7 +261,8 @@ export async function GET() {
       movementDays: movementDays.results,
     });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "โหลดข้อมูล Stock ไม่สำเร็จ" }, { status: 500 });
+    console.error("stock GET failed", error);
+    return Response.json({ error: safeErrorMessage(error, "โหลดข้อมูล Stock ไม่สำเร็จ") }, { status: 500 });
   }
 }
 
@@ -1131,12 +1133,42 @@ export async function POST(request: Request) {
       const pickedQty = requestedQty > 0 ? requestedQty : Math.min(dueOpenQty, tagAvailableQty);
       if (pickedQty > dueOpenQty) return Response.json({ error: `จำนวนเกิน Due ที่จับคู่อัตโนมัติ เหลือจัดได้ ${dueOpenQty} ชิ้น` }, { status: 409 });
       if (pickedQty > tagAvailableQty) return Response.json({ error: `Tag Stock นี้พร้อมจัดเพียง ${tagAvailableQty} ชิ้น` }, { status: 409 });
-      const result = await DB.prepare(`
-        INSERT INTO stock_picks
-          (due_line_id, stock_tag_id, picked_qty, dispatched_qty, status,
-           picked_by_name, picked_by_code, picked_at, updated_at)
-        VALUES (?1, ?2, ?3, 0, 'staged', ?4, ?5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `).bind(due.id, tag.id, pickedQty, user.displayName, user.employeeCode).run();
+      // จองงานแบบ atomic: ดึง stock_tag_id จาก subquery ที่คืนค่าเฉพาะเมื่อ ณ ตอนนี้
+      // Tag ยัง in_stock และมีของว่างพอ (หักงานที่จัด/จองแล้ว) และ Due ยังเปิดให้จัดพอ
+      // ถ้าเงื่อนไขใดพลาด (อีกเครื่องจัด Tag/Due เดียวกันชนกัน) subquery คืน NULL ชน
+      // NOT NULL ทำให้ INSERT ล้มเหลว แทนการจองเกิน
+      let result;
+      try {
+        result = await DB.prepare(`
+          INSERT INTO stock_picks
+            (due_line_id, stock_tag_id, picked_qty, dispatched_qty, status,
+             picked_by_name, picked_by_code, picked_at, updated_at)
+          VALUES (
+            ?1,
+            (SELECT t.id FROM stock_tags t
+              WHERE t.id = ?2 AND t.status = 'in_stock'
+                AND t.remaining_qty
+                    - coalesce((SELECT sum(sp.picked_qty - sp.dispatched_qty) FROM stock_picks sp
+                        WHERE sp.stock_tag_id = t.id AND sp.status IN ('staged', 'partial')), 0)
+                    - coalesce((SELECT sum(a.qty) FROM stock_allocations a
+                        WHERE a.stock_tag_id = t.id AND a.status = 'reserved'), 0) >= ?3
+                AND EXISTS (SELECT 1 FROM delivery_due_lines d
+                  WHERE d.id = ?1
+                    AND d.req_qty
+                        - coalesce((SELECT sum(s.qty) FROM delivery_tag_scans s WHERE s.due_line_id = d.id), 0)
+                        - coalesce((SELECT sum(p.picked_qty - p.dispatched_qty) FROM stock_picks p
+                            WHERE p.due_line_id = d.id AND p.status IN ('staged', 'partial')), 0) >= ?3)
+              LIMIT 1),
+            ?3, 0, 'staged', ?4, ?5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+          )
+        `).bind(due.id, tag.id, pickedQty, user.displayName, user.employeeCode).run();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "";
+        if (/NOT NULL|constraint/i.test(message)) {
+          return Response.json({ error: "Tag หรือ Due มีการเปลี่ยนแปลงจากอีกเครื่อง กรุณารีเฟรชและจัดใหม่" }, { status: 409 });
+        }
+        throw error;
+      }
       await writeAuditLog(user, {
         module: "arrange", moduleLabel: "จัดงาน", action: "stage_stock", actionLabel: "จัดงานเข้า Due",
         entityType: "stock_pick", entityId: Number(result.meta.last_row_id || 0),
@@ -1158,6 +1190,7 @@ export async function POST(request: Request) {
 
     return Response.json({ error: "ไม่รู้จักคำสั่ง Stock" }, { status: 400 });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "บันทึก Stock ไม่สำเร็จ" }, { status: 500 });
+    console.error("stock POST failed", error);
+    return Response.json({ error: safeErrorMessage(error, "บันทึก Stock ไม่สำเร็จ") }, { status: 500 });
   }
 }

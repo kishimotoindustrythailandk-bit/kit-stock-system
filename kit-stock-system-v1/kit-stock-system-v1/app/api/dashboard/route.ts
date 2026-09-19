@@ -1,4 +1,5 @@
 import { getCurrentUser, hasPermission } from "../../cloudflare-auth";
+import { safeErrorMessage } from "../../api-error";
 import { getRuntimeEnv } from "../../../runtime/env";
 
 function bangkokDate() {
@@ -122,6 +123,7 @@ export async function GET(request: Request) {
       updatedAt: new Date().toISOString(),
     });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "โหลด Dashboard ไม่สำเร็จ" }, { status: 500 });
+    console.error("dashboard GET failed", error);
+    return Response.json({ error: safeErrorMessage(error, "โหลด Dashboard ไม่สำเร็จ") }, { status: 500 });
   }
 }
