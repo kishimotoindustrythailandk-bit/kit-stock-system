@@ -187,30 +187,58 @@ export async function POST(request: Request) {
       if (tag.materialCode !== replacement.materialCode) return Response.json({ error: "Part ใน Tag ไม่ตรงกับใบขอเบิก" }, { status: 409 });
       const availableQty = Math.max(Number(tag.remainingQty) - Number(tag.stagedQty) - Number(tag.legacyReservedQty), 0);
       if (qty > availableQty) return Response.json({ error: `Tag นี้พร้อมเบิกเพียง ${availableQty.toLocaleString("th-TH")} ชิ้น` }, { status: 409 });
-      const nextIssued = Number(replacement.issuedQty || 0) + qty;
-      const completed = nextIssued >= Number(replacement.requestedQty || 0);
       const noticeNo = `RPL-${new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14)}-${crypto.randomUUID().replaceAll("-", "").slice(0, 4).toUpperCase()}`;
-      const results = await DB.batch([
-        DB.prepare(`
-          UPDATE stock_tags SET remaining_qty = remaining_qty - ?1,
-            status = CASE WHEN remaining_qty - ?1 <= 0 THEN 'depleted' ELSE status END
-          WHERE id = ?2 AND status = 'in_stock' AND remaining_qty >= ?1
-        `).bind(qty, Number(tag.id)),
-        DB.prepare(`
-          UPDATE replacement_requests SET issued_qty = issued_qty + ?1,
-            status = ?2, completed_at = CASE WHEN ?2 = 'completed' THEN CURRENT_TIMESTAMP ELSE NULL END
-          WHERE id = ?3 AND status IN ('pending', 'partial')
-        `).bind(qty, completed ? "completed" : "partial", requestId),
-        DB.prepare(`
-          INSERT INTO replacement_issues
-            (request_id, stock_tag_id, stock_tag_code, qty, notice_no, issued_by_name, issued_by_code)
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-        `).bind(requestId, Number(tag.id), String(tag.tagId), qty, noticeNo, user.displayName, user.employeeCode),
-      ]);
-      if (Number(results[0].meta.changes || 0) !== 1 || Number(results[1].meta.changes || 0) !== 1) {
+      // ทำทั้งชุดแบบ atomic ใน transaction เดียว: INSERT ใบเบิกต้องมาก่อน และดึง
+      // stock_tag_id จาก subquery ที่คืนค่าเฉพาะเมื่อเงื่อนไข "ยังจริงในฐาน ณ ตอนนี้"
+      // ครบทั้งสองข้อ — Tag ยัง in_stock และมีของว่างพอ (หักงานที่จัด/จองแล้ว) และ
+      // ใบขอยังเบิกได้พอ ถ้าข้อใดพลาด subquery คืน NULL ชน NOT NULL ทำให้ D1 rollback
+      let results;
+      try {
+        results = await DB.batch([
+          DB.prepare(`
+            INSERT INTO replacement_issues
+              (request_id, stock_tag_id, stock_tag_code, qty, notice_no, issued_by_name, issued_by_code)
+            VALUES (
+              ?1,
+              (SELECT t.id FROM stock_tags t
+                WHERE t.id = ?2 AND t.status = 'in_stock'
+                  AND t.remaining_qty
+                      - coalesce((SELECT sum(sp.picked_qty - sp.dispatched_qty) FROM stock_picks sp
+                          WHERE sp.stock_tag_id = t.id AND sp.status IN ('staged', 'partial')), 0)
+                      - coalesce((SELECT sum(al.qty) FROM stock_allocations al
+                          WHERE al.stock_tag_id = t.id AND al.status = 'reserved'), 0) >= ?4
+                  AND EXISTS (SELECT 1 FROM replacement_requests r
+                    WHERE r.id = ?1 AND r.status IN ('pending', 'partial')
+                      AND r.requested_qty - r.issued_qty >= ?4)
+                LIMIT 1),
+              ?3, ?4, ?5, ?6, ?7
+            )
+          `).bind(requestId, Number(tag.id), String(tag.tagId), qty, noticeNo, user.displayName, user.employeeCode),
+          DB.prepare(`
+            UPDATE stock_tags SET remaining_qty = remaining_qty - ?1,
+              status = CASE WHEN remaining_qty - ?1 <= 0 THEN 'depleted' ELSE status END
+            WHERE id = ?2 AND status = 'in_stock' AND remaining_qty >= ?1
+          `).bind(qty, Number(tag.id)),
+          DB.prepare(`
+            UPDATE replacement_requests SET issued_qty = issued_qty + ?1,
+              status = CASE WHEN issued_qty + ?1 >= requested_qty THEN 'completed' ELSE 'partial' END,
+              completed_at = CASE WHEN issued_qty + ?1 >= requested_qty THEN CURRENT_TIMESTAMP ELSE NULL END
+            WHERE id = ?2 AND status IN ('pending', 'partial')
+          `).bind(qty, requestId),
+        ]);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "";
+        if (/NOT NULL|UNIQUE|constraint/i.test(message)) {
+          return Response.json({
+            error: "ยอด Stock หรือใบขอเบิกมีการเปลี่ยนแปลงจากอีกเครื่อง หรือ Tag ถูกเบิกไปแล้ว กรุณารีเฟรชและสแกนใหม่",
+          }, { status: 409 });
+        }
+        throw error;
+      }
+      if (Number(results[1].meta.changes || 0) !== 1 || Number(results[2].meta.changes || 0) !== 1) {
         throw new Error("ข้อมูล Stock หรือใบขอเบิกมีการเปลี่ยนแปลง กรุณาสแกนใหม่");
       }
-      const issueId = Number(results[2].meta.last_row_id);
+      const issueId = Number(results[0].meta.last_row_id);
       const issue = await DB.prepare(`
         SELECT i.id, i.request_id AS requestId, i.stock_tag_id AS stockTagId,
           i.stock_tag_code AS stockTagCode, i.qty, i.notice_no AS noticeNo,

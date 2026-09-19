@@ -44,3 +44,6 @@ next-env.d.ts
 
 # typescript incremental build cache (สร้างจาก npm run typecheck)
 tsconfig.tsbuildinfo
+
+backup-*.sql
+*.patch
