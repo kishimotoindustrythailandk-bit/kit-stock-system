@@ -191,7 +191,13 @@ export async function DELETE(request: Request) {
     `).bind(importId).all<{ stockTagId: number; qty: number }>();
     await DB.batch([
       ...restored.results.map((row) => DB.prepare(`
-        UPDATE stock_tags SET remaining_qty = remaining_qty + ?1, status = 'in_stock' WHERE id = ?2
+        UPDATE stock_tags
+        SET remaining_qty = min(remaining_qty + ?1, qty),
+          status = CASE
+            WHEN status IN ('in_stock', 'depleted') AND min(remaining_qty + ?1, qty) > 0 THEN 'in_stock'
+            ELSE status
+          END
+        WHERE id = ?2
       `).bind(Number(row.qty), row.stockTagId)),
       DB.prepare("DELETE FROM stock_dispatch_links WHERE due_line_id IN (SELECT id FROM delivery_due_lines WHERE import_id = ?1)").bind(importId),
       DB.prepare("DELETE FROM stock_picks WHERE due_line_id IN (SELECT id FROM delivery_due_lines WHERE import_id = ?1)").bind(importId),
