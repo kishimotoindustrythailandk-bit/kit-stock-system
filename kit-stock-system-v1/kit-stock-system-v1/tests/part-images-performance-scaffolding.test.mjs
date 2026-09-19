@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
 
@@ -87,7 +88,7 @@ test("generator rejects unsafe or ambiguous CLI options", async () => {
   assert.throws(() => parseArgs(["--unknown", "value"]), /Unknown argument/);
 
   await assert.rejects(
-    execFileAsync(process.execPath, [generatorPath.pathname, "--count", "invalid"]),
+    execFileAsync(process.execPath, [fileURLToPath(generatorPath), "--count", "invalid"]),
     (error) => error.code === 1 && /positive integer/.test(error.stderr),
   );
 });
