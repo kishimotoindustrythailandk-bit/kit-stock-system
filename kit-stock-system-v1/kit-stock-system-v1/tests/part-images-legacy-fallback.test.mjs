@@ -39,7 +39,7 @@ test("authenticated users without Parts or Settings permission retain the list 4
 test("an invalid slot retains the existing Master default", { concurrency: false }, async () => {
   const legacy = imageRow("DUAL-001", "part-images/DUAL-001/master.jpg");
   const actual = imageRow("DUAL-001", "part-actual-images/DUAL-001/actual.jpg");
-  const db = createDb({ legacy: [legacy], actual: [actual] });
+  const db = createDb({ legacy: [legacy], actual: [actual], master: [legacy] });
 
   const response = await apiFetch("/api/part-images?slot=unexpected", { db, bucket: createBucket() });
   const payload = await response.json();
@@ -52,6 +52,7 @@ test("an invalid slot retains the existing Master default", { concurrency: false
 function createDb({
   legacy = [],
   actual = [],
+  master = [],
   user = {
     id: 1,
     employeeCode: "ADMIN",
@@ -64,6 +65,7 @@ function createDb({
 } = {}) {
   const legacyByCode = new Map(legacy.map((row) => [row.materialCode, row]));
   const actualByCode = new Map(actual.map((row) => [row.materialCode, row]));
+  const masterByCode = new Map(master.map((row) => [row.materialCode, row]));
   const calls = [];
   const mutations = [];
 
@@ -87,6 +89,9 @@ function createDb({
           }
 
           const materialCode = String(bindings[0] || "");
+          if (normalizedSql.includes("FROM part_master_images")) {
+            return masterByCode.get(materialCode) || null;
+          }
           if (normalizedSql.includes("WITH effective_image AS")) {
             return actualByCode.get(materialCode) || legacyByCode.get(materialCode) || null;
           }
@@ -96,6 +101,9 @@ function createDb({
           throw new Error(`Unexpected first() query: ${normalizedSql}`);
         },
         async all() {
+          if (normalizedSql.includes("FROM part_master_images")) {
+            return { results: [...masterByCode.values()].map((row) => ({ ...row, materialDescription: "" })) };
+          }
           if (normalizedSql.includes("WITH effective_images AS")) {
             const results = [
               ...actualByCode.values(),
@@ -185,13 +193,13 @@ test("legacy-only image is Actual and is suppressed from Master lists", { concur
   assert.match(queries[0].sql, /WITH effective_images AS/);
   assert.match(queries[0].sql, /UNION ALL/);
   assert.match(queries[0].sql, /NOT EXISTS/);
-  assert.match(queries[1].sql, /INNER JOIN part_actual_images explicit_actual/);
+  assert.match(queries[1].sql, /FROM part_master_images/);
 });
 
-test("explicit Actual wins while the legacy row remains Master", { concurrency: false }, async () => {
+test("explicit Actual and explicit Master remain separate", { concurrency: false }, async () => {
   const legacy = imageRow("DUAL-001", "part-images/DUAL-001/master.jpg");
   const actual = imageRow("DUAL-001", "part-actual-images/DUAL-001/actual.jpg");
-  const db = createDb({ legacy: [legacy], actual: [actual] });
+  const db = createDb({ legacy: [legacy], actual: [actual], master: [legacy] });
   const bucket = createBucket();
 
   const actualPayload = await (await apiFetch("/api/part-images?slot=actual", { db, bucket })).json();
@@ -231,7 +239,7 @@ test("legacy-only Master binary read is unavailable and never reads R2", { concu
 test("explicit Actual and Master binary reads use their own R2 objects", { concurrency: false }, async () => {
   const legacy = imageRow("DUAL-001", "part-images/DUAL-001/master.jpg");
   const actual = imageRow("DUAL-001", "part-actual-images/DUAL-001/actual.jpg");
-  const db = createDb({ legacy: [legacy], actual: [actual] });
+  const db = createDb({ legacy: [legacy], actual: [actual], master: [legacy] });
   const bucket = createBucket({ [legacy.objectKey]: "master-bytes", [actual.objectKey]: "actual-bytes" });
 
   const actualResponse = await apiFetch("/api/part-images?slot=actual&materialCode=DUAL-001", { db, bucket });
