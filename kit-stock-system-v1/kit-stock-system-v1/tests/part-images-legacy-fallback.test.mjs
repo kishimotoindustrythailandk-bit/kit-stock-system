@@ -193,7 +193,7 @@ test("legacy-only image is Actual and is suppressed from Master lists", { concur
   assert.match(queries[0].sql, /WITH effective_images AS/);
   assert.match(queries[0].sql, /UNION ALL/);
   assert.match(queries[0].sql, /NOT EXISTS/);
-  assert.match(queries[1].sql, /INNER JOIN part_actual_images explicit_actual/);
+  assert.match(queries[1].sql, /FROM part_master_images/);
 });
 
 test("explicit Actual and explicit Master remain separate", { concurrency: false }, async () => {
