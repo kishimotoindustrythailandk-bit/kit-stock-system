@@ -4,9 +4,10 @@
 
 import { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import DashboardControlCenter from "./dashboard-control-center";
+import OverdueWorkPage from "./overdue-work-page";
 import { normalizeDueExcelDate } from "./due-excel-date";
 
-type PageKey = "dashboard" | "stock" | "manual-stock" | "stock-count" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
+type PageKey = "overdue" | "dashboard" | "stock" | "manual-stock" | "stock-count" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
 
 type DueLine = {
   id: number;
@@ -249,7 +250,7 @@ const NAV: Array<{ key: PageKey; label: string; icon: string }> = [
 
 const DUE_DATA_PAGES: PageKey[] = ["dashboard", "plan", "arrange", "dispatch", "exports", "reports", "history"];
 
-const PAGE_KEYS = new Set<PageKey>([...NAV.map((item) => item.key), "verify"]);
+const PAGE_KEYS = new Set<PageKey>([...NAV.map((item) => item.key), "verify", "overdue"]);
 
 function pageFromUrl(): PageKey | null {
   if (typeof window === "undefined") return null;
@@ -281,6 +282,7 @@ const PERMISSION_HELP: Record<PageKey, string> = {
   forecast: "นำเข้า Forecast ลูกค้าและตรวจว่ายอด Stock ส่งได้ถึงวันไหน",
   parts: "ทะเบียน Part และรูปชิ้นงาน",
   tags: "ทะเบียน Part สร้างและพิมพ์ Tag",
+  overdue: "งานเกินดิวค้างส่งทุก Part ทุกรอบ ใช้สิทธิ์หน้า Due",
   plan: "นำเข้า ตรวจสอบ และลบแผน Due",
   arrange: "เลือก Due และยิง KIT Tag เพื่อจัดงานรอขาย",
   replacement: "QC ขอเบิกงานเสีย/งานขาด และทีมจัดงานยิง KIT Tag เพื่อตัด Stock",
@@ -301,6 +303,7 @@ const PAGE_SUBTITLE: Record<PageKey, string> = {
   forecast: "นำเข้า Forecast รายวันและตรวจสอบว่ายอด Stock ส่งได้ถึงวันไหน",
   parts: "เพิ่ม นำเข้า และจัดการรูปชิ้นงานของแต่ละ Part",
   tags: "ทะเบียน Part สร้าง Tag และพิมพ์ Tag รับงานเข้า Stock",
+  overdue: "งานเกินดิวและค้างส่งทุก Part ทุกวันที่ ทุกรอบ และทุก FAC",
   plan: "ตรวจสอบแผนส่งงานจากไฟล์ Excel",
   arrange: "ผู้จัดงานเลือก Due แล้วยิง KIT Stock Tag เพื่อบันทึกงานรอขาย",
   replacement: "QC แจ้งขอเบิกงานทดแทน ทีมจัดงานยิง KIT Tag และพิมพ์ใบแจ้งออก",
@@ -859,9 +862,11 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const canPrintTags = user.role === "admin" || user.permissions?.includes("tags");
   const canCreateReplacement = user.role === "admin" || user.role === "qc" || user.role === "inspector";
   const canIssueReplacement = user.role === "admin" || user.role === "delivery" || user.role === "dispatcher";
-  const allowedPages = useMemo(() => new Set<PageKey>(
-    user.role === "admin" ? NAV.map((item) => item.key) : user.permissions,
-  ), [user.permissions, user.role]);
+  const allowedPages = useMemo(() => {
+    const pages = new Set<PageKey>(user.role === "admin" ? NAV.map((item) => item.key) : user.permissions);
+    if (pages.has("plan")) pages.add("overdue");
+    return pages;
+  }, [user.permissions, user.role]);
   const firstAllowedPage = NAV.find((item) => allowedPages.has(item.key))?.key || "dashboard";
   const workflowPage: PageKey | null = allowedPages.has("dispatch")
     ? "dispatch"
@@ -1069,6 +1074,14 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const timer = window.setTimeout(() => void loadDue(), 0);
     return () => window.clearTimeout(timer);
   }, [hasDueDataPermission]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (page !== "overdue" || !allowedPages.has("overdue")) return;
+    const refresh = () => { if (document.visibilityState === "visible") void loadDue(); };
+    const timer = window.setInterval(refresh, 30_000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", refresh); };
+  }, [page, allowedPages]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!["stock", "manual-stock", "stock-count", "parts", "tags", "arrange", "replacement", "dispatch", "reports", "history"].includes(page)) return;
@@ -3449,6 +3462,19 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     </div>;
   }
 
+  function openOverdueWindow() {
+    if (!allowedPages.has("overdue")) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("page", "overdue");
+    const opened = window.open(url.toString(), "kit-overdue-work", "popup=yes,width=1280,height=800,resizable=yes,scrollbars=yes");
+    if (opened) opened.focus();
+    else go("overdue");
+  }
+
+  function renderOverdueWork() {
+    return <OverdueWorkPage dues={overdueDues} refreshing={loading} updatedAt={dueLoadedAt} onRefresh={() => void loadDue()} onBack={() => go("plan")} onOpenWindow={openOverdueWindow} />;
+  }
+
   function renderPlan() {
     const prioritizedDues = filtered.slice().sort((left, right) =>
       Number(isDeliveryOverdue(right)) - Number(isDeliveryOverdue(left))
@@ -3471,6 +3497,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
 
     return <div className="plan-home">
       <input ref={fileInput} type="file" accept=".xlsx,.xls" hidden onChange={parseExcel} />
+      <div className="overdue-work-launch"><button className="button primary" type="button" onClick={openOverdueWindow}>↗ เปิดหน้าต่างงานติดลบ / ค้างส่ง · {fmt(overdueDues.length)} รายการ</button><small>รวมทุก Part ทุกรอบ ทุก FAC</small></div>
       {overdueDues.length > 0 && <div className="overdue-alert-group">
         <button className="overdue-alert plan-overdue-alert" onClick={showOverduePlan}>
           <span>!</span><div><b>แจ้งเตือนงานเกินดิวจัดส่ง {fmt(overdueDues.length)} รายการ</b><small>ระบบเรียงรายการที่เกินวันและเวลาจัดส่งไว้ด้านบน กดเพื่อล้างตัวกรองและดูทั้งหมด</small></div><strong>แสดงทั้งหมด →</strong>
@@ -4224,14 +4251,14 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     </div>;
   }
 
-  const pageContent: Record<PageKey, () => ReactNode> = { dashboard: renderDashboard, stock: renderStock, "manual-stock": renderManualStock, "stock-count": renderStockCount, forecast: renderForecast, parts: renderParts, tags: renderTags, plan: renderPlan, arrange: () => renderScan("arrange"), replacement: renderReplacement, verify: renderVerify, dispatch: () => renderScan("dispatch"), exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
-  const activeNav = NAV.find((item) => item.key === page) || NAV.find((item) => item.key === firstAllowedPage) || NAV[0];
+  const pageContent: Record<PageKey, () => ReactNode> = { overdue: renderOverdueWork, dashboard: renderDashboard, stock: renderStock, "manual-stock": renderManualStock, "stock-count": renderStockCount, forecast: renderForecast, parts: renderParts, tags: renderTags, plan: renderPlan, arrange: () => renderScan("arrange"), replacement: renderReplacement, verify: renderVerify, dispatch: () => renderScan("dispatch"), exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
+  const activeNav = (page === "overdue" ? { key: "overdue", label: "งานติดลบ / ค้างส่ง", icon: "!" } : NAV.find((item) => item.key === page)) || NAV.find((item) => item.key === firstAllowedPage) || NAV[0];
 
   return <div className="control-shell">
     <aside className={`control-sidebar ${menuOpen ? "open" : ""}`}>
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
-      <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
+      <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}{allowedPages.has("overdue") && <button className={page === "overdue" ? "active" : ""} onClick={() => go("overdue")}><span>!</span>งานติดลบ / ค้างส่ง</button>}</nav>
       <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.23.0</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
