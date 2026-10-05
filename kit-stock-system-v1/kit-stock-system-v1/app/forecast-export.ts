@@ -76,7 +76,7 @@ export function createForecastExportWorkbook(xlsx: typeof import("xlsx"), covera
       matrix["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: Math.max(4, keys.length + 4) } }];
       for (let c = 5; c < keys.length + 5; c++) {
         if (mode === "daily") matrix[xlsx.utils.encode_cell({ r: 6, c })].z = "dd/mm/yyyy";
-        for (let r = 7; r < matrixRows.length; r++) matrix[xlsx.utils.encode_cell({ r, c })].z = "#,##0;[Red]-#,##0;0";
+        for (let r = 7; r < matrixRows.length; r++) matrix[xlsx.utils.encode_cell({ r, c })].z = "#,##0;-#,##0;0";
       }
       xlsx.utils.book_append_sheet(workbook, matrix, mode === "daily" ? "ยอดคงเหลือรายวัน" : "ยอดคงเหลือรายรอบ");
     }
@@ -97,7 +97,7 @@ export function createForecastExportBinary(xlsx: typeof import("xlsx"), workbook
     entry.content = encoder.encode(transform(decoder.decode(new Uint8Array(entry.content))));
     entry.size = entry.content.length;
   }
-  edit("/xl/styles.xml", (xml) => xml.replace('<dxfs count="0"/>', '<dxfs count="3"><dxf><font><b/><color rgb="FF9C0006"/></font><fill><patternFill patternType="solid"><fgColor rgb="FFFFC7CE"/><bgColor indexed="64"/></patternFill></fill></dxf><dxf><font><b/><color rgb="FFFFFFFF"/></font><fill><patternFill patternType="solid"><fgColor rgb="FF17365D"/><bgColor indexed="64"/></patternFill></fill></dxf><dxf><fill><patternFill patternType="solid"><fgColor rgb="FFFFF2CC"/><bgColor indexed="64"/></patternFill></fill></dxf></dxfs>'));
+  edit("/xl/styles.xml", (xml) => xml.replace('<dxfs count="0"/>', '<dxfs count="3"><dxf><font><b/><color rgb="FF000000"/></font><fill><patternFill patternType="solid"><fgColor rgb="FFFF0000"/><bgColor rgb="FFFF0000"/></patternFill></fill></dxf><dxf><font><b/><color rgb="FFFFFFFF"/></font><fill><patternFill patternType="solid"><fgColor rgb="FF17365D"/><bgColor rgb="FF17365D"/></patternFill></fill></dxf><dxf><font><color rgb="FF000000"/></font><fill><patternFill patternType="solid"><fgColor rgb="FFFFF2CC"/><bgColor rgb="FFFFF2CC"/></patternFill></fill></dxf></dxfs>'));
   workbook.SheetNames.forEach((name, index) => {
     const range = xlsx.utils.decode_range(workbook.Sheets[name]["!ref"] || "A1");
     const lastColumn = xlsx.utils.encode_col(range.e.c), lastRow = range.e.r + 1;
