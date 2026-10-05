@@ -2588,3 +2588,13 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .arrange-warning-modal dl{display:grid;gap:8px;padding:12px;border-radius:10px;background:#f3f7fe}
 .arrange-warning-modal dl>div{display:flex;justify-content:space-between;gap:12px}.arrange-warning-modal dd{margin:0;font-weight:700}
 .arrange-warning-modal small{display:block;margin:12px 0;color:#60728d;line-height:1.5}
+
+.overdue-work-page{padding:20px;border:1px solid #efd6dc;border-radius:16px;background:#fff}
+.overdue-work-header,.overdue-work-toolbar,.overdue-work-pagination,.overdue-work-launch{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}
+.overdue-work-header h2{margin:0;color:#b32441}.overdue-work-header p,.overdue-work-note,.overdue-work-toolbar small,.overdue-work-launch small{color:#627591;font-size:12px;line-height:1.6}
+.overdue-work-actions,.overdue-work-pagination>div{display:flex;gap:8px;flex-wrap:wrap}
+.overdue-work-totals{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:18px 0}
+.overdue-work-totals article{padding:14px;border:1px solid #f0d6dd;border-radius:12px;background:#fff5f7}.overdue-work-totals small,.overdue-work-totals b{display:block}.overdue-work-totals b{font-size:28px;color:#be2948}.overdue-work-totals span{font-size:11px;color:#627591}
+.overdue-work-toolbar{margin:14px 0}.overdue-work-toolbar label{display:grid;gap:6px;flex:1;min-width:200px;font-size:12px}.overdue-work-toolbar input{min-height:44px;padding:10px;border:1px solid #cfdbeb;border-radius:9px}
+.overdue-work-page tbody tr{background:#fff8fa}.overdue-work-pagination{margin-top:14px}.overdue-work-empty{text-align:center;padding:24px;color:#627591}.overdue-work-launch{margin-bottom:16px}
+@media(max-width:720px){.overdue-work-page{padding:12px}.overdue-work-header h2{font-size:20px}.overdue-work-actions{width:100%}.overdue-work-actions .button{flex:1}.overdue-work-totals{gap:6px}.overdue-work-totals article{padding:10px}.overdue-work-totals b{font-size:22px}}
