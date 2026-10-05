@@ -5,6 +5,7 @@ import { stockAllocations, stockParts, stockTags } from "../../../db/schema";
 import { getRuntimeEnv } from "../../../runtime/env";
 import { writeAuditLog } from "../../audit-log";
 import { safeErrorMessage } from "../../api-error";
+import { arrangementWarningEvent } from "../../arrangement-warning";
 
 function clean(value: unknown, max = 160) {
   return String(value ?? "").trim().slice(0, max);
@@ -1104,130 +1105,153 @@ export async function POST(request: Request) {
     }
 
     if (action === "stage") {
-      if (!hasPermission(user, "arrange")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์จัดงาน" }, { status: 403 });
-      const requestedDueLineId = Number(body.dueLineId || 0);
-      const deliveryDate = clean(body.deliveryDate, 10);
-      const deliveryTime = clean(body.deliveryTime, 5);
-      const fact = clean(body.fact, 160);
-      if (deliveryTime && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(deliveryTime)) {
-        return Response.json({ error: "กรุณาเลือกรอบส่งงานให้ถูกต้อง" }, { status: 400 });
-      }
-      const tagId = parseInternalTag(clean(body.rawPayload, 1000));
-      const requestedQty = Number(body.qty || 0);
-      const hasLegacyDueId = Number.isInteger(requestedDueLineId) && requestedDueLineId > 0;
-      if ((!hasLegacyDueId && !/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) || !Number.isInteger(requestedQty) || requestedQty < 0) {
-        return Response.json({ error: "กรุณาเลือกวันที่ Due และระบุจำนวนให้ถูกต้อง" }, { status: 400 });
-      }
-      const { DB } = getRuntimeEnv();
-      if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
-      const tag = await DB.prepare(`
-        SELECT t.id, t.tag_id AS tagId, t.material_code AS materialCode,
-          t.qty, t.remaining_qty AS remainingQty, t.job_no AS jobNo,
-          t.production_date AS productionDate, t.status,
-          t.received_by_name AS receivedByName, t.received_at AS receivedAt,
-          coalesce((SELECT sum(p.picked_qty - p.dispatched_qty) FROM stock_picks p
-            WHERE p.stock_tag_id = t.id AND p.status IN ('staged', 'partial')), 0) AS stagedQty,
-          coalesce((SELECT sum(a.qty) FROM stock_allocations a
-            WHERE a.stock_tag_id = t.id AND a.status = 'reserved'), 0) AS legacyReservedQty
-        FROM stock_tags t WHERE t.tag_id = ?1 LIMIT 1
-      `).bind(tagId).first<{
-        id: number; tagId: string; materialCode: string; qty: number; remainingQty: number;
-        jobNo: string; productionDate: string; status: string; receivedByName: string;
-        receivedAt: string | null; stagedQty: number; legacyReservedQty: number;
-      }>();
-      if (!tag) return Response.json({ error: "ไม่พบ Tag Stock นี้ในระบบ" }, { status: 404 });
-      if (tag.status !== "in_stock") return Response.json({ error: tag.status === "printed" ? "Tag นี้ยังไม่ได้สแกนรับเข้า Stock" : "Tag นี้ขายออกหมดแล้ว" }, { status: 409 });
-      const dueSelect = `
-        SELECT d.id, d.do_no AS doNo, d.seq, d.material_code AS materialCode,
-          d.material_description AS materialDescription, d.fact, d.line, d.shop,
-          d.req_qty AS reqQty, d.delivery_date AS deliveryDate, d.delivery_time AS deliveryTime,
-          coalesce((SELECT sum(s.qty) FROM delivery_tag_scans s WHERE s.due_line_id = d.id), 0) AS scannedQty,
-          coalesce((SELECT sum(p.picked_qty - p.dispatched_qty) FROM stock_picks p
-            WHERE p.due_line_id = d.id AND p.status IN ('staged', 'partial')), 0) AS arrangedQty
-        FROM delivery_due_lines d
-      `;
-      type StageDue = {
-        id: number; doNo: string; seq: number; materialCode: string; materialDescription: string;
-        fact: string; line: string; shop: string; reqQty: number; deliveryDate: string;
-        deliveryTime: string; scannedQty: number; arrangedQty: number;
+      const stageWarning = async (message: string, status: number) => {
+        const warningLogged = await writeAuditLog(user, arrangementWarningEvent(message, body, status), request);
+        return Response.json({ error: message, warningLogged }, { status });
       };
-      const due = hasLegacyDueId
-        ? await DB.prepare(dueSelect + " WHERE d.id = ?1 LIMIT 1").bind(requestedDueLineId).first<StageDue>()
-        : await DB.prepare(dueSelect + `
-          WHERE d.delivery_date = ?1 AND d.material_code = ?2
-            AND (?3 = '' OR d.delivery_time = ?3)
-            AND (?4 = '' OR d.fact = ?4)
-            AND d.req_qty > coalesce((SELECT sum(s.qty) FROM delivery_tag_scans s WHERE s.due_line_id = d.id), 0)
-              + coalesce((SELECT sum(p.picked_qty - p.dispatched_qty) FROM stock_picks p
-                  WHERE p.due_line_id = d.id AND p.status IN ('staged', 'partial')), 0)
-          ORDER BY d.delivery_time, d.id
-          LIMIT 1
-        `).bind(deliveryDate, tag.materialCode, deliveryTime, fact).first<StageDue>();
-      if (!due) return Response.json({ error: hasLegacyDueId ? "ไม่พบ Due ที่เลือก หรือข้อมูลถูกลบไปแล้ว" : `ไม่พบ Due ของ Part ${tag.materialCode} ที่ยังจัดไม่ครบในวันที่ ${deliveryDate} · รอบ ${deliveryTime || "ทั้งหมด"} · ${fact || "ทุก FAC"}` }, { status: 404 });
-      if ((deliveryTime && due.deliveryTime !== deliveryTime) || (fact && due.fact !== fact)) {
-        return Response.json({ error: "Due ไม่ตรงกับรอบส่งงานหรือ FAC ที่เลือก" }, { status: 409 });
-      }
-      if (tag.materialCode !== due.materialCode) return Response.json({ error: `Part ไม่ตรงกัน: Due ต้องการ ${due.materialCode} แต่ Tag Stock เป็น ${tag.materialCode}` }, { status: 409 });
-      const dueOpenQty = Math.max(Number(due.reqQty) - Number(due.scannedQty) - Number(due.arrangedQty), 0);
-      const tagAvailableQty = Math.max(Number(tag.remainingQty) - Number(tag.stagedQty) - Number(tag.legacyReservedQty), 0);
-      if (!dueOpenQty) return Response.json({ error: "Due นี้จัดงานครบแล้ว หรือส่งออกครบแล้ว" }, { status: 409 });
-      if (!tagAvailableQty) return Response.json({ error: "Tag Stock นี้ไม่มีจำนวนพร้อมจัดเหลืออยู่" }, { status: 409 });
-      const pickedQty = requestedQty > 0 ? requestedQty : Math.min(dueOpenQty, tagAvailableQty);
-      if (pickedQty > dueOpenQty) return Response.json({ error: `จำนวนเกิน Due ที่จับคู่อัตโนมัติ เหลือจัดได้ ${dueOpenQty} ชิ้น` }, { status: 409 });
-      if (pickedQty > tagAvailableQty) return Response.json({ error: `Tag Stock นี้พร้อมจัดเพียง ${tagAvailableQty} ชิ้น` }, { status: 409 });
-      // จองงานแบบ atomic: ดึง stock_tag_id จาก subquery ที่คืนค่าเฉพาะเมื่อ ณ ตอนนี้
-      // Tag ยัง in_stock และมีของว่างพอ (หักงานที่จัด/จองแล้ว) และ Due ยังเปิดให้จัดพอ
-      // ถ้าเงื่อนไขใดพลาด (อีกเครื่องจัด Tag/Due เดียวกันชนกัน) subquery คืน NULL ชน
-      // NOT NULL ทำให้ INSERT ล้มเหลว แทนการจองเกิน
-      let result;
       try {
-        result = await DB.prepare(`
-          INSERT INTO stock_picks
-            (due_line_id, stock_tag_id, picked_qty, dispatched_qty, status,
-             picked_by_name, picked_by_code, picked_at, updated_at)
-          VALUES (
-            ?1,
-            (SELECT t.id FROM stock_tags t
-              WHERE t.id = ?2 AND t.status = 'in_stock'
-                AND t.remaining_qty
-                    - coalesce((SELECT sum(sp.picked_qty - sp.dispatched_qty) FROM stock_picks sp
-                        WHERE sp.stock_tag_id = t.id AND sp.status IN ('staged', 'partial')), 0)
-                    - coalesce((SELECT sum(a.qty) FROM stock_allocations a
-                        WHERE a.stock_tag_id = t.id AND a.status = 'reserved'), 0) >= ?3
-                AND EXISTS (SELECT 1 FROM delivery_due_lines d
-                  WHERE d.id = ?1
-                    AND d.req_qty
-                        - coalesce((SELECT sum(s.qty) FROM delivery_tag_scans s WHERE s.due_line_id = d.id), 0)
-                        - coalesce((SELECT sum(p.picked_qty - p.dispatched_qty) FROM stock_picks p
-                            WHERE p.due_line_id = d.id AND p.status IN ('staged', 'partial')), 0) >= ?3)
-              LIMIT 1),
-            ?3, 0, 'staged', ?4, ?5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-          )
-        `).bind(due.id, tag.id, pickedQty, user.displayName, user.employeeCode).run();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "";
-        if (/NOT NULL|constraint/i.test(message)) {
-          return Response.json({ error: "Tag หรือ Due มีการเปลี่ยนแปลงจากอีกเครื่อง กรุณารีเฟรชและจัดใหม่" }, { status: 409 });
+        if (!hasPermission(user, "arrange")) return await stageWarning("บัญชีนี้ไม่มีสิทธิ์จัดงาน", 403);
+        const requestedDueLineId = Number(body.dueLineId || 0);
+        const deliveryDate = clean(body.deliveryDate, 10);
+        const deliveryTime = clean(body.deliveryTime, 5);
+        const fact = clean(body.fact, 160);
+        if (deliveryTime && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(deliveryTime)) {
+          return await stageWarning("กรุณาเลือกรอบส่งงานให้ถูกต้อง", 400);
         }
-        throw error;
+        const tagId = parseInternalTag(clean(body.rawPayload, 1000));
+        const requestedQty = Number(body.qty || 0);
+        const hasLegacyDueId = Number.isInteger(requestedDueLineId) && requestedDueLineId > 0;
+        if ((!hasLegacyDueId && !/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) || !Number.isInteger(requestedQty) || requestedQty < 0) {
+          return await stageWarning("กรุณาเลือกวันที่ Due และระบุจำนวนให้ถูกต้อง", 400);
+        }
+        const { DB } = getRuntimeEnv();
+        if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
+        const tag = await DB.prepare(`
+          SELECT t.id, t.tag_id AS tagId, t.material_code AS materialCode,
+            t.qty, t.remaining_qty AS remainingQty, t.job_no AS jobNo,
+            t.production_date AS productionDate, t.status,
+            t.received_by_name AS receivedByName, t.received_at AS receivedAt,
+            coalesce((SELECT sum(p.picked_qty - p.dispatched_qty) FROM stock_picks p
+              WHERE p.stock_tag_id = t.id AND p.status IN ('staged', 'partial')), 0) AS stagedQty,
+            coalesce((SELECT sum(a.qty) FROM stock_allocations a
+              WHERE a.stock_tag_id = t.id AND a.status = 'reserved'), 0) AS legacyReservedQty
+          FROM stock_tags t WHERE t.tag_id = ?1 LIMIT 1
+        `).bind(tagId).first<{
+          id: number; tagId: string; materialCode: string; qty: number; remainingQty: number;
+          jobNo: string; productionDate: string; status: string; receivedByName: string;
+          receivedAt: string | null; stagedQty: number; legacyReservedQty: number;
+        }>();
+        if (!tag) return await stageWarning("ไม่พบ Tag Stock นี้ในระบบ", 404);
+        if (tag.status !== "in_stock") return await stageWarning(tag.status === "printed" ? "Tag นี้ยังไม่ได้สแกนรับเข้า Stock" : "Tag นี้ขายออกหมดแล้ว", 409);
+        if (!hasLegacyDueId) {
+          const openScope = await DB.prepare(`
+            SELECT count(*) AS openCount FROM delivery_due_lines d
+            WHERE d.delivery_date = ?1
+              AND (?2 = '' OR d.delivery_time = ?2)
+              AND (?3 = '' OR d.fact = ?3)
+              AND d.req_qty > coalesce((SELECT sum(s.qty) FROM delivery_tag_scans s WHERE s.due_line_id = d.id), 0)
+                + coalesce((SELECT sum(p.picked_qty - p.dispatched_qty) FROM stock_picks p
+                    WHERE p.due_line_id = d.id AND p.status IN ('staged', 'partial')), 0)
+          `).bind(deliveryDate, deliveryTime, fact).first<{ openCount: number }>();
+          if (!Number(openScope?.openCount)) {
+            return await stageWarning(`ไม่มี Part เหลือให้จัดในวันที่ ${deliveryDate} · รอบ ${deliveryTime || "ทั้งหมด"} · ${fact || "ทุก FAC"} กรุณาเลือกรอบหรือ FAC อื่น`, 409);
+          }
+        }
+        const dueSelect = `
+          SELECT d.id, d.do_no AS doNo, d.seq, d.material_code AS materialCode,
+            d.material_description AS materialDescription, d.fact, d.line, d.shop,
+            d.req_qty AS reqQty, d.delivery_date AS deliveryDate, d.delivery_time AS deliveryTime,
+            coalesce((SELECT sum(s.qty) FROM delivery_tag_scans s WHERE s.due_line_id = d.id), 0) AS scannedQty,
+            coalesce((SELECT sum(p.picked_qty - p.dispatched_qty) FROM stock_picks p
+              WHERE p.due_line_id = d.id AND p.status IN ('staged', 'partial')), 0) AS arrangedQty
+          FROM delivery_due_lines d
+        `;
+        type StageDue = {
+          id: number; doNo: string; seq: number; materialCode: string; materialDescription: string;
+          fact: string; line: string; shop: string; reqQty: number; deliveryDate: string;
+          deliveryTime: string; scannedQty: number; arrangedQty: number;
+        };
+        const due = hasLegacyDueId
+          ? await DB.prepare(dueSelect + " WHERE d.id = ?1 LIMIT 1").bind(requestedDueLineId).first<StageDue>()
+          : await DB.prepare(dueSelect + `
+            WHERE d.delivery_date = ?1 AND d.material_code = ?2
+              AND (?3 = '' OR d.delivery_time = ?3)
+              AND (?4 = '' OR d.fact = ?4)
+              AND d.req_qty > coalesce((SELECT sum(s.qty) FROM delivery_tag_scans s WHERE s.due_line_id = d.id), 0)
+                + coalesce((SELECT sum(p.picked_qty - p.dispatched_qty) FROM stock_picks p
+                    WHERE p.due_line_id = d.id AND p.status IN ('staged', 'partial')), 0)
+            ORDER BY d.delivery_time, d.id
+            LIMIT 1
+          `).bind(deliveryDate, tag.materialCode, deliveryTime, fact).first<StageDue>();
+        if (!due) return await stageWarning(hasLegacyDueId ? "ไม่พบ Due ที่เลือก หรือข้อมูลถูกลบไปแล้ว" : `ไม่พบ Due ของ Part ${tag.materialCode} ที่ยังจัดไม่ครบในวันที่ ${deliveryDate} · รอบ ${deliveryTime || "ทั้งหมด"} · ${fact || "ทุก FAC"}`, 404);
+        if ((deliveryTime && due.deliveryTime !== deliveryTime) || (fact && due.fact !== fact)) {
+          return await stageWarning("Due ไม่ตรงกับรอบส่งงานหรือ FAC ที่เลือก", 409);
+        }
+        if (tag.materialCode !== due.materialCode) return await stageWarning(`Part ไม่ตรงกัน: Due ต้องการ ${due.materialCode} แต่ Tag Stock เป็น ${tag.materialCode}`, 409);
+        const dueOpenQty = Math.max(Number(due.reqQty) - Number(due.scannedQty) - Number(due.arrangedQty), 0);
+        const tagAvailableQty = Math.max(Number(tag.remainingQty) - Number(tag.stagedQty) - Number(tag.legacyReservedQty), 0);
+        if (!dueOpenQty) return await stageWarning("Due นี้จัดงานครบแล้ว หรือส่งออกครบแล้ว", 409);
+        if (!tagAvailableQty) return await stageWarning("Tag Stock นี้ไม่มีจำนวนพร้อมจัดเหลืออยู่", 409);
+        const pickedQty = requestedQty > 0 ? requestedQty : Math.min(dueOpenQty, tagAvailableQty);
+        if (pickedQty > dueOpenQty) return await stageWarning(`จำนวนเกิน Due ที่จับคู่อัตโนมัติ เหลือจัดได้ ${dueOpenQty} ชิ้น`, 409);
+        if (pickedQty > tagAvailableQty) return await stageWarning(`Tag Stock นี้พร้อมจัดเพียง ${tagAvailableQty} ชิ้น`, 409);
+        // จองงานแบบ atomic: ดึง stock_tag_id จาก subquery ที่คืนค่าเฉพาะเมื่อ ณ ตอนนี้
+        // Tag ยัง in_stock และมีของว่างพอ (หักงานที่จัด/จองแล้ว) และ Due ยังเปิดให้จัดพอ
+        // ถ้าเงื่อนไขใดพลาด (อีกเครื่องจัด Tag/Due เดียวกันชนกัน) subquery คืน NULL ชน
+        // NOT NULL ทำให้ INSERT ล้มเหลว แทนการจองเกิน
+        let result;
+        try {
+          result = await DB.prepare(`
+            INSERT INTO stock_picks
+              (due_line_id, stock_tag_id, picked_qty, dispatched_qty, status,
+               picked_by_name, picked_by_code, picked_at, updated_at)
+            VALUES (
+              ?1,
+              (SELECT t.id FROM stock_tags t
+                WHERE t.id = ?2 AND t.status = 'in_stock'
+                  AND t.remaining_qty
+                      - coalesce((SELECT sum(sp.picked_qty - sp.dispatched_qty) FROM stock_picks sp
+                          WHERE sp.stock_tag_id = t.id AND sp.status IN ('staged', 'partial')), 0)
+                      - coalesce((SELECT sum(a.qty) FROM stock_allocations a
+                          WHERE a.stock_tag_id = t.id AND a.status = 'reserved'), 0) >= ?3
+                  AND EXISTS (SELECT 1 FROM delivery_due_lines d
+                    WHERE d.id = ?1
+                      AND d.req_qty
+                          - coalesce((SELECT sum(s.qty) FROM delivery_tag_scans s WHERE s.due_line_id = d.id), 0)
+                          - coalesce((SELECT sum(p.picked_qty - p.dispatched_qty) FROM stock_picks p
+                              WHERE p.due_line_id = d.id AND p.status IN ('staged', 'partial')), 0) >= ?3)
+                LIMIT 1),
+              ?3, 0, 'staged', ?4, ?5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+          `).bind(due.id, tag.id, pickedQty, user.displayName, user.employeeCode).run();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "";
+          if (/NOT NULL|constraint/i.test(message)) {
+            return await stageWarning("Tag หรือ Due มีการเปลี่ยนแปลงจากอีกเครื่อง กรุณารีเฟรชและจัดใหม่", 409);
+          }
+          throw error;
+        }
+        await writeAuditLog(user, {
+          module: "arrange", moduleLabel: "จัดงาน", action: "stage_stock", actionLabel: "จัดงานเข้า Due",
+          entityType: "stock_pick", entityId: Number(result.meta.last_row_id || 0),
+          summary: `จัด Tag ${tag.tagId} · ${tag.materialCode} จำนวน ${pickedQty} ชิ้น เข้า Due ${due.deliveryDate}`,
+          details: { stockTagCode: tag.tagId, materialCode: tag.materialCode, jobNo: tag.jobNo, dueLineId: due.id, deliveryDate: due.deliveryDate, deliveryTime: due.deliveryTime, fact: due.fact, pickedQty },
+        }, request);
+        return Response.json({
+          action: "staged",
+          pick: { id: result.meta.last_row_id, dueLineId: due.id, pickedQty, dispatchedQty: 0,
+            status: "staged", pickedByName: user.displayName, stockTagCode: tag.tagId,
+            materialCode: tag.materialCode, jobNo: tag.jobNo, productionDate: tag.productionDate,
+            receivedAt: tag.receivedAt, doNo: due.doNo, fact: due.fact, line: due.line },
+          tag,
+          due: { ...due, arrangedQty: Number(due.arrangedQty) + pickedQty,
+            remainingToArrange: Math.max(dueOpenQty - pickedQty, 0),
+            remainingQty: Math.max(Number(due.reqQty) - Number(due.scannedQty), 0) },
+        }, { status: 201 });
+      } catch (error) {
+        console.error("stage Stock failed", error);
+        return await stageWarning(safeErrorMessage(error, "จัดงานไม่สำเร็จ กรุณาลองใหม่"), 500);
       }
-      await writeAuditLog(user, {
-        module: "arrange", moduleLabel: "จัดงาน", action: "stage_stock", actionLabel: "จัดงานเข้า Due",
-        entityType: "stock_pick", entityId: Number(result.meta.last_row_id || 0),
-        summary: `จัด Tag ${tag.tagId} · ${tag.materialCode} จำนวน ${pickedQty} ชิ้น เข้า Due ${due.deliveryDate}`,
-        details: { stockTagCode: tag.tagId, materialCode: tag.materialCode, jobNo: tag.jobNo, dueLineId: due.id, deliveryDate: due.deliveryDate, deliveryTime: due.deliveryTime, fact: due.fact, pickedQty },
-      }, request);
-      return Response.json({
-        action: "staged",
-        pick: { id: result.meta.last_row_id, dueLineId: due.id, pickedQty, dispatchedQty: 0,
-          status: "staged", pickedByName: user.displayName, stockTagCode: tag.tagId,
-          materialCode: tag.materialCode, jobNo: tag.jobNo, productionDate: tag.productionDate,
-          receivedAt: tag.receivedAt, doNo: due.doNo, fact: due.fact, line: due.line },
-        tag,
-        due: { ...due, arrangedQty: Number(due.arrangedQty) + pickedQty,
-          remainingToArrange: Math.max(dueOpenQty - pickedQty, 0),
-          remainingQty: Math.max(Number(due.reqQty) - Number(due.scannedQty), 0) },
-      }, { status: 201 });
     }
 
     return Response.json({ error: "ไม่รู้จักคำสั่ง Stock" }, { status: 400 });
