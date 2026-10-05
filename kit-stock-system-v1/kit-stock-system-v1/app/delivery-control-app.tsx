@@ -733,6 +733,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [verifyLoading, setVerifyLoading] = useState(false);
   const [arrangeDueDate, setArrangeDueDate] = useState("");
+  const [arrangeDueTime, setArrangeDueTime] = useState("");
+  const [arrangeDueFact, setArrangeDueFact] = useState("");
   const [arrangeTag, setArrangeTag] = useState("");
   const [arrangeQty, setArrangeQty] = useState("");
   const [arrangeDueSearch, setArrangeDueSearch] = useState("");
@@ -1731,6 +1733,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     event?.preventDefault();
     const scannedValue = typeof value === "string" ? value.trim() : arrangeTag.trim();
     if (!effectiveArrangeDueDate || !scannedValue || checkingTag) return;
+    // Keep the chosen scope even after its last remaining Due is arranged.
+    setArrangeDueDate(effectiveArrangeDueDate);
     setCheckingTag(true);
     setArrangementPreview(null);
     setNotice(null);
@@ -1741,6 +1745,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         body: JSON.stringify({
           action: "stage",
           deliveryDate: effectiveArrangeDueDate,
+          deliveryTime: arrangeDueTime,
+          fact: arrangeDueFact,
           rawPayload: scannedValue,
           qty: Number(arrangeQty || 0),
         }),
@@ -2558,12 +2564,25 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const arrangeableDues = useMemo(() => payload.dues.filter((due) =>
     Number(due.reqQty) > Number(due.scannedQty) + Number(due.arrangedQty || 0)
   ), [payload.dues]);
-  const arrangeDueDates = useMemo(() => [...new Set(arrangeableDues.map((due) => due.deliveryDate))].sort(), [arrangeableDues]);
+  const arrangeDueDates = useMemo(() => [...new Set(payload.dues.map((due) => due.deliveryDate))].sort(), [payload.dues]);
   const effectiveArrangeDueDate = arrangeDueDates.includes(arrangeDueDate)
     ? arrangeDueDate
     : arrangeDueDates.includes(bangkokDateTimeKey().slice(0, 10))
       ? bangkokDateTimeKey().slice(0, 10)
-      : arrangeDueDates[0] || "";
+      : arrangeableDues.map((due) => due.deliveryDate).sort()[0] || arrangeDueDates[0] || "";
+  const arrangeDueTimes = useMemo(() => [...new Set(payload.dues
+    .filter((due) => due.deliveryDate === effectiveArrangeDueDate)
+    .map((due) => due.deliveryTime))].filter(Boolean).sort(), [payload.dues, effectiveArrangeDueDate]);
+  const arrangeDueFacts = useMemo(() => [...new Set(payload.dues
+    .filter((due) => due.deliveryDate === effectiveArrangeDueDate && (!arrangeDueTime || due.deliveryTime === arrangeDueTime))
+    .map((due) => due.fact))].filter(Boolean).sort(), [payload.dues, effectiveArrangeDueDate, arrangeDueTime]);
+  const arrangeScopeDues = useMemo(() => arrangeableDues.filter((due) =>
+    due.deliveryDate === effectiveArrangeDueDate
+    && (!arrangeDueTime || due.deliveryTime === arrangeDueTime)
+    && (!arrangeDueFact || due.fact === arrangeDueFact)
+  ), [arrangeableDues, effectiveArrangeDueDate, arrangeDueTime, arrangeDueFact]);
+
+
 
   function go(next: PageKey) {
     if (!allowedPages.has(next)) {
@@ -3493,14 +3512,14 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
 
   function renderScan(scanMode: "arrange" | "dispatch") {
     const progress = tagPreview ? Math.min(100, Math.round((tagPreview.due.projectedQty / tagPreview.due.reqQty) * 100)) : 0;
-    const selectedDateDues = arrangeableDues.filter((due) => due.deliveryDate === effectiveArrangeDueDate);
+    const selectedDateDues = arrangeScopeDues;
     const selectedDateRemaining = selectedDateDues.reduce((sum, due) => sum + Math.max(Number(due.reqQty) - Number(due.scannedQty) - Number(due.arrangedQty || 0), 0), 0);
     if (scanMode === "arrange") {
       const completedCount = payload.dues.filter((due) => Number(due.scannedQty) >= Number(due.reqQty)).length;
       const overdueCount = payload.dues.filter((due) => isDeliveryOverdue(due) && Number(due.scannedQty) < Number(due.reqQty)).length;
       const remainingCount = payload.dues.filter((due) => Number(due.scannedQty) < Number(due.reqQty)).length;
       const needle = arrangeDueSearch.trim().toLowerCase();
-      const arrangeRows = arrangeableDues.filter((due) => due.deliveryDate === effectiveArrangeDueDate && (!needle || [due.materialCode, due.materialDescription, due.doNo, due.fact, due.line, due.site, formatDate(due.deliveryDate), due.deliveryTime].join(" ").toLowerCase().includes(needle)));
+      const arrangeRows = arrangeScopeDues.filter((due) => (!needle || [due.materialCode, due.materialDescription, due.doNo, due.fact, due.line, due.site, formatDate(due.deliveryDate), due.deliveryTime].join(" ").toLowerCase().includes(needle)));
       const arrangePageSize = 8;
       const arrangePages = Math.max(1, Math.ceil(arrangeRows.length / arrangePageSize));
       const safeArrangePage = Math.min(arrangeListPage, arrangePages);
@@ -3526,7 +3545,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
 
         <div className="arrange-workspace">
           <section className="arrange-scan-panel">
-            <header className="arrange-section-head"><span>⌗</span><div><h3>สแกน KIT Stock Tag</h3><p>เลือกเฉพาะวันที่ Due แล้วสแกน KIT Tag ของ Part ใดก่อนก็ได้ ระบบจับคู่ Due ให้อัตโนมัติ</p></div><button className="camera-button arrange-camera-button" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>▣ เปิดกล้อง</button></header>
+            <header className="arrange-section-head"><span>⌗</span><div><h3>สแกน KIT Stock Tag</h3><p>เลือกวันที่ รอบ และ FAC แล้วสแกน KIT Tag ของ Part ใดก่อนก็ได้</p></div><button className="camera-button arrange-camera-button" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>▣ เปิดกล้อง</button></header>
             <div className="arrange-scan-body">
               <button type="button" className="arrange-camera-zone" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>
                 <span>⌗</span><b>{checkingTag ? "กำลังบันทึกงาน…" : "พร้อมสแกน KIT Tag"}</b><small>ยิงบาร์โค้ด หรือแตะเพื่อเปิดกล้องโทรศัพท์</small><i />
@@ -3535,10 +3554,10 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
                 {arrangementPreview ? <>
                   <div className="arrange-success"><span>✓</span><b>จัดงานสำเร็จ!</b></div>
                   <div className="arrange-part-result"><PartImage materialCode={arrangementPreview.due.materialCode} compact /><div><small>Part No.</small><b>{arrangementPreview.due.materialCode}</b><p>{arrangementPreview.due.materialDescription || "ไม่ระบุชื่อชิ้นงาน"}</p></div></div>
-                  <dl><div><dt>Job</dt><dd>{arrangementPreview.tag.jobNo}</dd></div><div><dt>Due ทั้งหมด</dt><dd>{fmt(arrangementPreview.due.reqQty)} ชิ้น</dd></div><div><dt>จัดครั้งนี้</dt><dd>{fmt(arrangementPreview.pick.pickedQty)} ชิ้น</dd></div><div><dt>คงเหลือ</dt><dd>{fmt(arrangementPreview.due.remainingQty)} ชิ้น</dd></div></dl>
+                  <dl><div><dt>รอบ / FAC</dt><dd>{arrangementPreview.due.deliveryTime} / {arrangementPreview.due.fact}</dd></div><div><dt>Job</dt><dd>{arrangementPreview.tag.jobNo}</dd></div><div><dt>Due ทั้งหมด</dt><dd>{fmt(arrangementPreview.due.reqQty)} ชิ้น</dd></div><div><dt>จัดครั้งนี้</dt><dd>{fmt(arrangementPreview.pick.pickedQty)} ชิ้น</dd></div><div><dt>คงเหลือ</dt><dd>{fmt(arrangementPreview.due.remainingQty)} ชิ้น</dd></div></dl>
                 </> : effectiveArrangeDueDate ? <>
-                  <div className="arrange-waiting"><span>▦</span><b>วันที่ Due ที่เลือก</b></div>
-                  <div className="arrange-part-result"><span className="arrange-date-icon">◷</span><div><small>วันที่ส่งงาน</small><b>{formatDate(effectiveArrangeDueDate)}</b><p>ยิง KIT Tag ใดก่อนก็ได้ ระบบจะจับคู่ Part กับ Due ในวันนี้ให้อัตโนมัติ</p></div></div>
+                  <div className="arrange-waiting"><span>▦</span><b>Due ที่เลือก</b></div>
+                  <div className="arrange-part-result"><span className="arrange-date-icon">◷</span><div><small>วันที่ส่งงาน</small><b>{formatDate(effectiveArrangeDueDate)}</b><p>รอบ {arrangeDueTime || "ทั้งหมด"} · {arrangeDueFact || "ทุก FAC"} — ระบบจับคู่ Part เฉพาะ Due ตามที่เลือก</p></div></div>
                   <dl><div><dt>Due ที่ยังจัดไม่ครบ</dt><dd>{fmt(selectedDateDues.length)} รายการ</dd></div><div><dt>จำนวนคงเหลือรวม</dt><dd>{fmt(selectedDateRemaining)} ชิ้น</dd></div></dl>
                 </> : <Empty title="กรุณาเลือกวันที่ Due" text="เลือกวันที่ส่งงานก่อนสแกน KIT Tag" />}
               </div>
@@ -3552,31 +3571,40 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           </section>
 
           <aside className="arrange-due-panel">
-            <header><span>▤</span><div><h3>เลือกวันที่ Due</h3><p>เลือกวันเดียว แล้วยิง Tag ได้ทุก Part ในวันนั้น</p></div></header>
-            <div className="arrange-due-search"><span>◷</span><select value={effectiveArrangeDueDate} onChange={(event) => { setArrangeDueDate(event.target.value); setArrangementPreview(null); setArrangeListPage(1); }}>
+            <header><span>▤</span><div><h3>เลือก Due ที่จะจัด</h3><p>เลือกวันที่ รอบส่งงาน และ FAC ก่อนสแกน Tag</p></div></header>
+            <label className="arrange-scope-label" htmlFor="arrange-scope-date">วันที่ส่งงาน</label>
+            <div className="arrange-due-search"><span>◷</span><select id="arrange-scope-date" aria-label="วันที่ส่งงานสำหรับจัดงาน" disabled={checkingTag} value={effectiveArrangeDueDate} onChange={(event) => { setArrangeDueDate(event.target.value); setArrangeDueTime(""); setArrangeDueFact(""); setArrangementPreview(null); setArrangeListPage(1); }}>
               {arrangeDueDates.map((date) => <option key={date} value={date}>{formatDate(date)} · {fmt(arrangeableDues.filter((due) => due.deliveryDate === date).length)} รายการ</option>)}
+            </select></div>
+            <label className="arrange-scope-label" htmlFor="arrange-scope-time">รอบส่งงาน</label>
+            <div className="arrange-due-search"><span>◷</span><select id="arrange-scope-time" aria-label="รอบส่งงานสำหรับจัดงาน" disabled={checkingTag || !effectiveArrangeDueDate} value={arrangeDueTime} onChange={(event) => { setArrangeDueDate(effectiveArrangeDueDate); setArrangeDueTime(event.target.value); setArrangeDueFact(""); setArrangementPreview(null); setArrangeListPage(1); }}>
+              <option value="">ทุกรอบ</option>{arrangeDueTimes.map((time) => <option key={time} value={time}>{time}</option>)}
+            </select></div>
+            <label className="arrange-scope-label" htmlFor="arrange-scope-fact">FAC</label>
+            <div className="arrange-due-search"><span>▤</span><select id="arrange-scope-fact" aria-label="FAC สำหรับจัดงาน" disabled={checkingTag || !effectiveArrangeDueDate} value={arrangeDueFact} onChange={(event) => { setArrangeDueDate(effectiveArrangeDueDate); setArrangeDueFact(event.target.value); setArrangementPreview(null); setArrangeListPage(1); }}>
+              <option value="">ทุก FAC</option>{arrangeDueFacts.map((fact) => <option key={fact} value={fact}>{fact}</option>)}
             </select></div>
             <div className="arrange-due-cards">
               {arrangeDueDates.slice(0, 6).map((date) => {
                 const selected = date === effectiveArrangeDueDate;
                 const dateDues = arrangeableDues.filter((due) => due.deliveryDate === date);
                 const remaining = dateDues.reduce((sum, due) => sum + Math.max(Number(due.reqQty) - Number(due.scannedQty) - Number(due.arrangedQty || 0), 0), 0);
-                return <button key={date} className={selected ? "selected" : ""} onClick={() => { setArrangeDueDate(date); setArrangementPreview(null); setArrangeListPage(1); }}>
+                return <button key={date} className={selected ? "selected" : ""} disabled={checkingTag} onClick={() => { setArrangeDueDate(date); setArrangeDueTime(""); setArrangeDueFact(""); setArrangementPreview(null); setArrangeListPage(1); }}>
                   <i>{selected ? "●" : "○"}</i><span>◷</span><div><b>{formatDate(date)}</b><small>{fmt(dateDues.length)} Due ที่ยังจัดไม่ครบ</small><em>เหลือจัดรวม {fmt(remaining)} ชิ้น</em></div><strong>›</strong>
                 </button>;
               })}
-              {!arrangeDueDates.length && <Empty title="ไม่มีวันที่ Due ที่ต้องจัด" text="นำเข้าแผนส่งงาน หรือรายการทั้งหมดจัดครบแล้ว" />}
+              {!arrangeDueDates.length && <Empty title="ไม่มีวันที่ Due ที่ต้องจัด" text="นำเข้าแผนส่งงานก่อนเลือก Due" />}
             </div>
           </aside>
         </div>
 
-        <Card className="arrange-list-panel" title={<><span className="arrange-list-icon">▣</span> รายการงานในวันที่เลือก <em>{fmt(arrangeRows.length)} รายการ</em></>} action={<span className="arrange-selected-label">{effectiveArrangeDueDate ? `วันที่ Due: ${formatDate(effectiveArrangeDueDate)}` : "ยังไม่ได้เลือกวันที่"}</span>}>
+        <Card className="arrange-list-panel" title={<><span className="arrange-list-icon">▣</span> รายการงานตาม Due ที่เลือก <em>{fmt(arrangeRows.length)} รายการ</em></>} action={<span className="arrange-selected-label">{effectiveArrangeDueDate ? `${formatDate(effectiveArrangeDueDate)} · รอบ ${arrangeDueTime || "ทั้งหมด"} · ${arrangeDueFact || "ทุก FAC"}` : "ยังไม่ได้เลือกวันที่"}</span>}>
           {pageRows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table arrange-table"><thead><tr><th>รูปภาพ</th><th>Part No.</th><th>Part Name</th><th>DO / Seq</th><th className="num">ต้องจัด</th><th className="num">จัดแล้ว</th><th className="num">คงเหลือ</th><th>สถานะ</th></tr></thead><tbody>
             {pageRows.map((due) => {
               const remaining = due.reqQty - due.scannedQty - (due.arrangedQty || 0);
               return <tr key={due.id}>
                 <td data-label="รูปภาพ"><PartImage materialCode={due.materialCode} compact /></td>
-                <td data-label="Part No."><b>{due.materialCode}</b><small>{due.fact} / {due.line || "—"}</small></td>
+                <td data-label="Part No."><b>{due.materialCode}</b><small>{due.deliveryTime} · {due.fact} / {due.line || "—"}</small></td>
                 <td data-label="Part Name">{due.materialDescription || "—"}</td>
                 <td data-label="DO / Seq"><b>{due.doNo}</b><small>Seq {due.seq}</small></td>
                 <td data-label="ต้องจัด" className="num"><b>{fmt(due.reqQty)}</b></td>
