@@ -658,7 +658,7 @@ function PartImagePair({ materialCode, masterVersion, actualVersion, masterAvail
   </div>;
 }
 
-export default function DeliveryControlApp({ user, signOutPath }: { user: { id: number; employeeCode: string; displayName: string; email: string; role: string; permissions: PageKey[] }; signOutPath: string }) {
+export default function DeliveryControlApp({ user, signOutPath, monitorMode = false }: { user: { id: number; employeeCode: string; displayName: string; email: string; role: string; permissions: PageKey[] }; signOutPath: string; monitorMode?: boolean }) {
   // ออกจากระบบด้วย POST เท่านั้น ปุ่มยังเป็น <a> เพื่อให้สไตล์เดิม (.top-user a,
   // .mobile-logout) ใช้ได้ต่อโดยไม่ต้องแก้ CSS แต่ตัวคำขอจริงเป็น POST
   async function signOut(event: ReactMouseEvent<HTMLAnchorElement>) {
@@ -667,7 +667,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     window.location.href = "/login";
   }
 
-  const initialPage = user.role === "admin"
+  const initialPage = monitorMode ? "overdue" : user.role === "admin"
     ? "dashboard"
     : NAV.find((item) => user.permissions.includes(item.key))?.key || "dashboard";
   const hasDueDataPermission = user.role === "admin" || DUE_DATA_PAGES.some((key) => user.permissions.includes(key));
@@ -876,14 +876,15 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   useEffect(() => {
     if (restoredPageRef.current) return;
     restoredPageRef.current = true;
-    const savedPage = pageFromLocation();
+    const savedPage = monitorMode ? "overdue" : pageFromLocation();
     const nextPage = savedPage && allowedPages.has(savedPage) ? savedPage : firstAllowedPage;
     setPage(nextPage);
-    updatePageLocation(nextPage, "replace");
-  }, [allowedPages, firstAllowedPage]);
+    if (!monitorMode) updatePageLocation(nextPage, "replace");
+  }, [allowedPages, firstAllowedPage, monitorMode]);
 
   useEffect(() => {
     const onHistoryChange = () => {
+      if (monitorMode) return;
       const requestedPage = pageFromUrl();
       const nextPage = requestedPage && allowedPages.has(requestedPage) ? requestedPage : firstAllowedPage;
       window.localStorage.setItem("kit-current-page", nextPage);
@@ -894,7 +895,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     };
     window.addEventListener("popstate", onHistoryChange);
     return () => window.removeEventListener("popstate", onHistoryChange);
-  }, [allowedPages, firstAllowedPage]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [allowedPages, firstAllowedPage, monitorMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadDue() {
     setLoading(true);
@@ -3464,15 +3465,14 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
 
   function openOverdueWindow() {
     if (!allowedPages.has("overdue")) return;
-    const url = new URL(window.location.href);
-    url.searchParams.set("page", "overdue");
+    const url = new URL("/overdue-monitor", window.location.origin);
     const opened = window.open(url.toString(), "kit-overdue-work", "popup=yes,width=1280,height=800,resizable=yes,scrollbars=yes");
     if (opened) opened.focus();
     else go("overdue");
   }
 
   function renderOverdueWork() {
-    return <OverdueWorkPage dues={overdueDues} refreshing={loading} updatedAt={dueLoadedAt} onRefresh={() => void loadDue()} onBack={() => go("plan")} onOpenWindow={openOverdueWindow} />;
+    return <OverdueWorkPage dues={overdueDues} refreshing={loading} updatedAt={dueLoadedAt} onRefresh={() => void loadDue()} onBack={() => go("plan")} onOpenWindow={openOverdueWindow} monitorMode={monitorMode} />;
   }
 
   function renderPlan() {
@@ -4254,6 +4254,11 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const pageContent: Record<PageKey, () => ReactNode> = { overdue: renderOverdueWork, dashboard: renderDashboard, stock: renderStock, "manual-stock": renderManualStock, "stock-count": renderStockCount, forecast: renderForecast, parts: renderParts, tags: renderTags, plan: renderPlan, arrange: () => renderScan("arrange"), replacement: renderReplacement, verify: renderVerify, dispatch: () => renderScan("dispatch"), exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
   const activeNav = (page === "overdue" ? { key: "overdue", label: "งานติดลบ / ค้างส่ง", icon: "!" } : NAV.find((item) => item.key === page)) || NAV.find((item) => item.key === firstAllowedPage) || NAV[0];
 
+  if (monitorMode) return <main className="overdue-monitor-shell">
+    {error && <div className="notice error">{error}</div>}
+    {renderOverdueWork()}
+  </main>;
+
   return <div className="control-shell">
     <aside className={`control-sidebar ${menuOpen ? "open" : ""}`}>
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
@@ -4291,7 +4296,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <div className="control-content">
         {notice && <div className={`toast ${notice.type} auto-dismiss`}><span>{notice.type === "success" ? "✓" : "!"}</span><p>{notice.text}</p><button onClick={() => setNotice(null)}>×</button></div>}
         {error && <div className="toast error"><span>!</span><p>{error}</p><button onClick={() => void loadDue()}>ลองใหม่</button></div>}
-        {loading ? <div className="loading-state"><span /><p>กำลังโหลดข้อมูล Due…</p></div> : pageContent[page]()}
+        {loading && page !== "overdue" ? <div className="loading-state"><span /><p>กำลังโหลดข้อมูล Due…</p></div> : pageContent[page]()}
       </div>
     </main>
     <nav className="mobile-bottom-nav" aria-label="เมนูมือถือ">
