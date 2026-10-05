@@ -893,6 +893,17 @@ export async function POST(request: Request) {
       const reservedQty = Number(tag.stagedQty || 0) + Number(tag.legacyReservedQty || 0);
       const stockAreaSystemQty = Math.max(systemQty - reservedQty, 0);
       const hasCountedQty = body.countedQty !== undefined && body.countedQty !== "";
+      const conflictResponse = () => Response.json({
+        code: "stock_count_conflict",
+        error: "Tag นี้มีการรับเข้า ส่งออก จัดงาน หรือปรับยอดจากอีกเครื่อง กรุณาสแกน Tag และตรวจนับใหม่ก่อนยืนยัน",
+      }, { status: 409 });
+      // Preserve the snapshot shown to the counter, including between preview and confirm.
+      // Older clients must reload instead of silently accepting a count without a snapshot.
+      if (hasCountedQty || action === "confirm_tag_count") {
+        if (body.expectedSystemQty !== systemQty || body.expectedReservedQty !== reservedQty || body.expectedStatus !== tag.status) {
+          return conflictResponse();
+        }
+      }
       // ผู้ตรวจนับกรอกเฉพาะของที่พบในพื้นที่ Stock งานที่จัด/จองถูกย้ายออกไปแล้ว
       // และระบบนำยอดนั้นกลับมารวมให้เอง ห้ามผู้ตรวจแก้ยอดจองจากหน้านี้
       const stockAreaCountedQty = hasCountedQty ? Number(body.countedQty) : stockAreaSystemQty;
@@ -921,26 +932,47 @@ export async function POST(request: Request) {
       const reason = clean(body.reason, 500);
       if (!reason) return Response.json({ error: "กรุณาระบุสาเหตุการปรับยอด" }, { status: 400 });
       const adjustmentNo = createAdjustmentNo("TAGCOUNT");
-      await runtimeDb.batch([
-        runtimeDb.prepare(`
-          INSERT INTO stock_count_adjustments
-            (adjustment_no, count_date, material_code, system_qty, counted_qty,
-             difference, reason, adjusted_by_name, adjusted_by_code, adjusted_at)
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, CURRENT_TIMESTAMP)
-        `).bind(adjustmentNo, countDate, tag.materialCode, systemQty, countedQty, difference, reason, user.displayName, user.employeeCode),
-        runtimeDb.prepare(`
-          UPDATE stock_tags
-          SET remaining_qty = ?1,
-            status = CASE WHEN ?1 = 0 THEN 'depleted' ELSE 'in_stock' END
-          WHERE id = ?2
-        `).bind(countedQty, tag.id),
-        runtimeDb.prepare(`
-          INSERT INTO stock_count_adjustment_lines
-            (adjustment_id, stock_tag_id, stock_tag_code, qty_change, before_qty, after_qty, created_at)
-          SELECT id, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP
-          FROM stock_count_adjustments WHERE adjustment_no = ?1
-        `).bind(adjustmentNo, tag.id, tag.tagId, difference, systemQty, countedQty),
-      ]);
+      try {
+        // D1 batch is a transaction. A stale snapshot makes material_code NULL,
+        // violating NOT NULL and rolling back the whole batch before any stock or
+        // adjustment history is written. Checking only UPDATE changes is too late.
+        await runtimeDb.batch([
+          runtimeDb.prepare(`
+            INSERT INTO stock_count_adjustments
+              (adjustment_no, count_date, material_code, system_qty, counted_qty,
+               difference, reason, adjusted_by_name, adjusted_by_code, adjusted_at)
+            VALUES (?1, ?2,
+              (SELECT t.material_code FROM stock_tags t
+                WHERE t.id = ?10 AND t.material_code = ?3
+                  AND t.remaining_qty = ?4 AND t.status = ?11
+                  AND coalesce((SELECT sum(sp.picked_qty - sp.dispatched_qty)
+                    FROM stock_picks sp WHERE sp.stock_tag_id = t.id
+                      AND sp.status IN ('staged', 'partial')), 0) = ?12
+                  AND coalesce((SELECT sum(sa.qty) FROM stock_allocations sa
+                    WHERE sa.stock_tag_id = t.id AND sa.status = 'reserved'), 0) = ?13),
+              ?4, ?5, ?6, ?7, ?8, ?9, CURRENT_TIMESTAMP)
+          `).bind(adjustmentNo, countDate, tag.materialCode, systemQty, countedQty, difference, reason,
+            user.displayName, user.employeeCode, tag.id, tag.status, Number(tag.stagedQty || 0), Number(tag.legacyReservedQty || 0)),
+          runtimeDb.prepare(`
+            UPDATE stock_tags
+            SET remaining_qty = ?1,
+              status = CASE WHEN ?1 = 0 THEN 'depleted' ELSE 'in_stock' END
+            WHERE id = ?2
+          `).bind(countedQty, tag.id),
+          runtimeDb.prepare(`
+            INSERT INTO stock_count_adjustment_lines
+              (adjustment_id, stock_tag_id, stock_tag_code, qty_change, before_qty, after_qty, created_at)
+            SELECT id, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP
+            FROM stock_count_adjustments WHERE adjustment_no = ?1
+          `).bind(adjustmentNo, tag.id, tag.tagId, difference, systemQty, countedQty),
+        ]);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "";
+        if (/NOT NULL constraint failed:\s*stock_count_adjustments\.material_code/i.test(message)) {
+          return conflictResponse();
+        }
+        throw error;
+      }
       await writeAuditLog(user, {
         module: "stock", moduleLabel: "Stock", action: "tag_stock_count_adjustment", actionLabel: "ตรวจนับและปรับยอด Tag",
         entityType: "stock_tag", entityId: tag.tagId,
