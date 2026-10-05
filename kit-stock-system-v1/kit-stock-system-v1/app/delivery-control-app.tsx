@@ -4,6 +4,7 @@
 
 import { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import DashboardControlCenter from "./dashboard-control-center";
+import { normalizeDueExcelDate } from "./due-excel-date";
 
 type PageKey = "dashboard" | "stock" | "manual-stock" | "stock-count" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
 
@@ -1416,37 +1417,11 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     try {
       if (!/\.xlsx?$/i.test(selected.name)) throw new Error("กรุณาเลือกไฟล์ Excel .xlsx หรือ .xls");
       const xlsx = await import("xlsx");
-      const workbook = xlsx.read(await selected.arrayBuffer(), { type: "array", cellDates: true });
+      // Keep Excel dates as serial numbers: formatted .w text may use month/day,
+      // and converting to JS Date can shift the calendar date across time zones.
+      const workbook = xlsx.read(await selected.arrayBuffer(), { type: "array", cellDates: false });
       const normalized = (value: unknown) => text(value).toLowerCase().replace(/[\s._/()\-]+/g, "");
-      const fileDateMatch = selected.name.match(/(?:^|\D)(\d{1,2})[-_/](\d{1,2})[-_/](\d{2,4})(?:\D|$)/);
-      const normalizeDueDate = (value: unknown) => {
-        if (value instanceof Date && fileDateMatch) {
-          const fileDay = Number(fileDateMatch[1]);
-          const fileMonth = Number(fileDateMatch[2]);
-          const rawYear = Number(fileDateMatch[3]);
-          const fileYear = rawYear < 100 ? 2000 + rawYear : rawYear;
-          const excelMonth = value.getMonth() + 1;
-          const excelDay = value.getDate();
-          const likelySwapped = value.getFullYear() === fileYear
-            && excelDay === fileMonth
-            && excelMonth !== fileMonth
-            && Math.abs(excelMonth - fileDay) <= 7;
-          if (likelySwapped) {
-            return `${fileYear}-${String(fileMonth).padStart(2, "0")}-${String(excelMonth).padStart(2, "0")}`;
-          }
-        }
-        return normalizeDate(value, xlsx);
-      };
-      // ไฟล์ FAC บางฉบับเก็บวันที่จริงใน Excel เป็นเดือน/วัน แต่จัดรูปแบบบนหัวชีตเป็นวัน-เดือน
-      // เช่นค่าภายใน 9 ม.ค. แสดงเป็น 01-09-26 ซึ่งผู้ใช้หมายถึง 1 ก.ย.
-      // จึงยึดข้อความที่ Excel แสดงใน A2 แทน Date object ภายใน
-      const normalizeDisplayedDueDate = (value: unknown) => {
-        const match = text(value).match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);
-        if (!match) return "";
-        const rawYear = Number(match[3]);
-        const year = rawYear > 2400 ? rawYear - 543 : rawYear < 100 ? rawYear + 2000 : rawYear;
-        return `${year}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}`;
-      };
+      const normalizeDueDate = (value: unknown) => normalizeDueExcelDate(value, xlsx, Boolean(workbook.Workbook?.WBProps?.date1904));
       const valueAt = (row: unknown[], headers: string[], aliases: string[]) => {
         const index = headers.findIndex((header) => aliases.includes(header));
         return index >= 0 ? row[index] : "";
@@ -1496,9 +1471,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         const mcpHeaderTime = mcpTimeMatch
           ? `${mcpTimeMatch[1].padStart(2, "0")}:${mcpTimeMatch[2]}`
           : "";
-        const displayedSheetDate = normalizeDisplayedDueDate(sheet["A2"]?.w);
         const sheetDeliveryDate = isTimeSheet
-          ? displayedSheetDate || normalizeDueDate(grid[1]?.[0])
+          ? normalizeDueDate(sheet["A2"]?.v ?? grid[1]?.[0])
           : isMcpSheet ? mcpHeaderDate : "";
         const sheetDeliveryTime = isTimeSheet
           ? normalizeTime(grid[1]?.[1])
