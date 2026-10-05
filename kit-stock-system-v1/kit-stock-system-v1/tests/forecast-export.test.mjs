@@ -48,7 +48,8 @@ test("matrix export carries balances across missing rounds, aggregates daily end
   assert.deepEqual([rounds.F9.v, rounds.G9.v, rounds.H9.v], [100, 100, 95]);
   const zip = xlsx.CFB.read(data, { type: "array" });
   const xml = (path) => new TextDecoder().decode(xlsx.CFB.find(zip, path).content);
-  assert.match(xml("/xl/styles.xml"), /fgColor rgb="FFFF0000"/);
+  assert.match(xml("/xl/styles.xml"), /<font><b\/><color rgb="FF9C0006"\/><\/font>/);
+  assert.match(xml("/xl/styles.xml"), /fgColor rgb="FFFFC7CE"/);
   assert.match(xml("/xl/worksheets/sheet1.xml"), /sqref="F8:G9"/);
   assert.match(xml("/xl/worksheets/sheet1.xml"), /operator="lessThan"><formula>0<\/formula>/);
   assert.match(xml("/xl/worksheets/sheet1.xml"), /xSplit="5" ySplit="7" topLeftCell="F8"/);
