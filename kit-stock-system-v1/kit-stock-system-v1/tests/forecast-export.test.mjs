@@ -13,7 +13,7 @@ async function loadHelper(name) {
   return compiledModule.exports;
 }
 const { calculateForecastRoundCoverage: calculate } = await loadHelper("forecast-coverage");
-const { createForecastExportWorkbook: workbook } = await loadHelper("forecast-export");
+const { createForecastExportWorkbook: workbook, createForecastExportBinary: binary } = await loadHelper("forecast-export");
 const round = (time, qty, date = "2026-10-07") => ({ deliveryDate: date, deliveryTime: time, prodQty: qty });
 
 test("coverage requires the entire Part round across FAC/DO lines and sorts chronologically", () => {
@@ -26,6 +26,33 @@ test("coverage requires the entire Part round across FAC/DO lines and sorts chro
   assert.equal(result.outstandingQty, 100);
   assert.equal(result.overdueQty, 90);
   assert.equal(result.remainingStockAfterForecast, 0);
+  assert.deepEqual(result.timeline.map((point) => point.projectedBalance), [10, -40, -50]);
+});
+
+test("matrix export carries balances across missing rounds, aggregates daily endings, colors negatives and freezes headings", () => {
+  const timelineA = calculate([round("02:00", 40), round("09:00", 50), round("15:00", 10, "2026-10-08")], 50, 0, "2026-10-07T00:00");
+  const timelineB = calculate([round("15:00", 5, "2026-10-08")], 100, 0, "2026-10-07T00:00");
+  const base = { description: "Part", factories: ["FAC1"], forecastQty: 100, dispatchedAfterImport: 0, status: "shortage" };
+  const book = workbook(xlsx, [{ ...base, materialCode: "A", stockQty: 50, ...timelineA }, { ...base, materialCode: "B", stockQty: 100, ...timelineB }],
+    { fileName: "source.xlsx", cutoff: "cutoff", calculatedAt: "now", exportedBy: "User" });
+  const data = binary(xlsx, book);
+  const reopened = xlsx.read(data, { type: "array", cellNF: true });
+  assert.deepEqual(reopened.SheetNames, ["ยอดคงเหลือรายวัน", "ยอดคงเหลือรายรอบ", "Forecast Stock"]);
+  const daily = reopened.Sheets[reopened.SheetNames[0]], rounds = reopened.Sheets[reopened.SheetNames[1]];
+  assert.equal(xlsx.SSF.format(daily.F7.z, daily.F7.v), "07/10/2026");
+  assert.equal(daily.F8.v, -40);
+  assert.equal(daily.G8.v, -50);
+  assert.equal(daily.F9.v, 100);
+  assert.equal(daily.G9.v, 95);
+  assert.deepEqual([rounds.F8.v, rounds.G8.v, rounds.H8.v], [10, -40, -50]);
+  assert.deepEqual([rounds.F9.v, rounds.G9.v, rounds.H9.v], [100, 100, 95]);
+  const zip = xlsx.CFB.read(data, { type: "array" });
+  const xml = (path) => new TextDecoder().decode(xlsx.CFB.find(zip, path).content);
+  assert.match(xml("/xl/styles.xml"), /fgColor rgb="FFFF0000"/);
+  assert.match(xml("/xl/worksheets/sheet1.xml"), /sqref="F8:G9"/);
+  assert.match(xml("/xl/worksheets/sheet1.xml"), /operator="lessThan"><formula>0<\/formula>/);
+  assert.match(xml("/xl/worksheets/sheet1.xml"), /xSplit="5" ySplit="7" topLeftCell="F8"/);
+  assert.equal(daily["!autofilter"].ref, "A7:G9");
 });
 
 test("post-cutoff dispatch is applied before available Stock and respects the forecast horizon", () => {

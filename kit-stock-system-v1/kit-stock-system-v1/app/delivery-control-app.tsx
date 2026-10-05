@@ -5,7 +5,7 @@
 import { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import DashboardControlCenter from "./dashboard-control-center";
 import OverdueWorkPage from "./overdue-work-page";
-import { createForecastExportWorkbook } from "./forecast-export";
+import { createForecastExportWorkbook, createForecastExportBinary } from "./forecast-export";
 import { normalizeDueExcelDate } from "./due-excel-date";
 
 type PageKey = "overdue" | "dashboard" | "stock" | "manual-stock" | "stock-count" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
@@ -190,6 +190,7 @@ type ForecastCoverage = {
   shortageTime: string; firstShortageQty: number; totalShortage: number;
   remainingStockAfterForecast: number; status: "covered" | "shortage" | "no_stock";
   factories: string[]; daysToShortage: number | null;
+  timeline?: Array<{ deliveryDate: string; deliveryTime: string; demandQty: number; projectedBalance: number }>;
   riskGroup: "overdue" | "within3" | "within7" | "within14" | "over14";
 };
 type ForecastSummary = {
@@ -3876,7 +3877,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     if (forecastExporting) return;
     setForecastExporting(true);
     try {
-      const response = await fetch("/api/forecast", { cache: "no-store" });
+      const response = await fetch("/api/forecast?export=1", { cache: "no-store" });
       const snapshot = await response.json() as ForecastPayload;
       if (!response.ok) throw new Error(snapshot.error || "โหลด Forecast เพื่อส่งออกไม่สำเร็จ");
       if (!snapshot.activeImport || !snapshot.coverage.length) throw new Error("ยังไม่มีข้อมูล Forecast สำหรับส่งออก");
@@ -3887,7 +3888,15 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         calculatedAt: formatDateTime(snapshot.calculatedAt || new Date().toISOString()),
         exportedBy: `${user.displayName} (${user.employeeCode})`,
       });
-      xlsx.writeFile(workbook, `KIT_Forecast_Stock_${bangkokDateTimeKey().replace(/[-:]/g, "").replace("T", "_")}.xlsx`);
+      const binary = createForecastExportBinary(xlsx, workbook);
+      const url = URL.createObjectURL(new Blob([new Uint8Array(binary).buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+      const download = document.createElement("a");
+      download.href = url;
+      download.download = `KIT_Forecast_Stock_${bangkokDateTimeKey().replace(/[-:]/g, "").replace("T", "_")}.xlsx`;
+      document.body.appendChild(download);
+      download.click();
+      download.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
       setForecast(snapshot);
       setNotice({ type: "success", text: `ส่งออก Forecast ทุก Part สำเร็จ ${fmt(snapshot.coverage.length)} รายการ` });
       void recordClientAudit("export_forecast_excel", `ส่งออก Forecast Excel ทุก Part ${snapshot.coverage.length} รายการ`, {

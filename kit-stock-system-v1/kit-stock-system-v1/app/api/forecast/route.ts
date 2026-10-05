@@ -92,11 +92,12 @@ function mapImport(row: Record<string, unknown>): ImportRecord {
   };
 }
 
-export async function GET() {
+export async function GET(request?: Request) {
   try {
     const user = await getCurrentUser();
     if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
     if (!hasPermission(user, "forecast")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ดู Forecast Stock" }, { status: 403 });
+    const includeTimeline = request ? new URL(request.url).searchParams.get("export") === "1" : false;
     const { DB } = getRuntimeEnv();
     if (!DB) return Response.json({ error: "ไม่พบการเชื่อมต่อ D1" }, { status: 500 });
 
@@ -173,7 +174,7 @@ export async function GET() {
       const stockQty = stockByMaterial.get(materialCode) || 0;
       const dispatchedAfterImport = dispatchedByMaterial.get(materialCode) || 0;
       const { outstandingQty, overdueQty, totalShortage, coveredThroughDate, coveredThroughTime,
-        shortageDate, shortageTime, firstShortageQty, remainingStockAfterForecast } = calculateForecastRoundCoverage(rows, stockQty, dispatchedAfterImport, nowKey);
+        shortageDate, shortageTime, firstShortageQty, remainingStockAfterForecast, timeline } = calculateForecastRoundCoverage(rows, stockQty, dispatchedAfterImport, nowKey);
 
       const shortageKey = shortageDate ? `${shortageDate}T${shortageTime}` : "";
       const daysToShortage = shortageDate ? dayDistance(today, shortageDate) : null;
@@ -199,6 +200,7 @@ export async function GET() {
         totalShortage,
         remainingStockAfterForecast,
         factories: [...new Set(rows.map((row) => row.factory).filter(Boolean))],
+        ...(includeTimeline ? { timeline } : {}),
         daysToShortage,
         riskGroup,
         status: totalShortage > 0 ? (stockQty > 0 ? "shortage" : "no_stock") : "covered",

@@ -10,12 +10,16 @@ export function calculateForecastRoundCoverage(rows: Array<{ deliveryDate: strin
   }
   let dispatchToApply = dispatchedAfterImport;
   let stockToApply = stockQty;
+  let projectedBalance = stockQty;
+  const timeline: Array<{ deliveryDate: string; deliveryTime: string; demandQty: number; projectedBalance: number }> = [];
   let outstandingQty = 0, overdueQty = 0, totalShortage = 0, firstShortageQty = 0;
   let coveredThroughDate = "", coveredThroughTime = "", shortageDate = "", shortageTime = "";
   for (const [key, row] of [...rounds.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     const dispatched = Math.min(row.prodQty, dispatchToApply);
     dispatchToApply -= dispatched;
     const remainingDemand = row.prodQty - dispatched;
+    projectedBalance -= remainingDemand;
+    timeline.push({ deliveryDate: row.deliveryDate, deliveryTime: row.deliveryTime, demandQty: remainingDemand, projectedBalance });
     outstandingQty += remainingDemand;
     if (key < nowKey) overdueQty += remainingDemand;
     const covered = Math.min(remainingDemand, stockToApply);
@@ -33,5 +37,5 @@ export function calculateForecastRoundCoverage(rows: Array<{ deliveryDate: strin
       }
     }
   }
-  return { outstandingQty, overdueQty, totalShortage, firstShortageQty, coveredThroughDate, coveredThroughTime, shortageDate, shortageTime, remainingStockAfterForecast: stockToApply };
+  return { outstandingQty, overdueQty, totalShortage, firstShortageQty, coveredThroughDate, coveredThroughTime, shortageDate, shortageTime, remainingStockAfterForecast: stockToApply, timeline };
 }
