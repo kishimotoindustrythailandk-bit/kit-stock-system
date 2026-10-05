@@ -5,6 +5,7 @@
 import { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import DashboardControlCenter from "./dashboard-control-center";
 import OverdueWorkPage from "./overdue-work-page";
+import { createForecastExportWorkbook } from "./forecast-export";
 import { normalizeDueExcelDate } from "./due-excel-date";
 
 type PageKey = "overdue" | "dashboard" | "stock" | "manual-stock" | "stock-count" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
@@ -724,6 +725,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   const [forecastImporting, setForecastImporting] = useState(false);
   const [forecastProgress, setForecastProgress] = useState(0);
   const [forecastSearch, setForecastSearch] = useState("");
+  const [forecastExporting, setForecastExporting] = useState(false);
   const [forecastStatus, setForecastStatus] = useState<"all" | "overdue" | "within3" | "within7" | "within14" | "over14" | "shortage" | "covered">("all");
   const [forecastFactory, setForecastFactory] = useState("ALL");
   const [forecastRange, setForecastRange] = useState<7 | 14 | 30>(14);
@@ -3870,6 +3872,33 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     </div>;
   }
 
+  async function exportForecastExcel() {
+    if (forecastExporting) return;
+    setForecastExporting(true);
+    try {
+      const response = await fetch("/api/forecast", { cache: "no-store" });
+      const snapshot = await response.json() as ForecastPayload;
+      if (!response.ok) throw new Error(snapshot.error || "โหลด Forecast เพื่อส่งออกไม่สำเร็จ");
+      if (!snapshot.activeImport || !snapshot.coverage.length) throw new Error("ยังไม่มีข้อมูล Forecast สำหรับส่งออก");
+      const xlsx = await import("xlsx");
+      const workbook = createForecastExportWorkbook(xlsx, snapshot.coverage, {
+        fileName: snapshot.activeImport.fileName,
+        cutoff: formatDateTime(snapshot.activeImport.sourceCalculatedAt),
+        calculatedAt: formatDateTime(snapshot.calculatedAt || new Date().toISOString()),
+        exportedBy: `${user.displayName} (${user.employeeCode})`,
+      });
+      xlsx.writeFile(workbook, `KIT_Forecast_Stock_${bangkokDateTimeKey().replace(/[-:]/g, "").replace("T", "_")}.xlsx`);
+      setForecast(snapshot);
+      setNotice({ type: "success", text: `ส่งออก Forecast ทุก Part สำเร็จ ${fmt(snapshot.coverage.length)} รายการ` });
+      void recordClientAudit("export_forecast_excel", `ส่งออก Forecast Excel ทุก Part ${snapshot.coverage.length} รายการ`, {
+        itemCount: snapshot.coverage.length, forecastImportId: snapshot.activeImport.id,
+        fileName: snapshot.activeImport.fileName, calculatedAt: snapshot.calculatedAt,
+      });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ส่งออก Forecast ไม่สำเร็จ" });
+    } finally { setForecastExporting(false); }
+  }
+
   function renderForecast() {
     const emptyRisk = { overdue: 0, within3: 0, within7: 0, within14: 0, over14: 0 };
     const summaryData = forecast.summary || { materialCount: 0, stockQty: 0, outstandingQty: 0, overdueQty: 0, totalShortage: 0, coveredMaterials: 0, shortageMaterials: 0, riskGroups: emptyRisk };
@@ -3902,7 +3931,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     return <div className="forecast-page">
       <section className="forecast-hero">
         <div><span className="forecast-hero-icon">▥</span><div><h2>Forecast Stock</h2><p>วางแผนการผลิตล่วงหน้า ป้องกันปัญหา Stock ไม่เพียงพอ</p></div></div>
-        <button className="button secondary" disabled={forecastLoading} onClick={() => void loadForecast()}>↻ รีเฟรชข้อมูล</button>
+        <div className="forecast-export-actions"><button className="button secondary" disabled={forecastLoading} onClick={() => void loadForecast()}>↻ รีเฟรชข้อมูล</button><button className="button primary" disabled={!forecast.activeImport || forecastLoading || forecastExporting} onClick={() => void exportForecastExcel()}>{forecastExporting ? "กำลังส่งออก…" : "⇩ Export Excel (ทุก Part)"}</button></div>
       </section>
       <div className="metrics five forecast-metrics page-summary">
         <button className={`forecast-metric-button ${forecastStatus === "all" ? "active" : ""}`} onClick={() => setForecastStatus("all")}><MetricCard tone="blue" icon="▧" label="จำนวน Part ใน Forecast" value={fmt(summaryData.materialCount)} suffix="Part" /></button>

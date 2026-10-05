@@ -1,6 +1,7 @@
 import { getCurrentUser, hasPermission } from "../../cloudflare-auth";
 import { getRuntimeEnv } from "../../../runtime/env";
 import { writeAuditLog } from "../../audit-log";
+import { calculateForecastRoundCoverage } from "../../forecast-coverage";
 
 type ForecastRow = {
   sourceKey: string;
@@ -171,46 +172,8 @@ export async function GET() {
     const coverage = [...grouped.entries()].map(([materialCode, rows]) => {
       const stockQty = stockByMaterial.get(materialCode) || 0;
       const dispatchedAfterImport = dispatchedByMaterial.get(materialCode) || 0;
-      let dispatchToApply = dispatchedAfterImport;
-      let stockToApply = stockQty;
-      let outstandingQty = 0;
-      let overdueQty = 0;
-      let totalShortage = 0;
-      let coveredThroughDate = "";
-      let coveredThroughTime = "";
-      let shortageDate = "";
-      let shortageTime = "";
-      let firstShortageQty = 0;
-
-      for (const row of rows) {
-        const original = Math.max(0, Number(row.prodQty || 0));
-        const dispatched = Math.min(original, dispatchToApply);
-        dispatchToApply -= dispatched;
-        const remainingDemand = original - dispatched;
-        outstandingQty += remainingDemand;
-        if (`${row.deliveryDate}T${row.deliveryTime}` < nowKey) overdueQty += remainingDemand;
-        if (remainingDemand === 0) {
-          if (!shortageDate) {
-            coveredThroughDate = row.deliveryDate;
-            coveredThroughTime = row.deliveryTime;
-          }
-          continue;
-        }
-        const covered = Math.min(remainingDemand, stockToApply);
-        stockToApply -= covered;
-        if (covered === remainingDemand && !shortageDate) {
-          coveredThroughDate = row.deliveryDate;
-          coveredThroughTime = row.deliveryTime;
-        } else {
-          const shortage = remainingDemand - covered;
-          totalShortage += shortage;
-          if (!shortageDate) {
-            shortageDate = row.deliveryDate;
-            shortageTime = row.deliveryTime;
-            firstShortageQty = shortage;
-          }
-        }
-      }
+      const { outstandingQty, overdueQty, totalShortage, coveredThroughDate, coveredThroughTime,
+        shortageDate, shortageTime, firstShortageQty, remainingStockAfterForecast } = calculateForecastRoundCoverage(rows, stockQty, dispatchedAfterImport, nowKey);
 
       const shortageKey = shortageDate ? `${shortageDate}T${shortageTime}` : "";
       const daysToShortage = shortageDate ? dayDistance(today, shortageDate) : null;
@@ -234,7 +197,7 @@ export async function GET() {
         shortageTime,
         firstShortageQty,
         totalShortage,
-        remainingStockAfterForecast: stockToApply,
+        remainingStockAfterForecast,
         factories: [...new Set(rows.map((row) => row.factory).filter(Boolean))],
         daysToShortage,
         riskGroup,

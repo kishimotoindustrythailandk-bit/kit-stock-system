@@ -33,6 +33,7 @@ export async function GET(request: Request) {
 const CLIENT_EVENTS: Record<string, { module: string; moduleLabel: string; actionLabel: string }> = {
   arrange_warning: { module: "arrange", moduleLabel: "จัดงาน", actionLabel: "แจ้งเตือนจัดงาน" },
   save_settings: { module: "settings", moduleLabel: "ตั้งค่า", actionLabel: "บันทึกการตั้งค่า" },
+  export_forecast_excel: { module: "forecast", moduleLabel: "Forecast", actionLabel: "ส่งออก Forecast Excel" },
   export_history: { module: "history", moduleLabel: "ประวัติ", actionLabel: "ส่งออกประวัติ Excel" },
   export_report_excel: { module: "reports", moduleLabel: "รายงาน", actionLabel: "ส่งออกรายงาน Excel" },
   export_report_csv: { module: "reports", moduleLabel: "รายงาน", actionLabel: "ส่งออกรายงาน CSV" },
@@ -48,6 +49,7 @@ export async function POST(request: Request) {
     const definition = CLIENT_EVENTS[key];
     if (!definition) return Response.json({ error: "ไม่รู้จักกิจกรรมที่ต้องการบันทึก" }, { status: 400 });
     if (key === "arrange_warning" && !hasPermission(user, "arrange")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์จัดงาน" }, { status: 403 });
+    if (key === "export_forecast_excel" && !hasPermission(user, "forecast")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ Forecast" }, { status: 403 });
     await writeAuditLog(user, {
       ...definition, action: key, summary: String(body.summary || definition.actionLabel).slice(0, 1000), details: body.details,
     }, request);

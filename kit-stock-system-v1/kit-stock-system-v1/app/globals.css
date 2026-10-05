@@ -2603,3 +2603,5 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .overdue-monitor-shell .overdue-work-page{min-height:calc(100dvh - 32px);border-radius:12px}
 .overdue-monitor-shell .page-summary{display:grid}
 @media(max-width:720px){.overdue-monitor-shell{padding:8px}.overdue-monitor-shell .overdue-work-page{min-height:calc(100dvh - 16px)}}
+
+.forecast-export-actions{display:flex;gap:8px;flex-wrap:wrap}@media(max-width:720px){.forecast-export-actions{width:100%}.forecast-export-actions .button{flex:1;min-height:44px}}
