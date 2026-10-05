@@ -1876,9 +1876,16 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         body: JSON.stringify({
           action: "preview_tag_count", rawPayload: stockCountForm.rawPayload,
           countedQty: Number(stockCountForm.countedQty), countDate: stockCountForm.countDate,
+          expectedSystemQty: stockCountPreview?.systemQty,
+          expectedReservedQty: stockCountPreview?.reservedQty,
+          expectedStatus: stockCountPreview?.status,
         }),
       });
       const data = await response.json() as StockCountPreview & { error?: string };
+      if (response.status === 409) {
+        setStockCountConfirmOpen(false);
+        setStockCountPreview(null);
+      }
       if (!response.ok) throw new Error(data.error || "ตรวจสอบยอด Tag ไม่สำเร็จ");
       setStockCountForm((current) => ({
         ...current,
@@ -1903,10 +1910,17 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         body: JSON.stringify({
           action: "confirm_tag_count", rawPayload: stockCountForm.rawPayload,
           countedQty: Number(stockCountForm.countedQty), countDate: stockCountForm.countDate,
+          expectedSystemQty: stockCountPreview?.systemQty,
+          expectedReservedQty: stockCountPreview?.reservedQty,
+          expectedStatus: stockCountPreview?.status,
           reason: stockCountForm.reason,
         }),
       });
       const data = await response.json() as StockCountPreview & { adjustmentNo?: string; error?: string };
+      if (response.status === 409) {
+        setStockCountConfirmOpen(false);
+        setStockCountPreview(null);
+      }
       if (!response.ok) throw new Error(data.error || "ปรับยอด Tag ไม่สำเร็จ");
       setStockCountConfirmOpen(false);
       setStockCountPreview(null);
