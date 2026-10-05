@@ -13,7 +13,7 @@ import { writeAuditLog } from "../../../audit-log";
  */
 export async function POST(request: Request) {
   try {
-    const user = await getCurrentUser();
+    const user = await getCurrentUser({ allowPinChange: true });
     if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
 
     const body = await request.json() as { currentPin?: string; newPin?: string };

@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { repairFirstLoginPin } from "./first-login-pin";
 import { getRuntimeEnv } from "../runtime/env";
 
 export type CloudUser = {
@@ -44,7 +45,7 @@ type CloudUserRow = Omit<CloudUser, "permissions" | "mustChangePin"> & {
   mustChangePin: number;
 };
 
-export async function getCurrentUser(): Promise<CloudUser | null> {
+export async function getCurrentUser(options: { allowPinChange?: boolean } = {}): Promise<CloudUser | null> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (!token) return null;
   const db = getRuntimeEnv().DB;
@@ -65,6 +66,10 @@ export async function getCurrentUser(): Promise<CloudUser | null> {
     LIMIT 1
   `).bind(token, expires).first<CloudUserRow>();
   if (!row) return null;
+  const mustChangePin = await repairFirstLoginPin(db, row);
+  // Only the PIN-change/login/logout pages may use a provisional session.
+  // Normal APIs must not allow bypassing the first-login redirect.
+  if (mustChangePin && !options.allowPinChange) return null;
   const permissions = row.permissionCsv
     ? normalizePermissions(row.permissionCsv, row.role)
     : defaultPermissions(row.role);
@@ -75,12 +80,12 @@ export async function getCurrentUser(): Promise<CloudUser | null> {
     email: row.email,
     role: row.role,
     permissions,
-    mustChangePin: Number(row.mustChangePin) === 1,
+    mustChangePin,
   };
 }
 
 export async function requireCloudUser(): Promise<CloudUser> {
-  const user = await getCurrentUser();
+  const user = await getCurrentUser({ allowPinChange: true });
   if (!user) redirect("/login");
   // บัญชีที่ยังใช้ PIN ตั้งต้นเข้าหน้าอื่นไม่ได้จนกว่าจะตั้ง PIN ของตัวเอง
   if (user.mustChangePin) redirect("/change-pin");

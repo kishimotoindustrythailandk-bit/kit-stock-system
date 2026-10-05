@@ -7,8 +7,8 @@ import LoginForm from "./login-form";
 export const dynamic = "force-dynamic";
 
 export default async function LoginPage() {
-  const user = await getCurrentUser();
-  if (user) redirect("/");
+  const user = await getCurrentUser({ allowPinChange: true });
+  if (user) redirect(user.mustChangePin ? "/change-pin" : "/");
   return <main className="login-page login-v2">
     <section className="login-card">
       <div className="login-brand"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
