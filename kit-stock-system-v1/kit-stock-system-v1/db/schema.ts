@@ -292,6 +292,7 @@ export const appUsers = sqliteTable("app_users", {
   email: text("email").notNull().default(""),
   role: text("role").notNull().default("staff"),
   pinHash: text("pin_hash").notNull(),
+  mustChangePin: integer("must_change_pin", { mode: "boolean" }).notNull().default(false),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });

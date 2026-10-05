@@ -20,9 +20,9 @@ export default function LoginForm() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ employeeCode, pin, remember }),
       });
-      const result = await response.json() as { error?: string };
+      const result = await response.json() as { error?: string; mustChangePin?: boolean };
       if (!response.ok) throw new Error(result.error || "เข้าสู่ระบบไม่สำเร็จ");
-      window.location.href = "/";
+      window.location.href = result.mustChangePin ? "/change-pin" : "/";
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "เข้าสู่ระบบไม่สำเร็จ");
     } finally {

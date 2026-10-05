@@ -1,3 +1,4 @@
+import { repairFirstLoginPin } from "../../../first-login-pin";
 import { getRuntimeEnv } from "../../../../runtime/env";
 import { SESSION_COOKIE } from "../../../cloudflare-auth";
 import { checkLock, clearFailures, DUMMY_PIN_HASH, MAX_FAILED_ATTEMPTS, recordFailure } from "../../../login-throttle";
@@ -75,7 +76,7 @@ export async function POST(request: Request) {
 
     // บัญชีที่ยัง login ด้วย PIN ตั้งต้นจาก environment variable จะถูกบังคับเปลี่ยน PIN
     // และเก็บเป็น PBKDF2 hash ทันทีในขั้นตอนถัดไป
-    const mustChangePin = usedInitialPin || Number(user.mustChangePin) === 1;
+    const mustChangePin = usedInitialPin || await repairFirstLoginPin(db, user);
     if (usedInitialPin) {
       await db.prepare("UPDATE app_users SET must_change_pin = 1 WHERE id = ?1").bind(user.id).run();
     }

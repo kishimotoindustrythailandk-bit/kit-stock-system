@@ -106,7 +106,7 @@ export async function POST(request: Request) {
       return Response.json({ error: permissionResult.error }, { status: 400 });
     }
     const permissions = permissionResult.permissions;
-    const [created] = await getDb().insert(appUsers).values({ employeeCode, displayName, email, role, pinHash: await hashPin(pin), active: true }).returning({
+    const [created] = await getDb().insert(appUsers).values({ employeeCode, displayName, email, role, pinHash: await hashPin(pin), mustChangePin: true, active: true }).returning({
       id: appUsers.id, employeeCode: appUsers.employeeCode, displayName: appUsers.displayName, email: appUsers.email, role: appUsers.role, active: appUsers.active,
     });
     await replacePermissions(created.id, permissions);
@@ -162,14 +162,17 @@ export async function PATCH(request: Request) {
       }
     }
 
-    const values: { employeeCode: string; displayName: string; email: string; role: string; active: boolean; pinHash?: string } = {
+    const values: { employeeCode: string; displayName: string; email: string; role: string; active: boolean; pinHash?: string; mustChangePin?: boolean } = {
       employeeCode, displayName, email, role, active: body.active === undefined ? target.active : Boolean(body.active),
     };
-    if (pin) values.pinHash = await hashPin(pin);
+    if (pin) {
+      values.pinHash = await hashPin(pin);
+      values.mustChangePin = true;
+    }
     const [updated] = await getDb().update(appUsers).set(values).where(eq(appUsers.id, id)).returning({
       id: appUsers.id, employeeCode: appUsers.employeeCode, displayName: appUsers.displayName, email: appUsers.email, role: appUsers.role, active: appUsers.active,
     });
-    if (!updated.active) await getDb().delete(appSessions).where(eq(appSessions.userId, id));
+    if (!updated.active || pin) await getDb().delete(appSessions).where(eq(appSessions.userId, id));
     if (permissions) await replacePermissions(id, permissions);
 
     let effectivePermissions = permissions;

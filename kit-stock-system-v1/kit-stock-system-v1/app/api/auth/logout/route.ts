@@ -19,7 +19,7 @@ function sessionTokenFrom(request: Request) {
  * โดยที่เจ้าตัวไม่รู้ตัว (CSRF) — น่ารำคาญมากถ้าเกิดตอนกำลังสแกนของอยู่หน้างาน
  */
 export async function POST(request: Request) {
-  const user = await getCurrentUser().catch(() => null);
+  const user = await getCurrentUser({ allowPinChange: true }).catch(() => null);
   const token = sessionTokenFrom(request);
   if (user) await writeAuditLog(user, {
     module: "security", moduleLabel: "ความปลอดภัย", action: "logout", actionLabel: "ออกจากระบบ",
