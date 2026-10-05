@@ -40,7 +40,7 @@ function requestMeta(request?: Request) {
 
 export async function writeAuditLog(user: Pick<CloudUser, "id" | "employeeCode" | "displayName" | "email" | "role">, event: AuditEvent, request?: Request) {
   const { DB } = getRuntimeEnv();
-  if (!DB) return;
+  if (!DB) return false;
   const meta = requestMeta(request);
   try {
     await DB.prepare(`
@@ -57,8 +57,10 @@ export async function writeAuditLog(user: Pick<CloudUser, "id" | "employeeCode" 
       user.id, user.employeeCode.slice(0, 60), user.displayName.slice(0, 120), user.email.slice(0, 180), user.role.slice(0, 60),
       meta.ip, meta.userAgent,
     ).run();
+    return true;
   } catch (error) {
     // Audit ต้องไม่ทำให้ธุรกรรมหลักที่สำเร็จแล้วกลับกลายเป็น error
     console.error("audit log write failed", error);
+    return false;
   }
 }

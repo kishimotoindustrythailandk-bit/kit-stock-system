@@ -2580,3 +2580,11 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .arrange-scope-label+.arrange-due-search{margin-top:5px}
 .arrange-due-search select{width:100%;min-width:0;min-height:44px;border:0;background:#fff;color:#19345f;font:inherit}
 .arrange-selected-label{white-space:normal}
+
+.arrange-warning-modal{width:min(480px,calc(100vw - 24px));padding:22px;border-radius:16px;background:#fff;box-shadow:var(--shadow)}
+.arrange-warning-modal header{display:flex;align-items:center;gap:12px;color:#b85e00}
+.arrange-warning-modal header span{display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:#fff1d7;font-size:26px;font-weight:800}
+.arrange-warning-modal h3{margin:0}.arrange-warning-modal p{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.65}
+.arrange-warning-modal dl{display:grid;gap:8px;padding:12px;border-radius:10px;background:#f3f7fe}
+.arrange-warning-modal dl>div{display:flex;justify-content:space-between;gap:12px}.arrange-warning-modal dd{margin:0;font-weight:700}
+.arrange-warning-modal small{display:block;margin:12px 0;color:#60728d;line-height:1.5}

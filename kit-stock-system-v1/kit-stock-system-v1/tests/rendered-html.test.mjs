@@ -438,7 +438,7 @@ test("separates arranging and dispatching with guards before mutations", async (
   assert.match(authSource, /"dispatch"/);
 
   assertBefore(stageAction, /hasPermission\(user, "arrange"\)/, /INSERT INTO stock_picks/);
-  assert.match(stageAction, /status: 403/);
+  assert.match(stageAction, /stageWarning\("บัญชีนี้ไม่มีสิทธิ์จัดงาน", 403\)/);
   assert.match(duePost, /if \(!user\).*status: 401/);
   assertBefore(duePost, /hasPermission\(user, "dispatch"\)/, /const payload = await request\.json/);
   assertBefore(duePost, /hasPermission\(user, "dispatch"\)/, /DB\.batch/);

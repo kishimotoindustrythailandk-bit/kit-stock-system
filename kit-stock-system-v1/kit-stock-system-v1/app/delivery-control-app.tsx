@@ -733,6 +733,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [verifyLoading, setVerifyLoading] = useState(false);
   const [arrangeDueDate, setArrangeDueDate] = useState("");
+  const [arrangeWarning, setArrangeWarning] = useState<{ message: string; date: string; time: string; fact: string } | null>(null);
   const [arrangeDueTime, setArrangeDueTime] = useState("");
   const [arrangeDueFact, setArrangeDueFact] = useState("");
   const [arrangeTag, setArrangeTag] = useState("");
@@ -1732,7 +1733,21 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const event = typeof value === "object" ? value : undefined;
     event?.preventDefault();
     const scannedValue = typeof value === "string" ? value.trim() : arrangeTag.trim();
-    if (!effectiveArrangeDueDate || !scannedValue || checkingTag) return;
+    if (checkingTag || arrangeWarning) return;
+    let warningLogged = false;
+    const warn = async (message: string) => {
+      setArrangeWarning({ message, date: effectiveArrangeDueDate, time: arrangeDueTime, fact: arrangeDueFact });
+      setNotice({ type: "error", text: message });
+      setArrangeTag("");
+      if (!warningLogged) await recordClientAudit("arrange_warning", `${message} · วันที่ ${effectiveArrangeDueDate || "ยังไม่เลือก"} · รอบ ${arrangeDueTime || "ทั้งหมด"} · ${arrangeDueFact || "ทุก FAC"}`, {
+        warningMessage: message, deliveryDate: effectiveArrangeDueDate, deliveryTime: arrangeDueTime, fact: arrangeDueFact,
+        stockTagCode: /^KITSTK-[A-Z0-9-]+$/i.test(scannedValue) ? scannedValue : "[Tag ไม่ถูกต้อง]",
+      });
+    };
+    if (!effectiveArrangeDueDate || !scannedValue) {
+      await warn(!effectiveArrangeDueDate ? "กรุณาเลือกวันที่ Due ก่อนสแกน Tag" : "กรุณาสแกนหรือระบุ KIT Stock Tag");
+      return;
+    }
     // Keep the chosen scope even after its last remaining Due is arranged.
     setArrangeDueDate(effectiveArrangeDueDate);
     setCheckingTag(true);
@@ -1751,7 +1766,8 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
           qty: Number(arrangeQty || 0),
         }),
       });
-      const result = await response.json() as ArrangementPreview & { error?: string };
+      const result = await response.json() as ArrangementPreview & { error?: string; warningLogged?: boolean };
+      warningLogged = Boolean(result.warningLogged);
       if (!response.ok) throw new Error(result.error || "จัดงานไม่สำเร็จ");
       setArrangementPreview(result);
       setArrangeTag("");
@@ -1766,7 +1782,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         else tagInput.current?.focus();
       }, 120);
     } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "จัดงานไม่สำเร็จ" });
+      await warn(caught instanceof Error ? caught.message : "จัดงานไม่สำเร็จ");
     } finally {
       setCheckingTag(false);
     }
@@ -2565,7 +2581,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     Number(due.reqQty) > Number(due.scannedQty) + Number(due.arrangedQty || 0)
   ), [payload.dues]);
   const arrangeDueDates = useMemo(() => [...new Set(payload.dues.map((due) => due.deliveryDate))].sort(), [payload.dues]);
-  const effectiveArrangeDueDate = arrangeDueDates.includes(arrangeDueDate)
+  const effectiveArrangeDueDate = arrangeDueDate
     ? arrangeDueDate
     : arrangeDueDates.includes(bangkokDateTimeKey().slice(0, 10))
       ? bangkokDateTimeKey().slice(0, 10)
@@ -3574,15 +3590,15 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
             <header><span>▤</span><div><h3>เลือก Due ที่จะจัด</h3><p>เลือกวันที่ รอบส่งงาน และ FAC ก่อนสแกน Tag</p></div></header>
             <label className="arrange-scope-label" htmlFor="arrange-scope-date">วันที่ส่งงาน</label>
             <div className="arrange-due-search"><span>◷</span><select id="arrange-scope-date" aria-label="วันที่ส่งงานสำหรับจัดงาน" disabled={checkingTag} value={effectiveArrangeDueDate} onChange={(event) => { setArrangeDueDate(event.target.value); setArrangeDueTime(""); setArrangeDueFact(""); setArrangementPreview(null); setArrangeListPage(1); }}>
-              {arrangeDueDates.map((date) => <option key={date} value={date}>{formatDate(date)} · {fmt(arrangeableDues.filter((due) => due.deliveryDate === date).length)} รายการ</option>)}
+              {[...new Set([...arrangeDueDates, ...(effectiveArrangeDueDate ? [effectiveArrangeDueDate] : [])])].sort().map((date) => <option key={date} value={date}>{formatDate(date)} · {fmt(arrangeableDues.filter((due) => due.deliveryDate === date).length)} รายการ</option>)}
             </select></div>
             <label className="arrange-scope-label" htmlFor="arrange-scope-time">รอบส่งงาน</label>
-            <div className="arrange-due-search"><span>◷</span><select id="arrange-scope-time" aria-label="รอบส่งงานสำหรับจัดงาน" disabled={checkingTag || !effectiveArrangeDueDate} value={arrangeDueTime} onChange={(event) => { setArrangeDueDate(effectiveArrangeDueDate); setArrangeDueTime(event.target.value); setArrangeDueFact(""); setArrangementPreview(null); setArrangeListPage(1); }}>
-              <option value="">ทุกรอบ</option>{arrangeDueTimes.map((time) => <option key={time} value={time}>{time}</option>)}
+            <div className="arrange-due-search"><span>◷</span><select id="arrange-scope-time" aria-label="รอบส่งงานสำหรับจัดงาน" disabled={checkingTag || !effectiveArrangeDueDate} value={arrangeDueTime} onChange={(event) => { setArrangeDueDate(effectiveArrangeDueDate); setArrangeDueTime(event.target.value); setArrangementPreview(null); setArrangeListPage(1); }}>
+              <option value="">ทุกรอบ</option>{[...new Set([...arrangeDueTimes, ...(arrangeDueTime ? [arrangeDueTime] : [])])].sort().map((time) => <option key={time} value={time}>{time}</option>)}
             </select></div>
             <label className="arrange-scope-label" htmlFor="arrange-scope-fact">FAC</label>
             <div className="arrange-due-search"><span>▤</span><select id="arrange-scope-fact" aria-label="FAC สำหรับจัดงาน" disabled={checkingTag || !effectiveArrangeDueDate} value={arrangeDueFact} onChange={(event) => { setArrangeDueDate(effectiveArrangeDueDate); setArrangeDueFact(event.target.value); setArrangementPreview(null); setArrangeListPage(1); }}>
-              <option value="">ทุก FAC</option>{arrangeDueFacts.map((fact) => <option key={fact} value={fact}>{fact}</option>)}
+              <option value="">ทุก FAC</option>{[...new Set([...arrangeDueFacts, ...(arrangeDueFact ? [arrangeDueFact] : [])])].sort().map((fact) => <option key={fact} value={fact}>{fact}</option>)}
             </select></div>
             <div className="arrange-due-cards">
               {arrangeDueDates.slice(0, 6).map((date) => {
@@ -4007,6 +4023,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       actor: item.scannedByName || "—", tone: "red", kind: "dispatch",
     }));
     const auditKind = (action: string) => {
+      if (/warning/.test(action)) return "warning";
       if (/delete|remove|clear|cancel/.test(action)) return "delete";
       if (/permission|role|user_access/.test(action)) return "permission";
       if (/import/.test(action)) return "import";
@@ -4014,7 +4031,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       if (/create|add|print|receive|stage|dispatch|issue/.test(action)) return "create";
       return "update";
     };
-    const auditTone = (kind: string) => kind === "delete" ? "red" : kind === "permission" ? "purple" : kind === "import" ? "blue" : kind === "security" ? "orange" : kind === "create" ? "green" : "blue";
+    const auditTone = (kind: string) => kind === "warning" ? "orange" : kind === "delete" ? "red" : kind === "permission" ? "purple" : kind === "import" ? "blue" : kind === "security" ? "orange" : kind === "create" ? "green" : "blue";
     const auditActivities = auditLogs.map((item) => {
       const kind = auditKind(item.actionKey);
       const identity = item.entityId ? ` · ${item.entityId}` : "";
@@ -4050,6 +4067,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     );
     const historyTabs = [
       { key: "all", label: "ทั้งหมด", count: activities.length },
+      { key: "warning", label: "แจ้งเตือน", count: activities.filter((item) => item.kind === "warning").length },
       { key: "create", label: "เพิ่ม / ทำรายการ", count: activities.filter((item) => item.kind === "create").length },
       { key: "import", label: "นำเข้าไฟล์", count: activities.filter((item) => item.kind === "import").length },
       { key: "update", label: "แก้ไขข้อมูล", count: activities.filter((item) => item.kind === "update").length },
@@ -4254,6 +4272,13 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       <button onClick={() => setMenuOpen(true)}><span>☰</span><small>เมนู</small></button>
       <a className="bottom-logout" href={signOutPath} onClick={signOut}><span>↪</span><small>ออกระบบ</small></a>
     </nav>
+    {arrangeWarning && <div className="modal-backdrop" role="alertdialog" aria-modal="true" aria-labelledby="arrange-warning-title" aria-describedby="arrange-warning-message"><section className="arrange-warning-modal" onKeyDown={(event) => { if (event.key === "Tab") event.preventDefault(); }}>
+      <header><span>!</span><h3 id="arrange-warning-title">แจ้งเตือนจัดงาน</h3></header>
+      <p id="arrange-warning-message">{arrangeWarning.message}</p>
+      <dl><div><dt>วันที่ส่งงาน</dt><dd>{formatDate(arrangeWarning.date) || "ยังไม่เลือก"}</dd></div><div><dt>รอบส่งงาน</dt><dd>{arrangeWarning.time || "ทุกรอบ"}</dd></div><div><dt>FAC</dt><dd>{arrangeWarning.fact || "ทุก FAC"}</dd></div></dl>
+      <small>ระบบคงวันที่ รอบ และ FAC ที่เลือกไว้ สามารถเปลี่ยนตัวเลือกก่อนสแกนต่อได้</small>
+      <button type="button" className="button primary full" autoFocus onClick={() => { setArrangeWarning(null); window.setTimeout(() => tagInput.current?.focus(), 0); }}>รับทราบ</button>
+    </section></div>}
     {replacementPreview && <div className="modal-backdrop replacement-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="replacement-confirm-title"><div className="replacement-confirm-modal">
       <header><div><span>↺</span><div><small>ตรวจพบ KIT Stock Tag</small><h3 id="replacement-confirm-title">ตรวจสอบก่อนเบิกงานทดแทน</h3></div></div><button type="button" onClick={() => { setReplacementPreview(null); setReplacementTag(""); setReplacementQty(""); }} aria-label="ปิด">×</button></header>
       <div className="replacement-confirm-content">
