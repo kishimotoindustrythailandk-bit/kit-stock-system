@@ -2527,3 +2527,50 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .manual-tags-modal>header{display:flex;justify-content:space-between;align-items:start;border-bottom:1px solid #e5edf6;padding-bottom:12px}.manual-tags-modal>header div{display:grid}.manual-tags-modal>header button{border:0;background:#eef4fb;border-radius:50%;width:32px;height:32px;font-size:20px;cursor:pointer}.manual-tags-modal article{display:flex;justify-content:space-between;padding:12px;border-bottom:1px solid #edf2f8}.manual-tags-modal article b{color:#0d4f9d}
 @media(max-width:900px){.manual-stock-workspace{grid-template-columns:1fr}.manual-receipt-history{margin-left:10px;margin-right:10px}.manual-stock-submit{width:calc(100% - 20px);margin-left:10px;margin-right:10px}}
 @media(max-width:600px){.manual-stock-workspace{padding:10px}.manual-preview-kpis{grid-template-columns:1fr 1fr}.manual-preview-kpis>span:last-child{grid-column:1/-1}.duplicate-summary{grid-template-columns:1fr}.manual-confirm-modal footer .button,.manual-success-modal footer .button{width:100%}.manual-history-scroll{max-height:360px}}
+
+/* All pages: keep overview cards on desktop and start with the task on phones. */
+@media (max-width: 720px) {
+  .page-summary { display: none !important; }
+  .control-main, .control-content, .control-content > *,
+  .control-content section, .control-content article,
+  .control-content form, .control-content label { min-width: 0; max-width: 100%; }
+  .control-content { padding: 12px 10px calc(100px + env(safe-area-inset-bottom)); }
+  .control-content h2, .control-content h3, .control-content p,
+  .control-content label, .control-content b, .control-content small { overflow-wrap: anywhere; }
+  .control-content input:not([type="checkbox"]):not([type="radio"]),
+  .control-content select, .control-content textarea,
+  .modal-backdrop input:not([type="checkbox"]):not([type="radio"]),
+  .modal-backdrop select, .modal-backdrop textarea { min-width: 0; max-width: 100%; font-size: 16px; }
+  .control-content .button, .control-content .tiny-button,
+  .control-content .icon-button, .control-content .link-button,
+  .modal-backdrop .button, .mobile-bottom-nav button, .mobile-bottom-nav a { min-height: 44px; }
+  .control-content .button { white-space: normal; overflow-wrap: anywhere; }
+  .panel-head, .part-panel-head, .tag-panel-head,
+  .users-overview-card > header, .users-list-card > header,
+  .history-log-card > header, .manual-receipt-history > header {
+    flex-wrap: wrap; gap: 10px;
+  }
+  .users-overview-actions, .users-list-tools, .user-actions,
+  .panel-actions, .part-list-tools { flex-wrap: wrap; min-width: 0; max-width: 100%; }
+  .users-list-tools { width: 100%; }
+  .users-list-tools label { width: 100%; flex: 1 1 100%; }
+  .form-grid, .part-editor-grid, .tag-create-form, .stock-management-form,
+  .replacement-form, .part-bundle-form { grid-template-columns: minmax(0, 1fr); }
+  .form-grid > *, .part-editor-grid > *, .tag-create-form > *,
+  .stock-management-form > *, .replacement-form > *, .part-bundle-form > * { grid-column: auto; }
+  .tag-auto-photo { grid-row: auto; height: 130px; }
+  .part-list-actions { width: 100%; flex-wrap: wrap; }
+  .part-list-actions input { width: 100%; min-width: 0; flex: 1 1 100%; }
+  .table-wrap:not(.mobile-table-wrap), .manual-preview-scroll,
+  .manual-history-scroll, .forecast-chart { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; }
+  .mobile-card-table td > * { min-width: 0; max-width: 100%; }
+  .mobile-card-table td { gap: 8px; }
+  .mobile-card-table td::before { flex-basis: 88px; font-size: 12px; }
+  .forecast-coverage-card .forecast-table { min-width: 0; }
+  .modal-backdrop { padding: 10px; overflow-y: auto; align-items: flex-start; }
+  .modal-backdrop > div { max-width: 100%; max-height: calc(100dvh - 20px); overflow-y: auto; }
+  .modal-backdrop footer { flex-wrap: wrap; gap: 8px; }
+  .modal-backdrop footer .button { flex: 1 1 140px; }
+  .modal-backdrop:has(.camera-modal) { padding: 0; }
+  .modal-backdrop > .camera-modal { max-height: 100dvh; }
+}

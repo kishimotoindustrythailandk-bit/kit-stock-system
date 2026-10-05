@@ -82,7 +82,7 @@ export default function DashboardControlCenter({ userName, canOpen, onNavigate }
       <div className={styles.clock}><small>วันที่และเวลา</small><b>{thaiDateTime(clock)}</b><label>วันที่ Due <input type="date" value={selectedDate} onChange={(event) => { setLoading(true); setError(""); setSelectedDate(event.target.value || initialDate); }} /></label></div>
     </section>
 
-    <section className={styles.kpis}>
+    <section className={`${styles.kpis} page-summary`}>
       {[
         ["Due วันนี้", data.kpis.dueTotal, "blue", "▤", "all"],
         ["ส่งออกแล้ว", data.kpis.completed, "green", "✓", "completed"],

@@ -2986,7 +2986,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       setPartActualImageFile(null);
     };
     return <div className="parts-home">
-      <div className="part-stat-row">
+      <div className="part-stat-row page-summary">
         <article className="part-stat blue"><span>▦</span><div><small>Part ในระบบ</small><b>{fmt(stock.parts.length)}</b><em>รายการ</em></div></article>
         <article className="part-stat green"><span>✓</span><div><small>Active</small><b>{fmt(activeParts)}</b><em>Part</em></div></article>
         <article className="part-stat orange"><span>◷</span><div><small>ยกเลิก</small><b>{fmt(inactiveParts)}</b><em>Part</em></div></article>
@@ -3152,7 +3152,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     }
 
     return <div className="tag-print-home">
-      <div className="tag-stat-row">
+      <div className="tag-stat-row page-summary">
         <article className="tag-stat green"><span>▤</span><div><small>Tag ทั้งหมด</small><b>{fmt(stock.tags.length)}</b><em>ใบ</em></div></article>
         <article className="tag-stat orange"><span>◷</span><div><small>รอรับเข้า Stock</small><b>{fmt(awaitingReceipt)}</b><em>ใบ</em></div></article>
         <article className="tag-stat purple"><span>✓</span><div><small>รับเข้าแล้ว</small><b>{fmt(receivedTags)}</b><em>ใบ</em></div></article>
@@ -3404,7 +3404,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     }));
     const trendMax = Math.max(...trendDays.flatMap((item) => [item.receivedQty, item.arrangedQty, Math.abs(item.adjustedQty)]), 1);
     return <div className="stock-home">
-      <div className="stock-stat-row">
+      <div className="stock-stat-row page-summary">
         <article className="stock-stat blue"><span>▦</span><div><small>Tag รอรับเข้า</small><b>{fmt(awaitingReceipt)}</b><em>ใบ</em></div><button onClick={() => { setTagSearch(""); setStockListExpanded(true); }}>ดูรายการ →</button></article>
         <article className="stock-stat green"><span>▣</span><div><small>Stock พร้อมใช้</small><b>{fmt(available)}</b><em>ชิ้น · อยู่ในพื้นที่ Stock จริง</em></div><button onClick={() => { setTagSearch(""); setStockListExpanded(true); }}>ดูรายการ →</button></article>
         <article className="stock-stat orange"><span>⇥</span><div><small>ถูกจัดงานแล้ว</small><b>{fmt(reserved)}</b><em>ชิ้น · ออกจากพื้นที่ Stock แล้ว</em></div><button onClick={() => go("arrange")}>ดูรายการ →</button></article>
@@ -3468,7 +3468,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         </button>
         {renderOverdueSoundControl()}
       </div>}
-      <div className="plan-top-row">
+      <div className="plan-top-row page-summary">
         <article className="plan-stat blue"><span>▤</span><div><small>แผนทั้งหมด</small><b>{fmt(summary.items)}</b><em>รายการ</em></div></article>
         <article className="plan-stat green"><span>✓</span><div><small>ครบตามแผน</small><b>{fmt(summary.completed)}</b><em>รายการ</em></div></article>
         <article className="plan-stat orange"><span>◷</span><div><small>คงเหลือ</small><b>{fmt(summary.partial + summary.pending)}</b><em>รายการ</em></div></article>
@@ -3542,7 +3542,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       const safeArrangedPage = Math.min(arrangedPage, arrangedPages);
       const arrangedPageRows = arrangedRows.slice((safeArrangedPage - 1) * arrangedPageSize, safeArrangedPage * arrangedPageSize);
       return <>
-        <div className="arrange-summary-grid">
+        <div className="arrange-summary-grid page-summary">
           <article className="arrange-color-card blue" style={{ background: "linear-gradient(135deg,#e4f1ff 0%,#b9d8ff 100%)", borderColor: "#8fbdff" }}><span style={{ background: "linear-gradient(145deg,#48aaff,#075fe0)" }}>▦</span><div><small>งานทั้งหมด</small><b>{fmt(payload.dues.length)}</b><em>รายการ</em></div></article>
           <article className="arrange-color-card green" style={{ background: "linear-gradient(135deg,#e0faeb 0%,#abeac7 100%)", borderColor: "#7bd6a5" }}><span style={{ background: "linear-gradient(145deg,#50dc96,#08a455)" }}>✓</span><div><small>ครบตามแผน</small><b>{fmt(completedCount)}</b><em>รายการ</em></div></article>
           <article className="arrange-color-card orange" style={{ background: "linear-gradient(135deg,#fff3d4 0%,#ffd58a 100%)", borderColor: "#f3b94f" }}><span style={{ background: "linear-gradient(145deg,#ffc653,#ee8200)" }}>◷</span><div><small>คงเหลือ</small><b>{fmt(remainingCount)}</b><em>รายการ</em></div></article>
@@ -3644,7 +3644,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const dispatchPendingQty = dispatchPending.reduce((sum, item) => sum + Math.max(Number(item.pickedQty || 0) - Number(item.dispatchedQty || 0), 0), 0);
     const unmatchedCount = notice?.type === "error" ? 1 : 0;
     return <>
-      <div className="dispatch-summary-grid">
+      <div className="dispatch-summary-grid page-summary">
         <article className="dispatch-stat blue"><span>▥</span><div><small>สแกนวันนี้</small><b>{fmt(dispatchTodayQty)}</b><em>ชิ้น · {fmt(dispatchToday.length)} รายการ</em></div></article>
         <article className="dispatch-stat green"><span>✓</span><div><small>ตัดสำเร็จ</small><b>{fmt(dispatchTodayQty)}</b><em>ชิ้น</em></div></article>
         <article className="dispatch-stat orange"><span>◷</span><div><small>รอตัด</small><b>{fmt(dispatchPendingQty)}</b><em>ชิ้น · {fmt(dispatchPending.length)} รายการ</em></div></article>
@@ -3752,7 +3752,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const statusLabel = (value: string) => value === "completed" ? "เบิกครบแล้ว" : value === "partial" ? "เบิกบางส่วน" : value === "cancelled" ? "ยกเลิก" : "รอจัดงาน";
 
     return <div className="replacement-page">
-      <div className="metrics four compact replacement-metrics">
+      <div className="metrics four compact replacement-metrics page-summary">
         <MetricCard tone="blue" icon="↺" label="ใบขอทั้งหมด" value={fmt(replacement.requests.length)} suffix="ใบ" />
         <MetricCard tone="orange" icon="◷" label="รอจัดงาน" value={fmt(openRequests.length)} suffix="ใบ" />
         <MetricCard tone="green" icon="✓" label="จัดครบแล้ว" value={fmt(completedRequests.length)} suffix="ใบ" />
@@ -3859,7 +3859,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         <div><span className="forecast-hero-icon">▥</span><div><h2>Forecast Stock</h2><p>วางแผนการผลิตล่วงหน้า ป้องกันปัญหา Stock ไม่เพียงพอ</p></div></div>
         <button className="button secondary" disabled={forecastLoading} onClick={() => void loadForecast()}>↻ รีเฟรชข้อมูล</button>
       </section>
-      <div className="metrics five forecast-metrics">
+      <div className="metrics five forecast-metrics page-summary">
         <button className={`forecast-metric-button ${forecastStatus === "all" ? "active" : ""}`} onClick={() => setForecastStatus("all")}><MetricCard tone="blue" icon="▧" label="จำนวน Part ใน Forecast" value={fmt(summaryData.materialCount)} suffix="Part" /></button>
         <button className={`forecast-metric-button ${forecastStatus === "covered" ? "active" : ""}`} onClick={() => setFilter("covered")}><MetricCard tone="green" icon="✓" label="Stock เพียงพอ" value={fmt(summaryData.coveredMaterials)} suffix="Part" /></button>
         <button className={`forecast-metric-button ${forecastStatus === "shortage" ? "active" : ""}`} onClick={() => setFilter("shortage")}><MetricCard tone="red" icon="!" label="ต้องผลิตเพิ่ม" value={fmt(summaryData.shortageMaterials)} suffix="Part" /></button>
@@ -3945,7 +3945,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const over = exported.filter((due) => stateOf(due) === "over").length;
     return <div className="exports-page-redesign">
       <Card className="exports-filter-card"><Filters /></Card>
-      <div className="metrics five reports-metrics exports-metrics"><MetricCard tone="blue" icon="▤" label="ส่งออกทั้งหมด" value={fmt(exported.length)} suffix="รายการ" /><MetricCard tone="green" icon="✓" label="ส่งออกครบ" value={fmt(full)} suffix="รายการ" /><MetricCard tone="orange" icon="◷" label="บางส่วน" value={fmt(part)} suffix="รายการ" /><MetricCard tone="red" icon="×" label="เกินดิวจัดส่ง" value={fmt(over)} suffix="รายการ" /><MetricCard tone="purple" icon="◇" label="รวมจำนวน" value={fmt(exported.reduce((sum, due) => sum + Number(due.scannedQty), 0))} suffix="ชิ้น" /></div>
+      <div className="metrics five reports-metrics exports-metrics page-summary"><MetricCard tone="blue" icon="▤" label="ส่งออกทั้งหมด" value={fmt(exported.length)} suffix="รายการ" /><MetricCard tone="green" icon="✓" label="ส่งออกครบ" value={fmt(full)} suffix="รายการ" /><MetricCard tone="orange" icon="◷" label="บางส่วน" value={fmt(part)} suffix="รายการ" /><MetricCard tone="red" icon="×" label="เกินดิวจัดส่ง" value={fmt(over)} suffix="รายการ" /><MetricCard tone="purple" icon="◇" label="รวมจำนวน" value={fmt(exported.reduce((sum, due) => sum + Number(due.scannedQty), 0))} suffix="ชิ้น" /></div>
       <Card className="exports-list-card" title={<span className="exports-list-title"><i>≡</i><span>รายการส่งออก<small>รายการสินค้าที่ส่งออกจากคลังไปยังลูกค้าหรือสายการผลิต</small></span></span>} action={<div className="exports-list-actions"><button className="button success" onClick={() => void exportDeliveryExcel()}>▦ ส่งออก Excel</button><button className="button primary" onClick={exportCsv}>▤ ส่งออก CSV</button></div>}>
         <DueTable rows={exported} />
         <footer className="exports-list-footer"><span>แสดง {fmt(exported.length)} รายการ</span><span>{filterDate ? formatDate(filterDate) : "ทุกวันที่"} · {filterFact === "ALL" ? "ทุก FAC" : filterFact} · {filterTime === "ALL" ? "ทุกเวลา" : filterTime}</span></footer>
@@ -3960,7 +3960,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     const maxDaily = Math.max(...recentDays.map((item) => item.items), 1);
     return <div className="reports-page-redesign">
       <Card className="reports-filter-card" action={<button className="button primary reports-refresh-button" onClick={() => void loadDue()}>↻ รีเฟรช</button>}><Filters /></Card>
-      <div className="metrics five reports-metrics"><MetricCard tone="blue" icon="▤" label="แผนทั้งหมด" value={fmt(summary.items)} suffix="รายการ" /><MetricCard tone="green" icon="✓" label="ครบตามแผน" value={fmt(summary.completed)} suffix="รายการ" /><MetricCard tone="orange" icon="◷" label="คงเหลือ" value={fmt(summary.partial + summary.pending)} suffix="รายการ" /><MetricCard tone="red" icon="!" label="เกินดิวจัดส่ง" value={fmt(summary.over)} suffix="รายการ" /><MetricCard tone="purple" icon="◇" label="ส่งแล้วรวม" value={fmt(summary.sent)} suffix="ชิ้น" /></div>
+      <div className="metrics five reports-metrics page-summary"><MetricCard tone="blue" icon="▤" label="แผนทั้งหมด" value={fmt(summary.items)} suffix="รายการ" /><MetricCard tone="green" icon="✓" label="ครบตามแผน" value={fmt(summary.completed)} suffix="รายการ" /><MetricCard tone="orange" icon="◷" label="คงเหลือ" value={fmt(summary.partial + summary.pending)} suffix="รายการ" /><MetricCard tone="red" icon="!" label="เกินดิวจัดส่ง" value={fmt(summary.over)} suffix="รายการ" /><MetricCard tone="purple" icon="◇" label="ส่งแล้วรวม" value={fmt(summary.sent)} suffix="ชิ้น" /></div>
       <div className="reports-dashboard-grid">
         <Card className="reports-chart-card" title="สัดส่วนสถานะการส่งงาน"><div className="donut-layout"><div className="donut" style={{ "--complete": `${completePct * 3.6}deg` } as React.CSSProperties}><span><b>{summary.items}</b>รายการ</span></div><div className="legend"><p><i className="green" />ครบตามแผน <b>{summary.completed}</b></p><p><i className="orange" />คงเหลือ <b>{summary.partial + summary.pending}</b></p><p><i className="red" />เกินดิวจัดส่ง <b>{summary.over}</b></p><p><i className="purple" />ส่งแล้วรวม <b>{fmt(summary.sent)}</b></p></div></div></Card>
         <Card className="reports-chart-card" title="ส่งออกตาม FAC / Line"><div className="bar-chart reports-fac-chart">{facStats.length ? facStats.slice(0, 7).map((item) => <div key={item.fact}><b>{item.fact}</b><span><i style={{ width: `${Math.max(4, item.items / maxFac * 100)}%` }} /></span><strong>{item.items}</strong></div>) : <Empty title="ยังไม่มีข้อมูล" text="ลองปรับช่วงวันที่หรือโรงงาน" />}</div></Card>
@@ -4082,7 +4082,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
       { tone: "red", icon: "×", label: "ลบข้อมูล", value: activities.filter((item) => item.kind === "delete").length, suffix: "รายการ", art: "▰" },
     ];
     return <div className="history-page-redesign">
-      <div className="history-summary-grid">{summaryCards.map((item) => <article className={`history-summary-card ${item.tone}`} key={item.label}><span>{item.icon}</span><div><small>{item.label}</small><b>{fmt(item.value)}</b><em>{item.suffix}</em></div><i>{item.art}</i></article>)}</div>
+      <div className="history-summary-grid page-summary">{summaryCards.map((item) => <article className={`history-summary-card ${item.tone}`} key={item.label}><span>{item.icon}</span><div><small>{item.label}</small><b>{fmt(item.value)}</b><em>{item.suffix}</em></div><i>{item.art}</i></article>)}</div>
       <section className="history-log-card">
         <header><div><span>▤</span><div><h3>ประวัติการดำเนินการ</h3><p>บันทึกการเพิ่ม แก้ไข ลบ นำเข้าไฟล์ เปลี่ยนสิทธิ์ และกิจกรรมสำคัญจากทุกหน้า</p></div></div><div><button className="button secondary" disabled={auditLogsLoading} onClick={() => void Promise.all([loadDue(), loadStock(), loadAuditLogs()])}>↻ {auditLogsLoading ? "กำลังโหลด" : "รีเฟรช"}</button><button className="button history-excel-button" onClick={() => void exportHistoryExcel()}>▦ ส่งออก Excel</button></div></header>
         <div className="audit-history-controls history-redesign-controls">
@@ -4109,7 +4109,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
         <div className="system-card">
           <div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div>
           <dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.23.0</dd></div><div><dt>เขตเวลา</dt><dd>(GMT+07:00) Bangkok, Thailand</dd></div><div><dt>ที่ตั้ง</dt><dd>● Bangkok, Thailand</dd></div><div><dt>ผู้ดูแลระบบ</dt><dd>♟ {user.displayName}</dd></div></dl>
-          <div className="system-stats"><p className="blue"><span>▤</span><b>{fmt(payload.dues.length)}</b><strong>Due ทั้งหมด</strong><small>รายการ</small></p><p className="purple"><span>◇</span><b>{fmt(partImages.length)}</b><strong>รูปชิ้นงาน</strong><small>รายการ</small></p></div>
+          <div className="system-stats page-summary"><p className="blue"><span>▤</span><b>{fmt(payload.dues.length)}</b><strong>Due ทั้งหมด</strong><small>รายการ</small></p><p className="purple"><span>◇</span><b>{fmt(partImages.length)}</b><strong>รูปชิ้นงาน</strong><small>รายการ</small></p></div>
         </div>
       </section>
 
@@ -4176,7 +4176,7 @@ export default function DeliveryControlApp({ user, signOutPath }: { user: { id: 
     return <div className="users-page-redesign">
       <section className="users-overview-card">
         <header><div><span>▥</span><div><h3>ภาพรวมผู้ใช้งาน</h3><p>จำนวนผู้ใช้งานในแต่ละหน่วยงาน</p></div></div><div className="users-overview-actions"><small>▦ อัปเดตล่าสุด<br />{new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date())}</small><button className="button primary" onClick={() => { setUserForm({ ...EMPTY_USER, permissions: [...EMPTY_USER.permissions] }); setUserEditorOpen(true); }}>＋ เพิ่มผู้ใช้งาน</button></div></header>
-        <div className="users-stat-grid">{stats.map((item) => <article className={`users-stat ${item.tone}`} key={item.label}><span>{item.icon}</span><div><small>{item.label}</small><b>{fmt(item.value)}</b><em>คน</em></div><i>{item.art}</i></article>)}</div>
+        <div className="users-stat-grid page-summary">{stats.map((item) => <article className={`users-stat ${item.tone}`} key={item.label}><span>{item.icon}</span><div><small>{item.label}</small><b>{fmt(item.value)}</b><em>คน</em></div><i>{item.art}</i></article>)}</div>
       </section>
 
       <section className="users-list-card">
