@@ -2598,3 +2598,8 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .overdue-work-toolbar{margin:14px 0}.overdue-work-toolbar label{display:grid;gap:6px;flex:1;min-width:200px;font-size:12px}.overdue-work-toolbar input{min-height:44px;padding:10px;border:1px solid #cfdbeb;border-radius:9px}
 .overdue-work-page tbody tr{background:#fff8fa}.overdue-work-pagination{margin-top:14px}.overdue-work-empty{text-align:center;padding:24px;color:#627591}.overdue-work-launch{margin-bottom:16px}
 @media(max-width:720px){.overdue-work-page{padding:12px}.overdue-work-header h2{font-size:20px}.overdue-work-actions{width:100%}.overdue-work-actions .button{flex:1}.overdue-work-totals{gap:6px}.overdue-work-totals article{padding:10px}.overdue-work-totals b{font-size:22px}}
+
+.overdue-monitor-shell{min-height:100dvh;padding:16px;background:#f4f7fc}
+.overdue-monitor-shell .overdue-work-page{min-height:calc(100dvh - 32px);border-radius:12px}
+.overdue-monitor-shell .page-summary{display:grid}
+@media(max-width:720px){.overdue-monitor-shell{padding:8px}.overdue-monitor-shell .overdue-work-page{min-height:calc(100dvh - 16px)}}
