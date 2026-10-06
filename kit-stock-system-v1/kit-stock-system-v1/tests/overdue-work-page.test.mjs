@@ -40,12 +40,34 @@ test("the new page shows every supplied round/FAC and counts arranged but unship
   assert.match(html, /Part ที่ค้างส่ง<\/small><b>2<\/b>/);
 });
 
-test("the additional page inherits Due permission without granting access to other users", () => {
+test("the overdue page has independent permission without requiring or granting Due access", () => {
   const start = app.indexOf("  const allowedPages = useMemo");
   const section = app.slice(start, app.indexOf("  const firstAllowedPage", start));
   const permission = new Function("user", "NAV", "useMemo", compile(section) + "return allowedPages;");
-  const navigation = [{ key: "stock" }, { key: "plan" }];
-  assert.equal(permission({ role: "employee", permissions: ["plan"] }, navigation, (fn) => fn()).has("overdue"), true);
+  const navigation = [{ key: "stock" }, { key: "plan" }, { key: "overdue" }];
+  assert.equal(permission({ role: "employee", permissions: ["plan"] }, navigation, (fn) => fn()).has("overdue"), false);
+  assert.equal(permission({ role: "employee", permissions: ["overdue"] }, navigation, (fn) => fn()).has("overdue"), true);
+  assert.equal(permission({ role: "employee", permissions: ["overdue"] }, navigation, (fn) => fn()).has("plan"), false);
   assert.equal(permission({ role: "employee", permissions: ["stock"] }, navigation, (fn) => fn()).has("overdue"), false);
   assert.equal(permission({ role: "admin", permissions: [] }, navigation, (fn) => fn()).has("overdue"), true);
+});
+
+test("overdue permission survives server normalization and authorizes Due reading plus the monitor", async () => {
+  const auth = await readFile(new URL("../app/cloudflare-auth.ts", import.meta.url), "utf8");
+  const section = auth.slice(auth.indexOf("export const PERMISSION_KEYS"), auth.indexOf("type CloudUserRow"));
+  const compiledModule = { exports: {} };
+  new Function("module", "exports", compile(section))(compiledModule, compiledModule.exports);
+  const { normalizePermissions, hasPermission } = compiledModule.exports;
+  const permissions = normalizePermissions(["overdue", "unknown", "overdue"], "employee");
+  assert.deepEqual(permissions, ["overdue"]);
+  const user = { role: "employee", permissions };
+  assert.equal(hasPermission(user, "overdue"), true);
+  assert.equal(hasPermission(user, "plan"), false);
+  assert.equal(hasPermission(user, "dispatch"), false);
+  const route = await readFile(new URL("../app/api/due/route.ts", import.meta.url), "utf8");
+  const readPermissions = JSON.parse(route.match(/const DUE_READ_PERMISSIONS = (\[[^;]+\]) as const/)[1]);
+  assert.equal(readPermissions.some((key) => hasPermission(user, key)), true);
+  assert.equal(readPermissions.some((key) => hasPermission({ role: "employee", permissions: ["tags"] }, key)), false);
+  const monitor = await readFile(new URL("../app/overdue-monitor/page.tsx", import.meta.url), "utf8");
+  assert.match(monitor, /hasPermission\(user, "overdue"\)/);
 });

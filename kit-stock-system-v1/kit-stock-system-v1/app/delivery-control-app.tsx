@@ -240,6 +240,7 @@ const NAV: Array<{ key: PageKey; label: string; icon: string }> = [
   { key: "parts", label: "ทะเบียน Part", icon: "▦" },
   { key: "tags", label: "พิมพ์ Tag", icon: "▤" },
   { key: "plan", label: "แผนส่งงาน (Due)", icon: "▤" },
+  { key: "overdue", label: "งานติดลบ / ค้างส่ง", icon: "!" },
   { key: "arrange", label: "จัดงาน", icon: "⇥" },
   { key: "replacement", label: "เบิกงานทดแทน", icon: "↺" },
   { key: "dispatch", label: "ตรวจและขายออก", icon: "⌗" },
@@ -250,7 +251,7 @@ const NAV: Array<{ key: PageKey; label: string; icon: string }> = [
   { key: "users", label: "ผู้ใช้งาน", icon: "♙" },
 ];
 
-const DUE_DATA_PAGES: PageKey[] = ["dashboard", "plan", "arrange", "dispatch", "exports", "reports", "history"];
+const DUE_DATA_PAGES: PageKey[] = ["dashboard", "plan", "overdue", "arrange", "dispatch", "exports", "reports", "history"];
 
 const PAGE_KEYS = new Set<PageKey>([...NAV.map((item) => item.key), "verify", "overdue"]);
 
@@ -284,7 +285,7 @@ const PERMISSION_HELP: Record<PageKey, string> = {
   forecast: "นำเข้า Forecast ลูกค้าและตรวจว่ายอด Stock ส่งได้ถึงวันไหน",
   parts: "ทะเบียน Part และรูปชิ้นงาน",
   tags: "ทะเบียน Part สร้างและพิมพ์ Tag",
-  overdue: "งานเกินดิวค้างส่งทุก Part ทุกรอบ ใช้สิทธิ์หน้า Due",
+  overdue: "ดูงานติดลบ / ค้างส่งทุก Part ทุกรอบ ทุก FAC และเปิดจอแสดงงานค้าง",
   plan: "นำเข้า ตรวจสอบ และลบแผน Due",
   arrange: "เลือก Due และยิง KIT Tag เพื่อจัดงานรอขาย",
   replacement: "QC ขอเบิกงานเสีย/งานขาด และทีมจัดงานยิง KIT Tag เพื่อตัด Stock",
@@ -867,7 +868,6 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   const canIssueReplacement = user.role === "admin" || user.role === "delivery" || user.role === "dispatcher";
   const allowedPages = useMemo(() => {
     const pages = new Set<PageKey>(user.role === "admin" ? NAV.map((item) => item.key) : user.permissions);
-    if (pages.has("plan")) pages.add("overdue");
     return pages;
   }, [user.permissions, user.role]);
   const firstAllowedPage = NAV.find((item) => allowedPages.has(item.key))?.key || "dashboard";
@@ -3475,7 +3475,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   }
 
   function renderOverdueWork() {
-    return <OverdueWorkPage dues={overdueDues} refreshing={loading} updatedAt={dueLoadedAt} onRefresh={() => void loadDue()} onBack={() => go("plan")} onOpenWindow={openOverdueWindow} monitorMode={monitorMode} />;
+    return <OverdueWorkPage dues={overdueDues} refreshing={loading} updatedAt={dueLoadedAt} onRefresh={() => void loadDue()} onBack={allowedPages.has("plan") ? () => go("plan") : undefined} onOpenWindow={openOverdueWindow} monitorMode={monitorMode} />;
   }
 
   function renderPlan() {
@@ -3500,7 +3500,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
 
     return <div className="plan-home">
       <input ref={fileInput} type="file" accept=".xlsx,.xls" hidden onChange={parseExcel} />
-      <div className="overdue-work-launch"><button className="button primary" type="button" onClick={openOverdueWindow}>↗ เปิดหน้าต่างงานติดลบ / ค้างส่ง · {fmt(overdueDues.length)} รายการ</button><small>รวมทุก Part ทุกรอบ ทุก FAC</small></div>
+      {allowedPages.has("overdue") && <div className="overdue-work-launch"><button className="button primary" type="button" onClick={openOverdueWindow}>↗ เปิดหน้าต่างงานติดลบ / ค้างส่ง · {fmt(overdueDues.length)} รายการ</button><small>รวมทุก Part ทุกรอบ ทุก FAC</small></div>}
       {overdueDues.length > 0 && <div className="overdue-alert-group">
         <button className="overdue-alert plan-overdue-alert" onClick={showOverduePlan}>
           <span>!</span><div><b>แจ้งเตือนงานเกินดิวจัดส่ง {fmt(overdueDues.length)} รายการ</b><small>ระบบเรียงรายการที่เกินวันและเวลาจัดส่งไว้ด้านบน กดเพื่อล้างตัวกรองและดูทั้งหมด</small></div><strong>แสดงทั้งหมด →</strong>
@@ -4301,7 +4301,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     <aside className={`control-sidebar ${menuOpen ? "open" : ""}`}>
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
-      <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}{allowedPages.has("overdue") && <button className={page === "overdue" ? "active" : ""} onClick={() => go("overdue")}><span>!</span>งานติดลบ / ค้างส่ง</button>}</nav>
+      <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
       <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.23.0</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}

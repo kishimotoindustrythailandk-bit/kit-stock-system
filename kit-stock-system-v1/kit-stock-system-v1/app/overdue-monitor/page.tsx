@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 export default async function OverdueMonitor() {
   const user = await requireCloudUser();
-  if (!hasPermission(user, "plan")) {
+  if (!hasPermission(user, "overdue")) {
     return <main><h1>บัญชีนี้ไม่มีสิทธิ์ดูงานติดลบ / ค้างส่ง</h1><Link href="/">กลับหน้าหลัก</Link></main>;
   }
   return <DeliveryControlApp
