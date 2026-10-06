@@ -1,67 +1,55 @@
-import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import { createRequire } from "node:module";
-import test from "node:test";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
-import ts from "typescript";
-import xlsx from "xlsx";
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { DatabaseSync } from 'node:sqlite';
+import test from 'node:test';
+import {createElement} from 'react';
+import {renderToStaticMarkup} from 'react-dom/server';
+import ts from 'typescript';
+import xlsx from 'xlsx';
+const require=createRequire(import.meta.url);
+const compile=s=>ts.transpileModule(s,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText;
+function moduleOf(source,imports={}){const m={exports:{}};new Function('require','module','exports',compile(source))(name=>imports[name]||require(name),m,m.exports);return m.exports;}
+const quantities=moduleOf(await readFile(new URL('../app/stock-quantities.ts',import.meta.url),'utf8'));
+const pageSource=await readFile(new URL('../app/stock-all-page.tsx',import.meta.url),'utf8');
+const {createOverviewWorkbook,stockFilterParams,default:Page}=moduleOf(pageSource,{'./stock-quantities':quantities});
+function fixture(){const db=new DatabaseSync(':memory:');db.exec(`CREATE TABLE stock_parts(material_code TEXT,part_name TEXT,customer TEXT,location TEXT,active INTEGER);CREATE TABLE stock_tags(id INTEGER,material_code TEXT,remaining_qty INTEGER,status TEXT,job_no TEXT);CREATE TABLE stock_picks(stock_tag_id INTEGER,picked_qty INTEGER,dispatched_qty INTEGER,status TEXT);CREATE TABLE stock_allocations(stock_tag_id INTEGER,qty INTEGER,status TEXT);CREATE TABLE part_master_images(material_code TEXT,updated_at TEXT);
+INSERT INTO stock_parts VALUES('A','Part A','Customer','LOC1',1),('ZERO','Zero Part','Customer','LOC2',0);INSERT INTO stock_tags VALUES(1,'A',250,'in_stock','JOB-XYZ'),(2,'A',500,'printed','PENDING'),(3,'A',500,'ng','NG');`);return db;}
+const rows=db=>db.prepare(`${quantities.STOCK_OVERVIEW_CTE} SELECT * FROM overview ORDER BY materialCode`).all();
 
-const source = await readFile(new URL("../app/stock-all-page.tsx", import.meta.url), "utf8");
-const compile = (value) => ts.transpileModule(value, { compilerOptions: {
-  target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX,
-} }).outputText;
-const compiledModule = { exports: {} };
-new Function("require", "module", "exports", compile(source))(createRequire(import.meta.url), compiledModule, compiledModule.exports);
-const { summarizeAllStock, createAllStockWorkbook, default: Page } = compiledModule.exports;
-const parts = [{ materialCode: "A", partName: "Part A", customer: "Customer", active: true },
-  { materialCode: "ZERO", partName: "Zero Part", customer: "Customer", active: false }];
-const base = { id: 1, tagId: "TAG-A", materialCode: "A", jobNo: "JOB1", productionDate: "2026-10-06", remainingQty: 80, reservedQty: 50, status: "in_stock" };
-const tags = [base, { ...base, id: 2, remainingQty: 500, status: "created" },
-  { ...base, id: 3, remainingQty: 500, status: "ng" }, { ...base, id: 4, remainingQty: 0, status: "depleted" }];
+test('overview starts with every Master Part including inactive/zero, and lifecycle counts Stock only once',()=>{const db=fixture();let r=rows(db);assert.equal(r.length,2);assert.deepEqual([r[0].availableQty,r[0].arrangedQty,r[0].totalQty,r[0].tagCount],[250,0,250,1]);assert.deepEqual([r[1].availableQty,r[1].arrangedQty,r[1].totalQty,r[1].tagCount],[0,0,0,0]);db.exec("INSERT INTO stock_picks VALUES(1,50,0,'staged')");r=rows(db);assert.deepEqual([r[0].availableQty,r[0].arrangedQty,r[0].totalQty],[200,50,250]);db.exec("UPDATE stock_picks SET dispatched_qty=50,status='dispatched';UPDATE stock_tags SET remaining_qty=200 WHERE id=1");r=rows(db);assert.deepEqual([r[0].availableQty,r[0].arrangedQty,r[0].totalQty],[200,0,200]);db.exec("UPDATE stock_tags SET remaining_qty=170 WHERE id=1;INSERT INTO stock_allocations VALUES(1,20,'reserved')");r=rows(db);assert.deepEqual([r[0].availableQty,r[0].arrangedQty,r[0].totalQty],[150,20,170]);assert.deepEqual(rows(db),r);db.close();});
 
-test("all registered Parts include zero Stock and reservations are counted once after dispatch", () => {
-  const rows = summarizeAllStock(parts, tags);
-  assert.deepEqual(rows.map(({ materialCode, availableQty, arrangedQty, totalQty, tagCount }) =>
-    ({ materialCode, availableQty, arrangedQty, totalQty, tagCount })), [
-    { materialCode: "A", availableQty: 30, arrangedQty: 50, totalQty: 80, tagCount: 1 },
-    { materialCode: "ZERO", availableQty: 0, arrangedQty: 0, totalQty: 0, tagCount: 0 },
-  ]);
-  const overReserved = summarizeAllStock(parts, [{ ...base, reservedQty: 100 }])[0];
-  assert.equal(overReserved.availableQty, 0);
-  assert.equal(overReserved.arrangedQty, 80);
-});
+test('partial dispatch, legacy reservations, zero tags and Forecast use identical Available projection',async()=>{const db=fixture();db.exec("UPDATE stock_tags SET remaining_qty=80 WHERE id=1;INSERT INTO stock_picks VALUES(1,70,20,'partial');INSERT INTO stock_allocations VALUES(1,10,'reserved')");const r=rows(db)[0];assert.deepEqual([r.availableQty,r.arrangedQty,r.totalQty],[20,60,80]);assert.equal(db.prepare(`SELECT SUM(${quantities.AVAILABLE_STOCK_SQL}) AS qty FROM stock_tags tag WHERE status IN ('in_stock','depleted') AND remaining_qty>0`).get().qty,r.availableQty);db.exec("UPDATE stock_tags SET remaining_qty=0,status='depleted' WHERE id=1");assert.equal(rows(db)[0].tagCount,0);assert.equal(quantities.stockStatus(rows(db)[0]),'Stock 0');assert.equal(quantities.stockStatus({availableQty:0,arrangedQty:50,totalQty:50}),'จัดงานรอส่ง');const forecast=await readFile(new URL('../app/api/forecast/route.ts',import.meta.url),'utf8');assert.match(forecast,/SUM\(\$\{AVAILABLE_STOCK_SQL\}\)/);db.close();});
 
-test("overview renders zero Parts and viewing/export controls without receiving or adjustment controls", () => {
-  const html = renderToStaticMarkup(createElement(Page, { parts, tags, loading: false, exporting: false, onRefresh() {}, onExport() {} }));
-  for (const text of ["ZERO", "Zero Part", "Stock พร้อมใช้", "จัดงานรอส่ง", "คงเหลือรวม", "Excel ทุก Part", "ดู Tag / Job", "ทุกยอด (รวม 0)"]) assert.ok(html.includes(text));
-  assert.doesNotMatch(html, /สแกน|ยืนยันรับเข้า|ปรับยอด/);
-});
+test('server filters support partial Job, descriptions, locations, zero, and literal SQL wildcard input',()=>{const db=fixture();for(const [params,expected] of [[{search:'xyz'},['A']],[{search:'Part'},['A','ZERO']],[{location:'LOC2'},['ZERO']],[{status:'zero'},['ZERO']],[{job:'JOB-'},['A']],[{partGroup:'ZERO'},['ZERO']],[{search:'%'},[]],[{status:'zero',availableOnly:'1'},[]]]){const f=quantities.overviewFilters(new URLSearchParams(params));const selected=db.prepare(`${quantities.STOCK_OVERVIEW_CTE} SELECT materialCode FROM overview ${f.where} ORDER BY materialCode`).all(...f.values);assert.deepEqual(selected.map(r=>r.materialCode),expected);}db.close();});
 
-test("Excel export preserves zero Parts, numeric quantities, and only remaining received Tags", () => {
-  const book = createAllStockWorkbook(xlsx, parts, tags, "06/10/2026 07:00");
-  const reopened = xlsx.read(xlsx.write(book, { type: "buffer", bookType: "xlsx" }), { type: "buffer" });
-  const summary = reopened.Sheets["Stock ทุก Part"], details = reopened.Sheets["Tag คงเหลือ"];
-  assert.equal(summary.A5.v, "ZERO");
-  assert.equal(summary.E5.t, "n");
-  assert.equal(summary.E5.v, 0);
-  assert.deepEqual([summary.E4.v, summary.F4.v, summary.G4.v], [30, 50, 80]);
-  assert.equal(summary["!autofilter"].ref, "A3:H5");
-  assert.equal(details.B2.v, "TAG-A");
-  assert.equal(details["!ref"], "A1:H2");
-});
+test('filtered Excel exports all matched Parts, numeric zero and derived status, independently of page size',()=>{const db=fixture();for(let i=0;i<22;i++)db.prepare('INSERT INTO stock_parts VALUES(?,?,?,?,?)').run(`Z${i}`,'Zero','Customer','LOC',1);const data=rows(db);const book=createOverviewWorkbook(xlsx,data,'2026-10-06T00:42:00Z');const reopened=xlsx.read(xlsx.write(book,{type:'buffer',bookType:'xlsx'}),{type:'buffer'});const sheet=reopened.Sheets['Stock ทุก Part'];assert.equal(sheet['!autofilter'].ref,'A3:I27');assert.equal(sheet.E27.v,0);assert.equal(sheet.E27.t,'n');assert.equal(sheet.I27.v,'Stock 0');assert.equal(sheet.C1.v,'06/10/2026 07:42');const filtered=createOverviewWorkbook(xlsx,data.filter(r=>r.materialCode==='A'),'2026-10-06T00:42:00Z');assert.equal(filtered.Sheets['Stock ทุก Part']['!ref'],'A1:I4');const p=stockFilterParams({search:'JOB',status:'zero',customer:'',location:'LOC',job:'',partGroup:'',availableOnly:false});assert.equal(p.get('status'),'zero');assert.equal(p.get('search'),'JOB');db.close();});
 
-test("stock-all permission is independent and grants Stock reading without receipt or count access", async () => {
-  const auth = await readFile(new URL("../app/cloudflare-auth.ts", import.meta.url), "utf8");
-  const section = auth.slice(auth.indexOf("export const PERMISSION_KEYS"), auth.indexOf("type CloudUserRow"));
-  const authModule = { exports: {} };
-  new Function("module", "exports", compile(section))(authModule, authModule.exports);
-  const permissions = authModule.exports.normalizePermissions(["stock-all"], "employee");
-  assert.deepEqual(permissions, ["stock-all"]);
-  const user = { role: "employee", permissions };
-  assert.equal(authModule.exports.hasPermission(user, "stock"), false);
-  assert.equal(authModule.exports.hasPermission(user, "stock-count"), false);
-  const api = await readFile(new URL("../app/api/stock/route.ts", import.meta.url), "utf8");
-  const reads = JSON.parse(api.match(/const fullStockPermissions = (\[[^;]+\]) as const/)[1]);
-  assert.equal(reads.some((key) => authModule.exports.hasPermission(user, key)), true);
+test('overview controls are read-only and details/export are independently hidden',()=>{const html=renderToStaticMarkup(createElement(Page,{canDetails:false,canExport:false}));assert.match(html,/Stock ทั้งหมด/);assert.match(html,/Stock = 0/);assert.doesNotMatch(html,/⇩ ส่งออก Excel|role="dialog"|สแกน|ยืนยันรับเข้า|ปรับยอด/);const allowed=renderToStaticMarkup(createElement(Page,{canDetails:true,canExport:true}));assert.match(allowed,/⇩ ส่งออก Excel/);});
+
+test('API denies unauthenticated, missing page, missing details and missing export permission before DB access',async()=>{const src=await readFile(new URL('../app/api/stock-all/route.ts',import.meta.url),'utf8');let user=null;let dbReads=0;const route=moduleOf(src,{'../../cloudflare-auth':{getCurrentUser:async()=>user,hasPermission:(u,k)=>u.role==='admin'||u.permissions.includes(k)},'../../../runtime/env':{getRuntimeEnv:()=>{dbReads++;throw Error('must not access DB');}},'../../api-error':{safeErrorMessage:()=>''},'../../stock-quantities':quantities,'../../audit-log':{writeAuditLog:async()=>{}}});assert.equal((await route.GET(new Request('https://kit/api/stock-all'))).status,401);user={role:'stock',permissions:['stock']};assert.equal((await route.GET(new Request('https://kit/api/stock-all'))).status,403);user.permissions=['stock-all'];for(const suffix of ['?part=A','?export=1'])assert.equal((await route.GET(new Request('https://kit/api/stock-all'+suffix))).status,403);assert.equal(dbReads,0);const stock=await readFile(new URL('../app/api/stock/route.ts',import.meta.url),'utf8');const permissions=JSON.parse(stock.match(/const fullStockPermissions = (\[[^;]+\]) as const/)[1]);assert.ok(!permissions.includes('stock-all'));const home=await readFile(new URL('../app/page.tsx',import.meta.url),'utf8');assert.match(home,/page === "stock-all" && !hasPermission/);});
+
+test('actual Stock API queries paginate Master Parts and trace all Tag/Job/Movement sources using migrated schema',async()=>{
+ const db=new DatabaseSync(':memory:');db.exec('CREATE TABLE app_user_permissions(user_id INTEGER,permission_key TEXT); CREATE TABLE app_users(id INTEGER,role TEXT);');
+ for(const name of ['0008_stock_core.sql','0009_stock_traceability.sql','0015_replacement_withdrawals.sql','0016_manual_stock_adjustments.sql','0017_stock_receipt_adjustments_and_job_closures.sql','0018_stock_parts_location.sql']) db.exec(await readFile(new URL('../migrations/'+name,import.meta.url),'utf8'));
+ db.exec(`PRAGMA foreign_keys=OFF;CREATE TABLE part_master_images(material_code TEXT,updated_at TEXT);
+ INSERT INTO stock_parts(material_code,part_name,customer,location) VALUES('A','Part A','Customer','LOC');
+ INSERT INTO stock_tags(tag_id,material_code,qty,remaining_qty,job_no,production_date,status,printed_by_name,received_by_name,received_at) VALUES('TAG1','A',250,200,'JOB1','2026-10-06','in_stock','Printer','Receiver','2026-10-06 00:00:00');
+ INSERT INTO stock_picks(due_line_id,stock_tag_id,picked_qty,dispatched_qty,status,picked_by_name,picked_by_code) VALUES(1,1,70,50,'partial','Picker','P1');
+ INSERT INTO stock_dispatch_links(customer_tag_id,pick_id,due_line_id,stock_tag_id,qty,dispatched_by_name,dispatched_by_code) VALUES('CUSTOMER1',1,1,1,50,'Inspector','I1');
+ INSERT INTO stock_count_adjustments(adjustment_no,count_date,material_code,system_qty,counted_qty,difference,reason,adjusted_by_name,adjusted_by_code) VALUES('ADJ','2026-10-06','A',210,200,-10,'นับสิ้นเดือน','Counter','C1');
+ INSERT INTO stock_count_adjustment_lines(adjustment_id,stock_tag_id,stock_tag_code,qty_change,before_qty,after_qty) VALUES(1,1,'TAG1',-10,210,200);`);
+ for(let i=0;i<27;i++)db.prepare('INSERT INTO stock_parts(material_code,part_name) VALUES(?,?)').run(`ZERO${i.toString().padStart(2,'0')}`,'Zero Part');
+ const DB={prepare(sql){let values=[];const q={bind(...args){values=args;return q;},async all(){let args=values;const numbered=/\?\d/.test(sql);const text=numbered?sql.replace(/\?(\d+)/g,(_,n)=>'?'):sql;if(numbered){args=[];for(const m of sql.matchAll(/\?(\d+)/g))args.push(values[Number(m[1])-1]);}return {results:db.prepare(text).all(...args)};}};return q;},async batch(queries){return Promise.all(queries.map(q=>q.all()));}};
+ const audit=[];
+ const source=await readFile(new URL('../app/api/stock-all/route.ts',import.meta.url),'utf8');
+ const route=moduleOf(source,{'../../cloudflare-auth':{getCurrentUser:async()=>({role:'admin',permissions:[]}),hasPermission:()=>true},'../../../runtime/env':{getRuntimeEnv:()=>({DB})},'../../api-error':{safeErrorMessage:(e)=>e.message},'../../stock-quantities':quantities,'../../audit-log':{writeAuditLog:async(_,entry)=>audit.push(entry)}});
+ async function get(query){const r=await route.GET(new Request('https://kit/api/stock-all?'+query));const data=await r.json();assert.equal(r.status,200,JSON.stringify(data));return data;}
+ const first=await get('pageSize=10');assert.equal(first.rows.length,10);assert.equal(first.total,28);assert.deepEqual(first.summary,{partCount:28,availableQty:180,arrangedQty:20,totalQty:200});
+ const last=await get('page=99&pageSize=10');assert.equal(last.page,3);assert.equal(last.rows.length,8);
+ const zero=await get('status=zero&export=1');assert.equal(zero.rows.length,27);assert.ok(zero.rows.every(r=>r.totalQty===0));assert.equal(audit.length,1);
+ const tags=await get('part=A&tab=tag');assert.equal(tags.rows[0].tagId,'TAG1');assert.equal(tags.rows[0].availableQty,180);
+ const job=await get('part=A&tab=job');assert.deepEqual(job.rows.map(r=>[r.jobNo,r.receivedQty,r.remainingQty]),[['JOB1',250,200]]);
+ const moves=await get('part=A&tab=movement');for(const action of ['รับเข้า','จัดงาน','ขายออก','ปรับยอด: นับสิ้นเดือน'])assert.ok(moves.rows.some(r=>r.action===action));assert.ok(moves.rows.some(r=>r.actor==='Inspector'&&r.qty===50));
+ db.close();
 });

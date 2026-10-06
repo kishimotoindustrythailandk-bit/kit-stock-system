@@ -50,7 +50,7 @@ export async function POST(request: Request) {
     const definition = CLIENT_EVENTS[key];
     if (!definition) return Response.json({ error: "ไม่รู้จักกิจกรรมที่ต้องการบันทึก" }, { status: 400 });
     if (key === "arrange_warning" && !hasPermission(user, "arrange")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์จัดงาน" }, { status: 403 });
-    if (key === "export_stock_all" && !hasPermission(user, "stock-all")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ Stock ทั้งหมด" }, { status: 403 });
+    if (key === "export_stock_all" && (!hasPermission(user, "stock-all") || !hasPermission(user, "stock-all-export"))) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ Stock ทั้งหมด" }, { status: 403 });
     if (key === "export_forecast_excel" && !hasPermission(user, "forecast")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ Forecast" }, { status: 403 });
     await writeAuditLog(user, {
       ...definition, action: key, summary: String(body.summary || definition.actionLabel).slice(0, 1000), details: body.details,

@@ -5,11 +5,15 @@
 import { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import DashboardControlCenter from "./dashboard-control-center";
 import OverdueWorkPage from "./overdue-work-page";
-import StockAllPage, { createAllStockWorkbook } from "./stock-all-page";
+import StockAllPage from "./stock-all-page";
 import { createForecastExportWorkbook, createForecastExportBinary } from "./forecast-export";
 import { normalizeDueExcelDate } from "./due-excel-date";
 
 type PageKey = "stock-all" | "overdue" | "dashboard" | "stock" | "manual-stock" | "stock-count" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
+
+type AppPermission = PageKey | "stock-all-details" | "stock-all-export";
+
+const STOCK_ACCESS_LABELS: Record<string,string> = { "stock-all-details": "Stock ทั้งหมด: ดู Tag / Job / Movement", "stock-all-export": "Stock ทั้งหมด: ส่งออก Excel" };
 
 type DueLine = {
   id: number;
@@ -83,7 +87,7 @@ type TagPreview = {
 
 type ImportRow = Omit<DueLine, "id" | "importId" | "status" | "scannedQty" | "arrangedQty" | "tagCount"> & { sourceKey: string };
 type DuePayload = { dues: DueLine[]; imports: DueImport[]; scans: DueScan[]; receipts: DueReceipt[]; error?: string };
-type SystemUser = { id: number; employeeCode: string; displayName: string; email: string; role: string; active: boolean; permissions: PageKey[]; createdAt?: string };
+type SystemUser = { id: number; employeeCode: string; displayName: string; email: string; role: string; active: boolean; permissions: AppPermission[]; createdAt?: string };
 type PartImageMapping = { materialCode: string; originalName: string; contentType: string; updatedByName: string; updatedAt: string; materialDescription?: string };
 type StockPart = { materialCode: string; partName: string; customer: string; location: string; standardQty: number; active: boolean };
 type PartImportItem = Pick<StockPart, "materialCode" | "partName" | "customer" | "location" | "standardQty">;
@@ -213,7 +217,7 @@ type ForecastPreview = {
   materialCount: number; totalQty: number; duplicateRowCount: number; rows: ForecastUploadRow[];
 };
 type UserRole = "production" | "stock" | "qc" | "delivery" | "dispatcher" | "inspector";
-type UserForm = { id?: number; employeeCode: string; displayName: string; email: string; role: UserRole; pin: string; active: boolean; permissions: PageKey[] };
+type UserForm = { id?: number; employeeCode: string; displayName: string; email: string; role: UserRole; pin: string; active: boolean; permissions: AppPermission[] };
 type AuditLog = {
   id: number; moduleKey: string; moduleLabel: string; actionKey: string; actionLabel: string;
   entityType: string; entityId: string; summary: string; detailJson: string;
@@ -282,7 +286,7 @@ function updatePageLocation(next: PageKey, mode: "push" | "replace" = "push") {
 const PERMISSION_HELP: Record<PageKey, string> = {
   dashboard: "ภาพรวม Due และสถานะงาน",
   stock: "รับ Tag เข้า Stock และดูยอดคงเหลือ",
-  "stock-all": "ดู Stock ทุก Part รวมยอด 0 และส่งออก Excel โดยไม่รับเข้า/ปรับยอด",
+  "stock-all": "ดูภาพรวม Stock ทุก Part รวมยอด 0 (สิทธิ์รายละเอียดและ Excel เลือกแยกด้านล่าง)",
   "manual-stock": "คีย์รับงานเข้าและสร้าง Tag ตามจำนวนบรรจุต่อกล่อง",
   "stock-count": "สแกนตรวจนับและปรับยอดทีละ KIT Stock Tag",
   forecast: "นำเข้า Forecast ลูกค้าและตรวจว่ายอด Stock ส่งได้ถึงวันไหน",
@@ -665,7 +669,7 @@ function PartImagePair({ materialCode, masterVersion, actualVersion, masterAvail
   </div>;
 }
 
-export default function DeliveryControlApp({ user, signOutPath, monitorMode = false }: { user: { id: number; employeeCode: string; displayName: string; email: string; role: string; permissions: PageKey[] }; signOutPath: string; monitorMode?: boolean }) {
+export default function DeliveryControlApp({ user, signOutPath, monitorMode = false }: { user: { id: number; employeeCode: string; displayName: string; email: string; role: string; permissions: AppPermission[] }; signOutPath: string; monitorMode?: boolean }) {
   // ออกจากระบบด้วย POST เท่านั้น ปุ่มยังเป็น <a> เพื่อให้สไตล์เดิม (.top-user a,
   // .mobile-logout) ใช้ได้ต่อโดยไม่ต้องแก้ CSS แต่ตัวคำขอจริงเป็น POST
   async function signOut(event: ReactMouseEvent<HTMLAnchorElement>) {
@@ -822,7 +826,6 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   const [jobClosingKey, setJobClosingKey] = useState("");
   const [jobCloseSearch, setJobCloseSearch] = useState("");
   const [jobClosePage, setJobClosePage] = useState(1);
-  const [stockAllExporting, setStockAllExporting] = useState(false);
   const [stockLoading, setStockLoading] = useState(false);
   const [clearingTestStock, setClearingTestStock] = useState(false);
   const [stockPartForm, setStockPartForm] = useState({ materialCode: "", partName: "", customer: "", location: "", standardQty: "" });
@@ -872,7 +875,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   const canCreateReplacement = user.role === "admin" || user.role === "qc" || user.role === "inspector";
   const canIssueReplacement = user.role === "admin" || user.role === "delivery" || user.role === "dispatcher";
   const allowedPages = useMemo(() => {
-    const pages = new Set<PageKey>(user.role === "admin" ? NAV.map((item) => item.key) : user.permissions);
+    const pages = new Set<PageKey>(NAV.filter((item) => user.role === "admin" || user.permissions.includes(item.key)).map((item) => item.key));
     return pages;
   }, [user.permissions, user.role]);
   const firstAllowedPage = NAV.find((item) => allowedPages.has(item.key))?.key || "dashboard";
@@ -1093,7 +1096,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   }, [page, allowedPages]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!["stock", "stock-all", "manual-stock", "stock-count", "parts", "tags", "arrange", "replacement", "dispatch", "reports", "history"].includes(page)) return;
+    if (!["stock", "manual-stock", "stock-count", "parts", "tags", "arrange", "replacement", "dispatch", "reports", "history"].includes(page)) return;
     const timer = window.setTimeout(() => void loadStock(), 0);
     return () => window.clearTimeout(timer);
   }, [page]);
@@ -3411,24 +3414,6 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     }
   }
 
-  async function exportAllStock() {
-    if (stockAllExporting) return;
-    setStockAllExporting(true);
-    try {
-      const response = await fetch("/api/stock", { cache: "no-store" });
-      const snapshot = await response.json() as StockPayload & { error?: string };
-      if (!response.ok) throw new Error(snapshot.error || "โหลด Stock เพื่อส่งออกไม่สำเร็จ");
-      const xlsx = await import("xlsx");
-      const now = new Date();
-      const workbook = createAllStockWorkbook(xlsx, snapshot.parts || [], snapshot.tags || [], now.toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }));
-      xlsx.writeFile(workbook, `KIT_Stock_All_${bangkokDateTimeKey().replace(/[-:]/g, "").replace("T", "_")}.xlsx`);
-      setNotice({ type: "success", text: "ส่งออก Stock ทุก Part รวมยอด 0 สำเร็จ" });
-      void recordClientAudit("export_stock_all", "ส่งออก Stock ทั้งหมดทุก Part รวมยอด 0", { partCount: snapshot.parts?.length || 0, calculatedAt: now.toISOString() });
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ส่งออก Stock ไม่สำเร็จ" });
-    } finally { setStockAllExporting(false); }
-  }
-
   function renderStock() {
     const receivedStockTags = stock.tags.filter((item) => item.status === "in_stock" || item.status === "depleted");
     const reserved = receivedStockTags.reduce((sum, item) => sum + Number(item.reservedQty), 0);
@@ -4261,7 +4246,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         const xlsx = await import("xlsx");
         const rows = [
           ["รหัสพนักงาน", "ชื่อผู้ใช้งาน", "อีเมล", "บทบาท", "สิทธิ์หน้า", "สถานะ"],
-          ...visibleUsers.map((item) => [item.employeeCode, item.displayName, item.email || "", ROLE_LABELS[item.role] || item.role, (item.role === "admin" ? NAV.map((nav) => nav.label) : (item.permissions || []).map((key) => NAV.find((nav) => nav.key === key)?.label || key)).join(", "), item.active ? "ใช้งานปกติ" : "ระงับ"]),
+          ...visibleUsers.map((item) => [item.employeeCode, item.displayName, item.email || "", ROLE_LABELS[item.role] || item.role, (item.role === "admin" ? NAV.map((nav) => nav.label) : (item.permissions || []).map((key) => NAV.find((nav) => nav.key === key)?.label || STOCK_ACCESS_LABELS[key] || key)).join(", "), item.active ? "ใช้งานปกติ" : "ระงับ"]),
         ];
         const sheet = xlsx.utils.aoa_to_sheet(rows);
         sheet["!cols"] = [16, 26, 30, 18, 70, 15].map((wch) => ({ wch }));
@@ -4295,7 +4280,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
               <td data-label="รหัส / ผู้ใช้งาน"><div className="user-cell"><span>{item.displayName.slice(0, 1).toUpperCase()}</span><div><b>{item.displayName}</b><small>{item.employeeCode}</small></div></div></td>
               <td data-label="ชื่อ–นามสกุล / อีเมล"><b>{item.displayName}</b><small>{item.email || "—"}</small></td>
               <td data-label="บทบาท"><span className={`role-pill role-${item.role}`}>{ROLE_LABELS[item.role] || item.role}</span></td>
-              <td data-label="สิทธิ์หน้า"><div className="permission-summary">{(item.role === "admin" ? NAV.map((nav) => nav.key) : item.permissions || []).map((key) => <span key={key}>{NAV.find((nav) => nav.key === key)?.label || key}</span>)}</div></td>
+              <td data-label="สิทธิ์หน้า"><div className="permission-summary">{(item.role === "admin" ? NAV.map((nav) => nav.key) : item.permissions || []).map((key) => <span key={key}>{NAV.find((nav) => nav.key === key)?.label || STOCK_ACCESS_LABELS[key] || key}</span>)}</div></td>
               <td data-label="สถานะ"><span className={`status ${item.active ? "completed" : "over"}`}>{item.active ? "ใช้งานปกติ" : "ระงับ"}</span></td>
               <td data-label="จัดการ">{item.role === "admin" ? <span className="muted">บัญชีหลัก</span> : <div className="user-actions"><button className="tiny-button" onClick={() => editUser(item)}>✎ แก้ไข</button><button className="tiny-button" onClick={() => editUser(item)}>⚿ สิทธิ์ / PIN</button><button className={`tiny-button ${item.active ? "danger-outline" : ""}`} onClick={() => void toggleUser(item)}>{item.active ? "▧ ระงับ" : "✓ เปิดใช้"}</button></div>}</td>
             </tr>)}</tbody>
@@ -4312,7 +4297,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     </div>;
   }
 
-  const pageContent: Record<PageKey, () => ReactNode> = { "stock-all": () => <StockAllPage parts={stock.parts} tags={stock.tags} loading={stockLoading} exporting={stockAllExporting} onRefresh={() => void loadStock()} onExport={() => void exportAllStock()} />, overdue: renderOverdueWork, dashboard: renderDashboard, stock: renderStock, "manual-stock": renderManualStock, "stock-count": renderStockCount, forecast: renderForecast, parts: renderParts, tags: renderTags, plan: renderPlan, arrange: () => renderScan("arrange"), replacement: renderReplacement, verify: renderVerify, dispatch: () => renderScan("dispatch"), exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
+  const pageContent: Record<PageKey, () => ReactNode> = { "stock-all": () => <StockAllPage canDetails={user.role === "admin" || user.permissions.includes("stock-all-details")} canExport={user.role === "admin" || user.permissions.includes("stock-all-export")} />, overdue: renderOverdueWork, dashboard: renderDashboard, stock: renderStock, "manual-stock": renderManualStock, "stock-count": renderStockCount, forecast: renderForecast, parts: renderParts, tags: renderTags, plan: renderPlan, arrange: () => renderScan("arrange"), replacement: renderReplacement, verify: renderVerify, dispatch: () => renderScan("dispatch"), exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
   const activeNav = (page === "overdue" ? { key: "overdue", label: "งานติดลบ / ค้างส่ง", icon: "!" } : NAV.find((item) => item.key === page)) || NAV.find((item) => item.key === firstAllowedPage) || NAV[0];
 
   if (monitorMode) return <main className="overdue-monitor-shell">
@@ -4448,11 +4433,12 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
               ...current,
               permissions: event.target.checked
                 ? [...new Set([...current.permissions, item.key])]
-                : current.permissions.filter((key) => key !== item.key),
+                : current.permissions.filter((key) => key !== item.key && (item.key !== "stock-all" || !["stock-all-details", "stock-all-export"].includes(key))),
             }))} />
             <span>{item.icon}</span><div><b>{item.label}</b><small>{PERMISSION_HELP[item.key]}</small></div>
           </label>;
         })}</div>
+        <div className="permission-grid">{([{key:"stock-all-details",label:"Stock ทั้งหมด: ดู Tag / Job / Movement"},{key:"stock-all-export",label:"Stock ทั้งหมด: ส่งออก Excel"}] as const).map((item) => <label key={item.key} className="permission-option"><input type="checkbox" disabled={!userForm.permissions.includes("stock-all")} checked={userForm.permissions.includes(item.key)} onChange={(event) => setUserForm((current) => ({...current,permissions:event.target.checked ? [...new Set([...current.permissions,item.key])] : current.permissions.filter((key) => key !== item.key)}))}/><div><b>{item.label}</b><small>ต้องมีสิทธิ์ดูหน้า Stock ทั้งหมดด้วย</small></div></label>)}</div>
       </section>
       <footer><button type="button" className="button secondary" onClick={() => setUserEditorOpen(false)}>ยกเลิก</button><button className="button primary" disabled={userSaving || !userForm.permissions.length}>{userSaving ? "กำลังบันทึก…" : "บันทึกผู้ใช้งานและสิทธิ์"}</button></footer>
     </form></div>}
