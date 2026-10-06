@@ -3,6 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import SplitTagPopup from "./split-tag-popup";
 import OperationWarningPopup from "./operation-warning-popup";
 import { reportOperationWarning } from "./operation-warning";
 import DashboardControlCenter from "./dashboard-control-center";
@@ -777,6 +778,13 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   const arrangeRequestRef = useRef(false);
   const arrangeConfirmButtonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => { if (arrangeConfirmation) arrangeConfirmButtonRef.current?.focus(); }, [arrangeConfirmation]);
+  const [splitTagRequest,setSplitTagRequest]=useState<{pickId?:number;stockTagCode?:string;labelId?:string}|null>(null);
+  useEffect(()=>{const id=new URLSearchParams(window.location.search).get("splitLabel");if(!id)return;const timer=window.setTimeout(()=>setSplitTagRequest({labelId:id}),0);return()=>window.clearTimeout(timer);},[]);
+  function closeSplitTag() {
+    setSplitTagRequest(null);
+    const url=new URL(window.location.href);
+    if(url.searchParams.has("splitLabel")){url.searchParams.delete("splitLabel");window.history.replaceState(window.history.state,"",url.pathname+url.search+url.hash);}
+  }
   const [arrangementPreview, setArrangementPreview] = useState<ArrangementPreview | null>(null);
   const [filterDate, setFilterDate] = useState("");
   const [dashboardStatusFilter, setDashboardStatusFilter] = useState<"all" | "completed" | "pending" | "over">("all");
@@ -1403,7 +1411,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
 
   useEffect(() => {
     const scannerPage = page === "stock" || page === "stock-count" || page === "dispatch" || (page === "replacement" && canIssueReplacement);
-    if (!scannerPage || stockReceivePreview || dispatchConfirmation || replacementPreview || cameraOpen) return;
+    if (!scannerPage || stockReceivePreview || dispatchConfirmation || replacementPreview || cameraOpen || splitTagRequest) return;
     const activeInput = page === "stock" ? stockScanInputRef.current : page === "stock-count" ? stockCountInputRef.current : page === "replacement" ? replacementInputRef.current : tagInput.current;
     const mobileOrTouch = window.matchMedia("(max-width: 720px), (pointer: coarse)").matches;
     const focusTimer = mobileOrTouch ? null : window.setTimeout(() => activeInput?.focus(), 80);
@@ -1454,7 +1462,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       hardwareScanBufferRef.current = "";
       document.removeEventListener("keydown", onScannerKey);
     };
-  }, [page, stockReceivePreview, dispatchConfirmation, replacementPreview, cameraOpen, replacementSelectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [page, stockReceivePreview, dispatchConfirmation, replacementPreview, cameraOpen, replacementSelectedId, splitTagRequest]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function parseExcel(event: ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0] ?? null;
@@ -2500,6 +2508,10 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   async function printStockTags(input: StockTag | StockTag[]) {
     const tags = Array.isArray(input) ? input : [input];
     if (!tags.length) return;
+    if(tags.some(tag=>tag.status==='in_stock'||tag.status==='depleted')) {
+      if(tags.length!==1)return setNotice({type:'error',text:'กรุณาพิมพ์ Tag คงเหลือทีละ Tag เพื่อใช้จำนวนล่าสุด'});
+      setSplitTagRequest({stockTagCode:tags[0].tagId});return;
+    }
     const qrcode = await import("qrcode");
     const popup = window.open("", "_blank", "width=900,height=950");
     if (!popup) return setNotice({ type: "error", text: "เบราว์เซอร์บล็อกหน้าพิมพ์ กรุณาอนุญาต Pop-up" });
@@ -2669,6 +2681,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       return;
     }
     setArrangeConfirmation(null);
+    closeSplitTag();
     setPage(next);
     updatePageLocation(next);
     if (next === "parts" || next === "settings") void loadPartImages();
@@ -3646,7 +3659,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
                 {arrangementPreview ? <>
                   <div className="arrange-success"><span>✓</span><b>จัดงานสำเร็จ!</b></div>
                   <div className="arrange-part-result"><PartImage materialCode={arrangementPreview.due.materialCode} compact /><div><small>Part No.</small><b>{arrangementPreview.due.materialCode}</b><p>{arrangementPreview.due.materialDescription || "ไม่ระบุชื่อชิ้นงาน"}</p></div></div>
-                  <dl><div><dt>รอบ / FAC</dt><dd>{arrangementPreview.due.deliveryTime} / {arrangementPreview.due.fact}</dd></div><div><dt>Job</dt><dd>{arrangementPreview.tag.jobNo}</dd></div><div><dt>Due ทั้งหมด</dt><dd>{fmt(arrangementPreview.due.reqQty)} ชิ้น</dd></div><div><dt>จัดครั้งนี้</dt><dd>{fmt(arrangementPreview.pick.pickedQty)} ชิ้น</dd></div><div><dt>คงเหลือ</dt><dd>{fmt(arrangementPreview.due.remainingQty)} ชิ้น</dd></div></dl>
+                  <dl><div><dt>รอบ / FAC</dt><dd>{arrangementPreview.due.deliveryTime} / {arrangementPreview.due.fact}</dd></div><div><dt>Job</dt><dd>{arrangementPreview.tag.jobNo}</dd></div><div><dt>Due ทั้งหมด</dt><dd>{fmt(arrangementPreview.due.reqQty)} ชิ้น</dd></div><div><dt>จัดครั้งนี้</dt><dd>{fmt(arrangementPreview.pick.pickedQty)} ชิ้น</dd></div><div><dt>คงเหลือ</dt><dd>{fmt(arrangementPreview.due.remainingQty)} ชิ้น</dd></div></dl><button type="button" className="button primary" onClick={()=>setSplitTagRequest({pickId:arrangementPreview.pick.id})}>▤ พิมพ์ Tag ส่งงาน / คงเหลือ</button>
                 </> : effectiveArrangeDueDate ? <>
                   <div className="arrange-waiting"><span>▦</span><b>Due ที่เลือก</b></div>
                   <div className="arrange-part-result"><span className="arrange-date-icon">◷</span><div><small>วันที่ส่งงาน</small><b>{formatDate(effectiveArrangeDueDate)}</b><p>รอบ {arrangeDueTime || "ทั้งหมด"} · {arrangeDueFact || "ทุก FAC"} — ระบบจับคู่ Part เฉพาะ Due ตามที่เลือก</p></div></div>
@@ -3710,7 +3723,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         </Card>
 
         <Card className="arrange-list-panel arranged-history-panel" title={<><span className="arranged-list-icon">✓</span> รายการที่จัดงานแล้ว <em>{fmt(arrangedRows.length)} รายการ</em></>} action={<div className="arranged-search"><span>⌕</span><input type="search" value={arrangedSearch} onChange={(event) => { setArrangedSearch(event.target.value); setArrangedPage(1); }} placeholder="ค้นหา Due, Part, Job, KIT Tag หรือผู้จัด" /></div>}>
-          {arrangedPageRows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table arranged-table"><thead><tr><th>วันที่จัด</th><th>รูปภาพ</th><th>Due</th><th>Part No.</th><th>Job / KIT Tag</th><th className="num">จำนวนจัด</th><th className="num">ขายแล้ว</th><th className="num">รอขาย</th><th>ผู้จัด</th><th>สถานะ</th></tr></thead><tbody>
+          {arrangedPageRows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table arranged-table"><thead><tr><th>วันที่จัด</th><th>รูปภาพ</th><th>Due</th><th>Part No.</th><th>Job / KIT Tag</th><th className="num">จำนวนจัด</th><th className="num">ขายแล้ว</th><th className="num">รอขาย</th><th>ผู้จัด</th><th>สถานะ / Tag</th></tr></thead><tbody>
             {arrangedPageRows.map((item) => {
               const waitingQty = Math.max(Number(item.pickedQty || 0) - Number(item.dispatchedQty || 0), 0);
               const dispatchState = waitingQty <= 0 ? "completed" : Number(item.dispatchedQty || 0) > 0 ? "partial" : "pending";
@@ -3724,7 +3737,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
                 <td data-label="ขายแล้ว" className="num"><b className="sent">{fmt(item.dispatchedQty || 0)}</b></td>
                 <td data-label="รอขาย" className="num"><b className={waitingQty > 0 ? "warning" : ""}>{fmt(waitingQty)}</b></td>
                 <td data-label="ผู้จัด"><b>{item.pickedByName || "—"}</b><small>{item.pickedByCode || ""}</small></td>
-                <td data-label="สถานะ"><span className={`status ${dispatchState}`}>{waitingQty <= 0 ? "ขายออกแล้ว" : Number(item.dispatchedQty || 0) > 0 ? "ขายออกบางส่วน" : "รอขายออก"}</span></td>
+                <td data-label="สถานะ"><span className={`status ${dispatchState}`}>{waitingQty <= 0 ? "ขายออกแล้ว" : Number(item.dispatchedQty || 0) > 0 ? "ขายออกบางส่วน" : "รอขายออก"}</span>{waitingQty>0&&<button className="tiny-button" type="button" onClick={()=>setSplitTagRequest({pickId:item.id})}>▤ พิมพ์ Tag</button>}</td>
               </tr>;
             })}
           </tbody></table></div> : <Empty title="ยังไม่มีรายการที่จัดงานแล้ว" text={arrangedSearch ? "ไม่พบรายการตามคำค้นหา" : "เมื่อยิง KIT Tag จัดงาน รายการจะแสดงที่นี่"} />}
@@ -4469,6 +4482,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       {(dispatchConfirmation.verdict === "ready" || dispatchConfirmation.verdict === "ready_noimg") ? <footer><button type="button" className="button secondary" onClick={() => setDispatchConfirmation(null)}>ยกเลิก / ตรวจใหม่</button><button type="button" className="button confirm-dispatch-button" disabled={checkingTag} onClick={() => void confirmDispatch()}>{checkingTag ? "กำลังขายออก…" : "✓ ยืนยันขายออกและตัดยอด"}</button></footer> : <footer className="dispatch-confirm-blocked"><p>ไม่สามารถขายออกได้: {dispatchConfirmation.message || "ข้อมูลไม่พร้อมขายออก"}</p><button type="button" className="button secondary" onClick={() => setDispatchConfirmation(null)}>ปิดและตรวจใหม่</button></footer>}
     </div></div>}
     {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>{cameraPurpose === "stock" ? "สแกน Tag รับงานเข้า Stock" : cameraPurpose === "stock-count" ? "สแกน Tag ตรวจนับสิ้นเดือน" : "สแกน Tag ด้วยกล้อง"}</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className="camera-view"><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div><p className="camera-format-hint">รองรับ QR · Data Matrix · Code 128 · Code 39</p>{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
+    {splitTagRequest&&<SplitTagPopup {...splitTagRequest} page={page} onClose={closeSplitTag}/>}
     <OperationWarningPopup/>
     {userEditorOpen && <div className="modal-backdrop"><form className="user-modal permission-modal" onSubmit={saveUser}>
       <header><div><h3>{userForm.id ? "แก้ไขผู้ใช้งานและสิทธิ์" : "เพิ่มผู้ใช้งาน"}</h3><p>เลือกบทบาทและกำหนดหน้าที่แต่ละคนสามารถเปิดใช้งานได้</p></div><button type="button" onClick={() => setUserEditorOpen(false)}>×</button></header>
