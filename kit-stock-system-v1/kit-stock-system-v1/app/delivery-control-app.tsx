@@ -2522,10 +2522,6 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   async function printStockTags(input: StockTag | StockTag[]) {
     const tags = Array.isArray(input) ? input : [input];
     if (!tags.length) return;
-    if(tags.some(tag=>tag.status==='in_stock'||tag.status==='depleted')) {
-      if(tags.length!==1)return setNotice({type:'error',text:'กรุณาพิมพ์ Tag คงเหลือทีละ Tag เพื่อใช้จำนวนล่าสุด'});
-      setSplitTagRequest({stockTagCode:tags[0].tagId});return;
-    }
     const qrcode = await import("qrcode");
     const popup = window.open("", "_blank", "width=900,height=950");
     if (!popup) return setNotice({ type: "error", text: "เบราว์เซอร์บล็อกหน้าพิมพ์ กรุณาอนุญาต Pop-up" });

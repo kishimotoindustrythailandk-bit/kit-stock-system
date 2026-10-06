@@ -160,6 +160,11 @@ test("searches created Tags and reprints the original Tag ID without creating St
   }
   assert.match(appSource, /printStockTags\(item\)/);
   assert.match(appSource, /การพิมพ์ซ้ำใช้ Tag ID เดิมและไม่เพิ่มยอด Stock/);
+  const originalPrint = sourceSection(appSource, "  async function printStockTags(", "  const dates = useMemo");
+  assert.doesNotMatch(originalPrint, /setSplitTagRequest|tag\.status/);
+  assert.match(originalPrint, /STOCK RECEIVING TAG/);
+  assert.match(originalPrint, /fmt\(tag\.qty\)/);
+  assert.match(appSource, /setSplitTagRequest\(\{pickId:arrangementPreview\.pick\.id\}\)/);
 });
 
 test("places Job close and NG management on Print Tag with Stock authorization", async () => {
