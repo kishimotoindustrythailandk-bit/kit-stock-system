@@ -1,83 +1,63 @@
 "use client";
 
-import { useMemo, useState } from "react";
+/* eslint-disable @next/next/no-img-element */
+import { useEffect, useRef, useState } from "react";
 
-type Part = { materialCode: string; partName: string; customer: string; location?: string; active?: number | boolean };
-type Tag = { id: number; tagId: string; materialCode: string; jobNo: string; productionDate: string; receivedAt?: string; remainingQty: number; reservedQty: number; status: string };
+import { stockStatus, type StockOverviewRow } from "./stock-quantities";
+
 const fmt = (value: number) => Number(value || 0).toLocaleString("th-TH");
-const dateLabel = (value: string) => value ? value.slice(0, 10).split("-").reverse().join("/") : "—";
+const dateLabel = (value: string) => value ? value.slice(0,10).split("-").reverse().join("/") : "—";
 
-export function summarizeAllStock(parts: Part[], tags: Tag[]) {
-  const byPart = new Map<string, Tag[]>();
-  for (const tag of tags) {
-    if (!["in_stock", "depleted"].includes(tag.status) || Number(tag.remainingQty) <= 0) continue;
-    const list = byPart.get(tag.materialCode) || [];
-    list.push(tag);
-    byPart.set(tag.materialCode, list);
-  }
-  return parts.map((part) => {
-    const currentTags = byPart.get(part.materialCode) || [];
-    const totalQty = currentTags.reduce((sum, tag) => sum + Math.max(Number(tag.remainingQty || 0), 0), 0);
-    const arrangedQty = currentTags.reduce((sum, tag) => sum + Math.min(Math.max(Number(tag.reservedQty || 0), 0), Math.max(Number(tag.remainingQty || 0), 0)), 0);
-    return { ...part, totalQty, arrangedQty, availableQty: totalQty - arrangedQty, tagCount: currentTags.length, currentTags };
-  }).sort((a, b) => a.materialCode.localeCompare(b.materialCode));
+export function createOverviewWorkbook(xlsx: typeof import('xlsx'), rows: StockOverviewRow[], loadedAt: string) {
+ const sheet=xlsx.utils.aoa_to_sheet([
+  ['KIT · Stock ทั้งหมด','ข้อมูลล่าสุด',timeLabel(loadedAt)],
+  ['คงเหลือรวม = Stock พร้อมใช้ + จัดงานรอส่ง · ตาม Search / Filter ปัจจุบัน'],
+  ['Part No.','Description','Customer','Location','Stock Available','Arranged','Total Remaining','Active Tag Count','Status'],
+  ...rows.map((r)=>[r.materialCode,r.partName,r.customer,r.location,r.availableQty,r.arrangedQty,r.totalQty,r.tagCount,stockStatus(r)]),
+ ]);
+ sheet['!cols']=[25,38,24,22,20,20,20,22,20].map(wch=>({wch}));sheet['!autofilter']={ref:`A3:I${rows.length+3}`};
+ const book=xlsx.utils.book_new();xlsx.utils.book_append_sheet(book,sheet,'Stock ทุก Part');return book;
 }
-
-export function createAllStockWorkbook(xlsx: typeof import("xlsx"), parts: Part[], tags: Tag[], calculatedAt: string) {
-  const rows = summarizeAllStock(parts, tags);
-  const book = xlsx.utils.book_new();
-  const summary = xlsx.utils.aoa_to_sheet([
-    ["KIT · Stock ทั้งหมดทุก Part (รวมยอด 0)", "ข้อมูล ณ", calculatedAt],
-    ["คงเหลือรวม = Stock พร้อมใช้ + จัดงานรอส่ง; ไม่รวม Tag ที่ยังไม่รับเข้า / NG / ส่งหมดแล้ว"],
-    ["Part No.", "ชื่อชิ้นงาน", "ลูกค้า", "Location", "Stock พร้อมใช้", "จัดงานรอส่ง", "คงเหลือรวม", "จำนวน Tag คงเหลือ"],
-    ...rows.map((row) => [row.materialCode, row.partName, row.customer, row.location || "", row.availableQty, row.arrangedQty, row.totalQty, row.tagCount]),
-  ]);
-  summary["!cols"] = [25, 38, 25, 22, 20, 20, 20, 24].map((wch) => ({ wch }));
-  summary["!autofilter"] = { ref: `A3:H${rows.length + 3}` };
-  xlsx.utils.book_append_sheet(book, summary, "Stock ทุก Part");
-  const details = xlsx.utils.aoa_to_sheet([
-    ["Part No.", "Tag", "Job", "วันที่ผลิต", "วันที่รับเข้า", "Stock พร้อมใช้", "จัดงานรอส่ง", "คงเหลือรวม"],
-    ...rows.flatMap((row) => row.currentTags.map((tag) => {
-      const reserved = Math.min(Math.max(Number(tag.reservedQty || 0), 0), Number(tag.remainingQty));
-      return [row.materialCode, tag.tagId, tag.jobNo, dateLabel(tag.productionDate), dateLabel(tag.receivedAt || ""), Number(tag.remainingQty) - reserved, reserved, Number(tag.remainingQty)];
-    })),
-  ]);
-  details["!cols"] = [25, 48, 25, 18, 18, 20, 20, 20].map((wch) => ({ wch }));
-  details["!autofilter"] = { ref: details["!ref"] || "A1:H1" };
-  xlsx.utils.book_append_sheet(book, details, "Tag คงเหลือ");
-  return book;
+function timeLabel(value:string) { return value ? new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Bangkok',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/.test(value) ? value.replace(' ','T')+'Z' : value)).replace(',','') : '—'; }
+type Filters={search:string;status:string;customer:string;location:string;job:string;partGroup:string;availableOnly:boolean};
+const EMPTY:Filters={search:'',status:'all',customer:'',location:'',job:'',partGroup:'',availableOnly:false};
+export function stockFilterParams(f:Filters) {
+ const p=new URLSearchParams();for(const key of ['search','status','customer','location','job','partGroup'] as const) if(f[key] && f[key]!=='all') p.set(key,f[key]);if(f.availableOnly)p.set('availableOnly','1');return p;
 }
-
-export default function StockAllPage({ parts, tags, loading, exporting, onRefresh, onExport }: {
-  parts: Part[]; tags: Tag[]; loading: boolean; exporting: boolean; onRefresh: () => void; onExport: () => void;
-}) {
-  const [search, setSearch] = useState("");
-  const [quantity, setQuantity] = useState("all");
-  const [customer, setCustomer] = useState("");
-  const [page, setPage] = useState(1);
-  const [selected, setSelected] = useState("");
-  const [tagPage, setTagPage] = useState(1);
-  const all = useMemo(() => summarizeAllStock(parts, tags), [parts, tags]);
-  const needle = search.trim().toLowerCase();
-  const rows = all.filter((row) => (!customer || row.customer === customer)
-    && (quantity === "all" || (quantity === "zero" ? row.totalQty === 0 : row.totalQty > 0))
-    && (!needle || [row.materialCode, row.partName, row.customer, row.location].join(" ").toLowerCase().includes(needle)));
-  const total = all.reduce((sum, row) => ({ available: sum.available + row.availableQty, arranged: sum.arranged + row.arrangedQty, qty: sum.qty + row.totalQty }), { available: 0, arranged: 0, qty: 0 });
-  const pages = Math.max(1, Math.ceil(rows.length / 50)), safePage = Math.min(page, pages);
-  const detail = all.find((row) => row.materialCode === selected);
-  const tagPages = Math.max(1, Math.ceil((detail?.currentTags.length || 0) / 50)), safeTagPage = Math.min(tagPage, tagPages);
-  return <div className="stock-all-page">
-    <section className="card stock-all-header"><div><h2>Stock ทั้งหมด</h2><p>ทุก Part ในทะเบียน รวมยอด 0 · ดูยอดคงเหลือและ Tag / Job</p></div><div className="stock-all-actions"><button className="button secondary" disabled={loading} onClick={onRefresh}>{loading ? "กำลังโหลด…" : "↻ รีเฟรช"}</button><button className="button primary" disabled={loading || exporting || !parts.length} onClick={onExport}>{exporting ? "กำลังส่งออก…" : "⇩ Excel ทุก Part"}</button></div></section>
-    <section className="stock-all-metrics page-summary">{[["Part ทั้งหมด", all.length], ["Stock พร้อมใช้", total.available], ["จัดงานรอส่ง", total.arranged], ["คงเหลือรวม", total.qty]].map(([label, value]) => <article key={label}><small>{label}</small><b>{fmt(Number(value))}</b></article>)}</section>
-    <section className="card"><div className="stock-all-filters"><input type="search" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="ค้นหา Part / ชื่อชิ้นงาน / ลูกค้า / Location" aria-label="ค้นหา Stock ทุก Part"/><select value={quantity} onChange={(event) => { setQuantity(event.target.value); setPage(1); }}><option value="all">ทุกยอด (รวม 0)</option><option value="positive">มียอดคงเหลือ</option><option value="zero">ยอดคงเหลือ 0</option></select><select value={customer} onChange={(event) => { setCustomer(event.target.value); setPage(1); }}><option value="">ทุกลูกค้า</option>{[...new Set(all.map((row) => row.customer).filter(Boolean))].sort().map((name) => <option key={name}>{name}</option>)}</select></div>
-      <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>Part / ชื่อชิ้นงาน</th><th>ลูกค้า / Location</th><th className="num">Stock พร้อมใช้</th><th className="num">จัดงานรอส่ง</th><th className="num">คงเหลือรวม</th><th className="num">Tag คงเหลือ</th><th>รายละเอียด</th></tr></thead><tbody>{rows.slice((safePage - 1) * 50, safePage * 50).map((row) => <tr key={row.materialCode}><td data-label="Part / ชื่อชิ้นงาน"><b>{row.materialCode}</b><small>{row.partName}</small></td><td data-label="ลูกค้า / Location">{row.customer || "—"}<small>{row.location || "—"}</small></td><td className="num" data-label="Stock พร้อมใช้">{fmt(row.availableQty)}</td><td className="num" data-label="จัดงานรอส่ง">{fmt(row.arrangedQty)}</td><td className="num" data-label="คงเหลือรวม"><b>{fmt(row.totalQty)}</b></td><td className="num" data-label="Tag คงเหลือ">{fmt(row.tagCount)}</td><td data-label="รายละเอียด"><button className="tiny-button" onClick={() => { setSelected(row.materialCode); setTagPage(1); }}>ดู Tag / Job</button></td></tr>)}</tbody></table></div>
-      {!rows.length && <p>{loading ? "กำลังโหลดข้อมูล…" : "ไม่พบ Part ตามตัวกรอง"}</p>}
-      <div className="stock-all-pagination"><span>{fmt(rows.length)} Part · หน้า {safePage} / {pages}</span><button className="button secondary" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>ก่อนหน้า</button><button className="button secondary" disabled={safePage >= pages} onClick={() => setPage(safePage + 1)}>ถัดไป</button></div>
-    </section>
-    {detail && <section className="card"><div className="stock-all-header"><h3>Tag / Job · {detail.materialCode}</h3><button className="button secondary" onClick={() => setSelected("")}>ปิดรายละเอียด</button></div><div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>Tag / Job</th><th>วันที่ผลิต / รับเข้า</th><th className="num">พร้อมใช้</th><th className="num">จัดรอส่ง</th><th className="num">คงเหลือรวม</th></tr></thead><tbody>{detail.currentTags.slice((safeTagPage - 1) * 50, safeTagPage * 50).map((tag) => {
-      const reserved = Math.min(Math.max(Number(tag.reservedQty || 0), 0), Number(tag.remainingQty));
-      return <tr key={tag.id}><td data-label="Tag / Job"><b>{tag.tagId}</b><small>{tag.jobNo}</small></td><td data-label="วันที่ผลิต / รับเข้า">{dateLabel(tag.productionDate)}<small>{dateLabel(tag.receivedAt || "")}</small></td><td className="num" data-label="พร้อมใช้">{fmt(Number(tag.remainingQty) - reserved)}</td><td className="num" data-label="จัดรอส่ง">{fmt(reserved)}</td><td className="num" data-label="คงเหลือรวม">{fmt(Number(tag.remainingQty))}</td></tr>;
-    })}</tbody></table></div>{!detail.currentTags.length && <p>Part นี้ไม่มี Tag คงเหลือใน Stock / พื้นที่จัดงาน</p>}<div className="stock-all-pagination"><span>หน้า {safeTagPage} / {tagPages}</span><button className="button secondary" disabled={safeTagPage <= 1} onClick={() => setTagPage(safeTagPage - 1)}>ก่อนหน้า</button><button className="button secondary" disabled={safeTagPage >= tagPages} onClick={() => setTagPage(safeTagPage + 1)}>ถัดไป</button></div></section>}
-    <p className="stock-all-note">คงเหลือรวม = Stock พร้อมใช้ + จัดงานรอส่ง · ไม่รวม Tag ที่ยังไม่รับเข้า งาน NG และงานที่ส่งออกหมดแล้ว</p>
-  </div>;
+type Snapshot={rows:StockOverviewRow[];total:number;page:number;pageSize:number;loadedAt:string;summary:{partCount:number;availableQty:number;arrangedQty:number;totalQty:number};options:{customer:string;location:string;partGroup:string}[]};
+type DetailRow={id?:string;tagId?:string;jobNo:string;qty?:number;receivedQty?:number;remainingQty?:number;availableQty?:number;arrangedQty?:number;productionDate?:string;receivedAt?:string;status?:string;location?:string;action?:string;occurredAt?:string;actor?:string};
+type Detail={part:StockOverviewRow;rows:DetailRow[];total:number;page:number;pageSize:number};
+const INITIAL:Snapshot={rows:[],total:0,page:1,pageSize:10,loadedAt:'',summary:{partCount:0,availableQty:0,arrangedQty:0,totalQty:0},options:[]};
+function Photo({row}:{row:StockOverviewRow}) {const [failed,setFailed]=useState(false);return row.imageVersion && !failed ? <img className="stock-overview-photo" src={`/api/part-images?materialCode=${encodeURIComponent(row.materialCode)}&v=${encodeURIComponent(row.imageVersion)}`} alt={`รูป ${row.materialCode}`} loading="lazy" onError={()=>setFailed(true)}/> : <span className="stock-overview-photo placeholder" aria-hidden="true">◇</span>;}
+function Badge({row}:{row:StockOverviewRow}) {return <span className={`stock-overview-badge ${row.totalQty<0?'negative':row.availableQty>0?'ready':row.arrangedQty>0?'arranged':'zero'}`}>{stockStatus(row)}</span>;}
+export default function StockAllPage({canDetails,canExport}:{canDetails:boolean;canExport:boolean}) {
+ const [filters,setFilters]=useState<Filters>(EMPTY),[data,setData]=useState<Snapshot>(INITIAL),[page,setPage]=useState(1),[pageSize,setPageSize]=useState(10),[refresh,setRefresh]=useState(0);
+ const [loading,setLoading]=useState(true),[exporting,setExporting]=useState(false),[error,setError]=useState(''),[showFilters,setShowFilters]=useState(true);
+ const [selected,setSelected]=useState(''),[tab,setTab]=useState('tag'),[detailPage,setDetailPage]=useState(1),[detail,setDetail]=useState<Detail|null>(null),[detailLoading,setDetailLoading]=useState(false),[detailError,setDetailError]=useState('');
+ const drawerRef=useRef<HTMLElement>(null),opener=useRef<HTMLElement|null>(null);
+ const query=stockFilterParams(filters).toString();
+ useEffect(()=>{const controller=new AbortController();const timer=setTimeout(()=>{setLoading(true);setError('');fetch(`/api/stock-all?${query}&page=${page}&pageSize=${pageSize}`,{cache:'no-store',signal:controller.signal}).then(async r=>{const d=await r.json() as Snapshot & {error?:string};if(!r.ok)throw new Error(d.error||'โหลด Stock ไม่สำเร็จ');setData(d);}).catch(e=>{if(e.name!=='AbortError')setError(e.message);}).finally(()=>{if(!controller.signal.aborted)setLoading(false);});},250);return()=>{clearTimeout(timer);controller.abort();};},[query,page,pageSize,refresh]);
+ useEffect(()=>{if(!selected || !canDetails)return;const controller=new AbortController();const timer=setTimeout(()=>{setDetailLoading(true);setDetailError('');fetch(`/api/stock-all?part=${encodeURIComponent(selected)}&tab=${tab}&page=${detailPage}`,{cache:'no-store',signal:controller.signal}).then(async r=>{const d=await r.json() as Detail & {error?:string};if(!r.ok)throw new Error(d.error||'โหลดรายละเอียดไม่สำเร็จ');setDetail(d);}).catch(e=>{if(e.name!=='AbortError')setDetailError(e.message);}).finally(()=>{if(!controller.signal.aborted)setDetailLoading(false);});},0);return()=>{clearTimeout(timer);controller.abort();};},[selected,tab,detailPage,canDetails,refresh]);
+ useEffect(()=>{if(!selected)return;const old=document.body.style.overflow;document.body.style.overflow='hidden';drawerRef.current?.focus();return()=>{document.body.style.overflow=old;opener.current?.focus();};},[selected]);
+ const change=<K extends keyof Filters>(key:K,value:Filters[K])=>{setFilters(f=>({...f,[key]:value}));setPage(1);};
+ const clear=()=>{setFilters(EMPTY);setPage(1);};
+ const open=(row:StockOverviewRow,event:React.MouseEvent<HTMLButtonElement>)=>{opener.current=event.currentTarget;setSelected(row.materialCode);setTab('tag');setDetailPage(1);setDetail(null);};
+ const activeCount=Object.entries(filters).filter(([key,value])=>key!=='search' && value && value!=='all').length;
+ const pages=Math.max(1,Math.ceil(data.total/pageSize));const current=Math.min(page,pages);
+ const pageButtons=[...new Set([1,...Array.from({length:5},(_,i)=>current-2+i).filter(n=>n>1&&n<pages),pages])].sort((a,b)=>a-b);
+ async function exportExcel(){if(!canExport||exporting)return;setExporting(true);setError('');try{const response=await fetch(`/api/stock-all?${query}&export=1`,{cache:'no-store'});const snapshot=await response.json() as Snapshot & {error?:string};if(!response.ok)throw new Error(snapshot.error||'ส่งออกไม่สำเร็จ');const xlsx=await import('xlsx');xlsx.writeFile(createOverviewWorkbook(xlsx,snapshot.rows,snapshot.loadedAt),`KIT_Stock_All_${new Date(snapshot.loadedAt).toISOString().replace(/[:.]/g,'-')}.xlsx`);}catch(e){setError(e instanceof Error?e.message:'ส่งออกไม่สำเร็จ');}finally{setExporting(false);}}
+ function onDrawerKey(event:React.KeyboardEvent<HTMLElement>){if(event.key==='Escape'){setSelected('');return;}if(event.key!=='Tab')return;const items=drawerRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled),a[href],input,select,[tabindex="0"]');if(!items?.length)return;const first=items[0],last=items[items.length-1];if(event.shiftKey&&(document.activeElement===first||document.activeElement===drawerRef.current)){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}}
+ return <div className="stock-all-page stock-overview">
+  <section className="stock-overview-header"><div className="stock-overview-title"><span>▦</span><div><h2>Stock ทั้งหมด</h2><p>ดู Stock ทุก Part รวมยอด ดู Tag / Job และส่งออก Excel</p></div></div><div className="stock-overview-updated"><span>ข้อมูลล่าสุด<br/><b>{timeLabel(data.loadedAt)}</b></span><button className="button secondary" disabled={loading} onClick={()=>setRefresh(n=>n+1)}>{loading?'กำลังโหลด…':'↻ รีเฟรชข้อมูล'}</button></div></section>
+  <section className="stock-overview-kpis">{([{label:'Part ทั้งหมด',value:data.summary.partCount,unit:'รายการ',status:'all',icon:'▦'},{label:'Stock พร้อมใช้',value:data.summary.availableQty,unit:'ชิ้น',status:'available',icon:'✓'},{label:'จัดงานรอส่ง',value:data.summary.arrangedQty,unit:'ชิ้น',status:'arranged',icon:'□'},{label:'คงเหลือรวม',value:data.summary.totalQty,unit:'ชิ้น',status:'remaining',icon:'≡'}]).map((k,i)=><button key={k.label} className={`stock-overview-kpi kpi-${i}`} aria-pressed={filters.status===k.status} onClick={()=>k.status==='all'?clear():change('status',k.status)}><span>{k.icon}</span><div><small>{k.label}</small><b>{fmt(k.value)}</b><small>{k.unit}</small></div><em>›</em></button>)}</section>
+  <section className="card stock-overview-filter-card"><div className="stock-overview-search"><input type="search" value={filters.search} onChange={e=>change('search',e.target.value)} placeholder="ค้นหา Part No. / ชื่อชิ้นงาน / ลูกค้า / Job / Location" aria-label="ค้นหา Stock ทุก Part"/><button className="button secondary" aria-expanded={showFilters} onClick={()=>setShowFilters(v=>!v)}>☷ ตัวกรอง ({activeCount})</button>{canExport&&<button className="button primary" disabled={loading||exporting} onClick={()=>void exportExcel()}>{exporting?'กำลังส่งออก…':'⇩ ส่งออก Excel'}</button>}</div>
+  {showFilters&&<div className="stock-overview-filters"><label>สถานะ Stock<select value={filters.status} onChange={e=>change('status',e.target.value)}><option value="all">ทั้งหมด</option><option value="available">มี Stock พร้อมใช้</option><option value="zero">Stock = 0</option><option value="arranged">มีงานจัดรอส่ง</option><option value="remaining">มีคงเหลือรวม</option></select></label>{(['customer','location'] as const).map(key=><label key={key}>{key==='customer'?'ลูกค้า':'Location'}<select value={filters[key]} onChange={e=>change(key,e.target.value)}><option value="">ทั้งหมด</option>{[...new Set(data.options.map(r=>r[key]).filter(Boolean))].sort().map(v=><option key={v}>{v}</option>)}</select></label>)}<label>Job<input value={filters.job} onChange={e=>change('job',e.target.value)} placeholder="ค้นหา Job บางส่วน"/></label><label>กลุ่ม Part (รหัส 4 ตัวแรก)<select value={filters.partGroup} onChange={e=>change('partGroup',e.target.value)}><option value="">ทั้งหมด</option>{[...new Set(data.options.map(r=>r.partGroup))].sort().map(v=><option key={v}>{v}</option>)}</select></label><label className="stock-overview-toggle"><input role="switch" type="checkbox" checked={filters.availableOnly} onChange={e=>change('availableOnly',e.target.checked)}/>แสดงเฉพาะ Stock พร้อมใช้</label><button className="text-button" onClick={clear} disabled={!activeCount&&!filters.search}>ล้างตัวกรองทั้งหมด</button></div>}</section>
+  {error&&<p role="alert" className="stock-overview-error">{error}</p>}
+  <section className="card stock-overview-table-card" aria-busy={loading}><h3>รายการ Stock ทั้งหมด ({fmt(data.total)})</h3><div className="table-wrap mobile-table-wrap"><table className="mobile-card-table stock-overview-table"><thead><tr><th>Part / ชื่อชิ้นงาน</th><th>ลูกค้า / Location</th><th>Stock พร้อมใช้</th><th>จัดงานรอส่ง</th><th>คงเหลือรวม</th><th>จำนวน Tag</th><th>สถานะ</th><th>จัดการ</th></tr></thead><tbody>{data.rows.map(row=><tr key={row.materialCode}><td data-label="Part / ชื่อชิ้นงาน"><div className="stock-overview-part"><Photo row={row}/><span><b>{row.materialCode}</b><small>{row.partName}</small></span></div></td><td data-label="ลูกค้า / Location">{row.customer||'—'}<small>{row.location||'—'}</small></td><td className="num qty-ready" data-label="Stock พร้อมใช้">{fmt(row.availableQty)}</td><td className="num qty-arranged" data-label="จัดงานรอส่ง">{fmt(row.arrangedQty)}</td><td className="num qty-total" data-label="คงเหลือรวม">{fmt(row.totalQty)}</td><td className="num" data-label="จำนวน Tag">{canDetails?<button className="text-button" aria-label={`ดู ${row.tagCount} Tag ของ ${row.materialCode}`} onClick={e=>open(row,e)}>{fmt(row.tagCount)}</button>:fmt(row.tagCount)}</td><td data-label="สถานะ"><Badge row={row}/></td><td data-label="จัดการ">{canDetails?<button className="tiny-button" onClick={e=>open(row,e)}>ดู Tag / Job ›</button>:<span>—</span>}</td></tr>)}</tbody></table></div>{!data.rows.length&&<p className="stock-overview-empty">{loading?'กำลังโหลดข้อมูลจริง…':'ไม่พบ Part ตามตัวกรอง'}</p>}
+  <footer className="stock-overview-pagination"><label>แสดง <select value={pageSize} onChange={e=>{setPageSize(Number(e.target.value));setPage(1);}}>{[10,25,50,100].map(v=><option key={v}>{v}</option>)}</select> รายการต่อหน้า</label><nav aria-label="หน้ารายการ Stock"><button disabled={current<=1||loading} onClick={()=>setPage(current-1)}>‹</button>{pageButtons.map((n,i)=><span key={n}>{i>0&&n-pageButtons[i-1]>1&&<span>…</span>}<button className={n===current?'active':''} disabled={loading} aria-current={n===current?'page':undefined} onClick={()=>setPage(n)}>{n}</button></span>)}<button disabled={current>=pages||loading} onClick={()=>setPage(current+1)}>›</button></nav><span>แสดง {fmt(data.total?(current-1)*pageSize+1:0)}–{fmt(Math.min(current*pageSize,data.total))} จาก {fmt(data.total)} รายการ</span></footer></section>
+  <p className="stock-all-note">คงเหลือรวม = Stock พร้อมใช้ + จัดงานรอส่ง · รวมทุก Part ใน Part Master แม้ไม่มี Tag · จำนวน Tag นับเฉพาะงานคงเหลือจริง</p>
+  {selected&&canDetails&&<div className="stock-overview-backdrop" onClick={()=>setSelected('')}><aside ref={drawerRef} className="stock-overview-drawer" role="dialog" aria-modal="true" aria-label={`Tag / Job ${selected}`} tabIndex={-1} onKeyDown={onDrawerKey} onClick={e=>e.stopPropagation()}><header><h3>Tag / Job · {selected}</h3><button className="button secondary" onClick={()=>setSelected('')} aria-label="ปิดรายละเอียด">×</button></header>{detail&&<><div className="stock-overview-drawer-part"><Photo row={detail.part}/><div><b>{detail.part.materialCode}</b><p>{detail.part.partName}</p><small>{detail.part.customer} · {detail.part.location||'—'}</small><Badge row={detail.part}/></div></div><div className="stock-overview-detail-metrics">{[['Stock พร้อมใช้',detail.part.availableQty],['จัดงานรอส่ง',detail.part.arrangedQty],['คงเหลือรวม',detail.part.totalQty]].map(([label,value])=><div key={label}><small>{label}</small><b>{fmt(Number(value))}</b></div>)}</div></>}
+  <div className="stock-overview-tabs" role="tablist" aria-label="รายละเอียด Part">{['tag','job','movement'].map(t=><button role="tab" aria-selected={tab===t} key={t} className={tab===t?'active':''} onClick={()=>{setTab(t);setDetailPage(1);}}>{t==='tag'?'Tag':t==='job'?'Job':'Movement'}</button>)}</div>{detailError&&<p role="alert">{detailError}</p>}{detailLoading?<p>กำลังโหลดรายละเอียด…</p>:<div role="tabpanel" className="table-wrap"><table className="stock-overview-detail-table"><thead><tr>{(tab==='tag'?['Tag / Job','คงเหลือ / พร้อมใช้ / จัดรอส่ง','ผลิตวันที่','สถานะ / Location']:tab==='job'?['Job No.','จำนวนรับเข้า','คงเหลือ','วันที่รับครั้งแรก']:['รายการ / Tag / Job','จำนวน','วันที่','ผู้ดำเนินการ']).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{detail?.rows.map((r,i)=><tr key={r.id||r.jobNo||i}>{tab==='tag'?<><td><b>{r.tagId}</b><small>{r.jobNo}</small></td><td>{fmt(r.remainingQty||0)} / {fmt(r.availableQty||0)} / {fmt(r.arrangedQty||0)}</td><td>{dateLabel(r.productionDate||'')}</td><td>{r.status==='in_stock'?'รับเข้าแล้ว':r.status==='depleted'?'คงเหลือบางส่วน':r.status}<small>{r.location||'—'}</small></td></>:tab==='job'?<><td>{r.jobNo||'—'}</td><td>{fmt(r.receivedQty||0)}</td><td>{fmt(r.remainingQty||0)}</td><td>{timeLabel(r.receivedAt||'')}</td></>:<><td><b>{r.action}</b><small>{r.tagId} · {r.jobNo}</small></td><td>{fmt(r.qty||0)}</td><td>{timeLabel(r.occurredAt||'')}</td><td>{r.actor||'—'}</td></>}</tr>)}</tbody></table>{!detail?.rows.length&&<p>ไม่มีรายการในส่วนนี้</p>}</div>}
+  <footer className="stock-overview-pagination"><button className="button secondary" disabled={detailPage<=1||detailLoading} onClick={()=>setDetailPage(p=>p-1)}>ก่อนหน้า</button><span>หน้า {detailPage} / {Math.max(1,Math.ceil((detail?.total||0)/25))} · {fmt(detail?.total||0)} รายการ</span><button className="button secondary" disabled={detailLoading||detailPage*25>=(detail?.total||0)} onClick={()=>setDetailPage(p=>p+1)}>ถัดไป</button></footer></aside></div>}
+ </div>;
 }

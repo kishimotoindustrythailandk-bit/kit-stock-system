@@ -1,3 +1,4 @@
+import { AVAILABLE_STOCK_SQL } from "../../stock-quantities";
 import { getCurrentUser, hasPermission } from "../../cloudflare-auth";
 import { getRuntimeEnv } from "../../../runtime/env";
 import { writeAuditLog } from "../../audit-log";
@@ -136,13 +137,7 @@ export async function GET(request?: Request) {
       `).bind(activeImport.id).all<LineRecord>(),
       DB.prepare(`
         SELECT tag.material_code AS materialCode,
-          SUM(MAX(tag.remaining_qty
-            - COALESCE((SELECT SUM(MAX(pick.picked_qty - pick.dispatched_qty, 0))
-                FROM stock_picks pick
-                WHERE pick.stock_tag_id = tag.id AND pick.status IN ('staged', 'partial')), 0)
-            - COALESCE((SELECT SUM(allocation.qty)
-                FROM stock_allocations allocation
-                WHERE allocation.stock_tag_id = tag.id AND allocation.status = 'reserved'), 0), 0)) AS stockQty
+          SUM(${AVAILABLE_STOCK_SQL}) AS stockQty
         FROM stock_tags tag
         WHERE tag.status IN ('in_stock', 'depleted') AND tag.remaining_qty > 0
         GROUP BY tag.material_code

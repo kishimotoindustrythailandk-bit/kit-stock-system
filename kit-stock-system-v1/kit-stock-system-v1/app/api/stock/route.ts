@@ -89,7 +89,7 @@ export async function GET() {
   try {
     const user = await getCurrentUser();
     if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
-    const fullStockPermissions = ["stock", "stock-all", "manual-stock", "stock-count", "tags", "arrange", "dispatch", "reports", "history"] as const;
+    const fullStockPermissions = ["stock", "manual-stock", "stock-count", "tags", "arrange", "dispatch", "reports", "history"] as const;
     const canReadFullStock = fullStockPermissions.some((key) => hasPermission(user, key));
     const canReadPartsOnly = hasPermission(user, "parts") || hasPermission(user, "replacement");
     if (!canReadFullStock && !canReadPartsOnly) {
