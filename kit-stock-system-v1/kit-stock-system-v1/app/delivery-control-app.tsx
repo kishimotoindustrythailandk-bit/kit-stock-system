@@ -5,10 +5,11 @@
 import { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import DashboardControlCenter from "./dashboard-control-center";
 import OverdueWorkPage from "./overdue-work-page";
+import StockAllPage, { createAllStockWorkbook } from "./stock-all-page";
 import { createForecastExportWorkbook, createForecastExportBinary } from "./forecast-export";
 import { normalizeDueExcelDate } from "./due-excel-date";
 
-type PageKey = "overdue" | "dashboard" | "stock" | "manual-stock" | "stock-count" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
+type PageKey = "stock-all" | "overdue" | "dashboard" | "stock" | "manual-stock" | "stock-count" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
 
 type DueLine = {
   id: number;
@@ -234,6 +235,7 @@ const EMPTY_USER: UserForm = { employeeCode: "", displayName: "", email: "", rol
 const NAV: Array<{ key: PageKey; label: string; icon: string }> = [
   { key: "dashboard", label: "หน้าหลัก", icon: "⌂" },
   { key: "stock", label: "Stock", icon: "▦" },
+  { key: "stock-all", label: "Stock ทั้งหมด", icon: "▦" },
   { key: "manual-stock", label: "รับเข้า Stock แบบคีย์เอง", icon: "＋" },
   { key: "stock-count", label: "ตรวจนับ/ปรับยอดสิ้นเดือน", icon: "≋" },
   { key: "forecast", label: "Forecast Stock", icon: "▧" },
@@ -280,6 +282,7 @@ function updatePageLocation(next: PageKey, mode: "push" | "replace" = "push") {
 const PERMISSION_HELP: Record<PageKey, string> = {
   dashboard: "ภาพรวม Due และสถานะงาน",
   stock: "รับ Tag เข้า Stock และดูยอดคงเหลือ",
+  "stock-all": "ดู Stock ทุก Part รวมยอด 0 และส่งออก Excel โดยไม่รับเข้า/ปรับยอด",
   "manual-stock": "คีย์รับงานเข้าและสร้าง Tag ตามจำนวนบรรจุต่อกล่อง",
   "stock-count": "สแกนตรวจนับและปรับยอดทีละ KIT Stock Tag",
   forecast: "นำเข้า Forecast ลูกค้าและตรวจว่ายอด Stock ส่งได้ถึงวันไหน",
@@ -300,6 +303,7 @@ const PERMISSION_HELP: Record<PageKey, string> = {
 
 const PAGE_SUBTITLE: Record<PageKey, string> = {
   dashboard: "ภาพรวมการส่งงานและสถานะล่าสุด",
+  "stock-all": "ดู Stock ทุก Part รวมยอด 0 ดู Tag / Job และส่งออก Excel โดยแยกจากหน้ารับเข้า",
   stock: "สแกนรับเข้า ตรวจสอบยอดคงเหลือ และประวัติ Stock",
   "manual-stock": "คีย์รับเข้า แบ่งจำนวนตามบรรจุต่อกล่อง และสร้าง Tag อัตโนมัติ",
   "stock-count": "สแกนและบันทึกยอดจริงทีละ Tag พร้อมปรับยอด Stock รวม",
@@ -818,6 +822,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   const [jobClosingKey, setJobClosingKey] = useState("");
   const [jobCloseSearch, setJobCloseSearch] = useState("");
   const [jobClosePage, setJobClosePage] = useState(1);
+  const [stockAllExporting, setStockAllExporting] = useState(false);
   const [stockLoading, setStockLoading] = useState(false);
   const [clearingTestStock, setClearingTestStock] = useState(false);
   const [stockPartForm, setStockPartForm] = useState({ materialCode: "", partName: "", customer: "", location: "", standardQty: "" });
@@ -1088,7 +1093,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   }, [page, allowedPages]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!["stock", "manual-stock", "stock-count", "parts", "tags", "arrange", "replacement", "dispatch", "reports", "history"].includes(page)) return;
+    if (!["stock", "stock-all", "manual-stock", "stock-count", "parts", "tags", "arrange", "replacement", "dispatch", "reports", "history"].includes(page)) return;
     const timer = window.setTimeout(() => void loadStock(), 0);
     return () => window.clearTimeout(timer);
   }, [page]);
@@ -3406,6 +3411,24 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     }
   }
 
+  async function exportAllStock() {
+    if (stockAllExporting) return;
+    setStockAllExporting(true);
+    try {
+      const response = await fetch("/api/stock", { cache: "no-store" });
+      const snapshot = await response.json() as StockPayload & { error?: string };
+      if (!response.ok) throw new Error(snapshot.error || "โหลด Stock เพื่อส่งออกไม่สำเร็จ");
+      const xlsx = await import("xlsx");
+      const now = new Date();
+      const workbook = createAllStockWorkbook(xlsx, snapshot.parts || [], snapshot.tags || [], now.toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }));
+      xlsx.writeFile(workbook, `KIT_Stock_All_${bangkokDateTimeKey().replace(/[-:]/g, "").replace("T", "_")}.xlsx`);
+      setNotice({ type: "success", text: "ส่งออก Stock ทุก Part รวมยอด 0 สำเร็จ" });
+      void recordClientAudit("export_stock_all", "ส่งออก Stock ทั้งหมดทุก Part รวมยอด 0", { partCount: snapshot.parts?.length || 0, calculatedAt: now.toISOString() });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ส่งออก Stock ไม่สำเร็จ" });
+    } finally { setStockAllExporting(false); }
+  }
+
   function renderStock() {
     const receivedStockTags = stock.tags.filter((item) => item.status === "in_stock" || item.status === "depleted");
     const reserved = receivedStockTags.reduce((sum, item) => sum + Number(item.reservedQty), 0);
@@ -4289,7 +4312,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     </div>;
   }
 
-  const pageContent: Record<PageKey, () => ReactNode> = { overdue: renderOverdueWork, dashboard: renderDashboard, stock: renderStock, "manual-stock": renderManualStock, "stock-count": renderStockCount, forecast: renderForecast, parts: renderParts, tags: renderTags, plan: renderPlan, arrange: () => renderScan("arrange"), replacement: renderReplacement, verify: renderVerify, dispatch: () => renderScan("dispatch"), exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
+  const pageContent: Record<PageKey, () => ReactNode> = { "stock-all": () => <StockAllPage parts={stock.parts} tags={stock.tags} loading={stockLoading} exporting={stockAllExporting} onRefresh={() => void loadStock()} onExport={() => void exportAllStock()} />, overdue: renderOverdueWork, dashboard: renderDashboard, stock: renderStock, "manual-stock": renderManualStock, "stock-count": renderStockCount, forecast: renderForecast, parts: renderParts, tags: renderTags, plan: renderPlan, arrange: () => renderScan("arrange"), replacement: renderReplacement, verify: renderVerify, dispatch: () => renderScan("dispatch"), exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
   const activeNav = (page === "overdue" ? { key: "overdue", label: "งานติดลบ / ค้างส่ง", icon: "!" } : NAV.find((item) => item.key === page)) || NAV.find((item) => item.key === firstAllowedPage) || NAV[0];
 
   if (monitorMode) return <main className="overdue-monitor-shell">
