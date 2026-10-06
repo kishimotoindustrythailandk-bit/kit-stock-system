@@ -381,7 +381,7 @@ test("uses page permissions for normal workflows while preserving Admin-only ope
   assert.match(appSource, /const hasDueDataPermission/);
   assert.match(appSource, /if \(!hasDueDataPermission\)/);
   assert.match(appSource, /const workflowPage: PageKey \| null = allowedPages\.has\("dispatch"\)/);
-  assert.match(dueApi, /const DUE_READ_PERMISSIONS = \["dashboard", "plan", "arrange", "dispatch", "exports", "reports", "history"\]/);
+  assert.match(dueApi, /const DUE_READ_PERMISSIONS = \["dashboard", "plan", "overdue", "arrange", "dispatch", "exports", "reports", "history"\]/);
   assert.match(duePost, /hasPermission\(user, "dispatch"\)/);
   assert.doesNotMatch(duePost, /user\.role|inspector/);
 
