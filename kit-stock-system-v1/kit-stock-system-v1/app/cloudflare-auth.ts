@@ -14,7 +14,7 @@ export type CloudUser = {
 };
 
 export const SESSION_COOKIE = "kit_session";
-export const PERMISSION_KEYS = ["dashboard", "stock", "manual-stock", "stock-count", "forecast", "parts", "tags", "plan", "overdue", "arrange", "replacement", "dispatch", "exports", "reports", "history", "settings", "users"] as const;
+export const PERMISSION_KEYS = ["dashboard", "stock", "stock-all", "manual-stock", "stock-count", "forecast", "parts", "tags", "plan", "overdue", "arrange", "replacement", "dispatch", "exports", "reports", "history", "settings", "users"] as const;
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
 
 const ROLE_DEFAULTS: Record<string, PermissionKey[]> = {
