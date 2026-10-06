@@ -1,8 +1,9 @@
 "use client";
 import { useEffect, useRef, useState } from 'react';
 import { WARNING_PAGES, type OperationWarning } from './operation-warning';
+import { speakThaiAlert } from './voice-alert';
 type Entry = OperationWarning & { id: number; status: 'pending' | 'saved' | 'failed' };
-export default function OperationWarningPopup() {
+export default function OperationWarningPopup({voiceEnabled=true}:{voiceEnabled?:boolean}) {
  const [entries,setEntries] = useState<Entry[]>([]);
  const retry = useRef<(entry:Entry)=>void>(()=>{});
  const nextId = useRef(0), button = useRef<HTMLButtonElement>(null), previousFocus = useRef<HTMLElement|null>(null);
@@ -22,13 +23,14 @@ export default function OperationWarningPopup() {
   const receive = (event:Event) => {
    const warning = (event as CustomEvent<OperationWarning>).detail;
    if(!warning || !WARNING_PAGES[warning.page] || !warning.message?.trim())return;
+   speakThaiAlert('error',warning.page,warning.message,voiceEnabled);
    const id=++nextId.current;
    if(warning.showPopup!==false)setEntries(rows=>[...rows,{...warning,id,status:'pending'}]);
    save(id,warning);
   };
   window.addEventListener('kit-operation-warning',receive);
   return()=>{alive=false;window.removeEventListener('kit-operation-warning',receive);};
- },[]);
+ },[voiceEnabled]);
  const entry = entries[0];
  useEffect(()=>{if(!entry)return;previousFocus.current=document.activeElement as HTMLElement;button.current?.focus();return()=>previousFocus.current?.focus();},[entry?.id]); // eslint-disable-line react-hooks/exhaustive-deps
  if(!entry)return null;

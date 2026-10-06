@@ -13,6 +13,7 @@ import StockAllPage from "./stock-all-page";
 import { OverviewIcon, OverviewLogo, OverviewFactory, OVERVIEW_NAV_ICONS } from "./stock-overview-icons";
 import { createForecastExportWorkbook, createForecastExportBinary } from "./forecast-export";
 import { normalizeDueExcelDate } from "./due-excel-date";
+import { speakThaiAlert } from "./voice-alert";
 
 type PageKey = "stock-all" | "overdue" | "dashboard" | "stock" | "manual-stock" | "stock-count" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
 
@@ -802,6 +803,9 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   const setCameraError = (value:string) => { setCameraErrorState(value); if(value)reportOperationWarning({page,message:value}); };
   const [selectedScan, setSelectedScan] = useState<DueScan | null>(null);
   const [settings, setSettings] = useState({ partial: true, confirm: true, sound: true, autoFocus: true });
+  useEffect(() => {
+    if (notice) speakThaiAlert(notice.type, page, notice.text, settings.sound);
+  }, [notice, page, settings.sound]);
   const [systemUsers, setSystemUsers] = useState<SystemUser[]>([]);
   const [userSearch, setUserSearch] = useState("");
   const [usersLoading, setUsersLoading] = useState(false);
@@ -1160,7 +1164,10 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     const timer = window.setTimeout(() => {
       const stored = window.localStorage.getItem("kit-due-settings");
       if (stored) {
-        try { setSettings(JSON.parse(stored)); } catch { /* use defaults */ }
+        try {
+          const parsed = JSON.parse(stored) as Partial<typeof settings>;
+          setSettings((current) => ({ ...current, ...parsed, sound: parsed.sound !== false }));
+        } catch { /* use defaults */ }
       }
     }, 0);
     return () => window.clearTimeout(timer);
@@ -4253,7 +4260,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   function renderSettings() {
     // ตัวแปรธรรมดา ไม่ใช่ useMemo เพราะ renderSettings() เป็นฟังก์ชันที่ถูกเรียก
     // แบบมีเงื่อนไข ไม่ใช่คอมโพเนนต์ การเรียก hook ในนี้จะผิดกฎ Hooks
-    const Toggle = ({ keyName, title, text: description, icon }: { keyName: keyof typeof settings; title: string; text: string; icon: string }) => <label className="setting-row"><span className="setting-row-icon">{icon}</span><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => ({ ...current, [keyName]: e.target.checked }))} /><i /></label>;
+    const Toggle = ({ keyName, title, text: description, icon }: { keyName: keyof typeof settings; title: string; text: string; icon: string }) => <label className="setting-row"><span className="setting-row-icon">{icon}</span><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => { const next={...current,[keyName]:e.target.checked}; if(keyName==='sound'){window.localStorage.setItem('kit-due-settings',JSON.stringify(next));if(e.target.checked)window.setTimeout(()=>speakThaiAlert('success','settings','เปิดเสียงพูดแล้ว',true),0);} return next; })} /><i /></label>;
     return <div className="settings-page-redesign">
       <section className="settings-block settings-system-block">
         <header><span>▤</span><h3>ข้อมูลระบบ</h3></header>
@@ -4271,7 +4278,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         </section>
         <section className="settings-block settings-option-card violet">
           <header><span>▣</span><h3>ตั้งค่าการสแกน</h3><i>▥▥▥</i></header>
-          <div><Toggle keyName="autoFocus" icon="▥" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" icon="♟" title="เสียงแจ้งเตือนเมื่อสำเร็จ" text="เปิดเสียงยืนยันหลังตัดยอดหรือบันทึกเรียบร้อย" /></div>
+          <div><Toggle keyName="autoFocus" icon="▥" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" icon="🔊" title="เสียงพูดแจ้งเตือนภาษาไทย" text="พูดผลสำเร็จ และอ่านสาเหตุเมื่อ Tag ผิดหรือจำนวนไม่พอ" /></div>
         </section>
       </div>
 
@@ -4361,7 +4368,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   if (monitorMode) return <main className="overdue-monitor-shell">
     {error && <div className="notice error">{error}</div>}
     {renderOverdueWork()}
-    <OperationWarningPopup/>
+    <OperationWarningPopup voiceEnabled={settings.sound}/>
   </main>;
 
   return <div onInvalidCapture={(event) => { event.preventDefault(); const field=event.target as HTMLInputElement; const label=field.closest("label")?.querySelector("span")?.textContent || field.getAttribute("aria-label") || "ข้อมูล"; reportOperationWarning({page,message:`${label}: ${field.validationMessage || "กรุณาตรวจสอบข้อมูล"}`}); }} className={`control-shell ${page === "stock-all" ? `stock-reference-shell ${stockMenuCollapsed ? "stock-sidebar-collapsed" : ""}` : ""}`}>
@@ -4491,7 +4498,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     </div></div>}
     {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>{cameraPurpose === "stock" ? "สแกน Tag รับงานเข้า Stock" : cameraPurpose === "stock-count" ? "สแกน Tag ตรวจนับสิ้นเดือน" : "สแกน Tag ด้วยกล้อง"}</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className="camera-view"><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div><p className="camera-format-hint">รองรับ QR · Data Matrix · Code 128 · Code 39</p>{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
     {splitTagRequest&&<SplitTagPopup {...splitTagRequest} page={page} onClose={closeSplitTag}/>}
-    <OperationWarningPopup/>
+    <OperationWarningPopup voiceEnabled={settings.sound}/>
     {userEditorOpen && <div className="modal-backdrop"><form className="user-modal permission-modal" onSubmit={saveUser}>
       <header><div><h3>{userForm.id ? "แก้ไขผู้ใช้งานและสิทธิ์" : "เพิ่มผู้ใช้งาน"}</h3><p>เลือกบทบาทและกำหนดหน้าที่แต่ละคนสามารถเปิดใช้งานได้</p></div><button type="button" onClick={() => setUserEditorOpen(false)}>×</button></header>
       <div className="user-form-grid">
