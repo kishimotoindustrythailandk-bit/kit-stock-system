@@ -43,3 +43,11 @@ test('print-only source tag request emits remainder at current available quantit
 test('login and permissions are checked for reading and issuing tags',async()=>{for(const options of [{user:null},{permitted:false}]){const{db,call,logs}=fixture(options);try{for(const method of ['GET','POST']){const r=await call(method,method==='GET'?'?pickId=1':'',method==='POST'?issueBody:undefined);assert.equal(r.status,options.user===null?401:403);}assert.equal(logs.length,0);}finally{db.close();}}});
 test('failed audit prevents issuing printable labels',async()=>{const{db,call}=fixture({auditFailure:true});try{const r=await call('POST','',issueBody);assert.equal(r.status,503);assert.equal(r.data.labels,undefined);}finally{db.close();}});
 test('QR identities distinguish outbound trace labels and existing remainder stock tags; print escapes text',async()=>{const{db,call}=fixture();try{const r=await call('POST','',issueBody);const [delivery,remaining]=r.data.labels;const payload=splitLabelPayload(delivery,r.data.labelId,'https://kit.test/?page=stock');assert.equal(new URL(payload).searchParams.get('splitLabel'),r.data.labelId);assert.equal(splitLabelPayload(remaining,r.data.labelId,'https://kit.test/'),'KITSTK-TEST');const output=renderSplitLabels([{...delivery,partName:'<script>alert(1)</script>'},remaining],r.data.labelId,r.data.issuedAt,['data:image/png;base64,AAAA','data:image/png;base64,BBBB'],'62mm');assert.ok(output.includes('62mm 100mm'));assert.ok(output.includes('&lt;script&gt;'));assert.ok(!output.includes('<script>alert'));assert.ok(output.includes('TAG คงเหลือใน Stock'));}finally{db.close();}});
+test('mobile print flow renders an in-app preview and prints its iframe without opening a blank popup',async()=>{
+ const source=await readFile(new URL('../app/split-tag-popup.tsx',import.meta.url),'utf8');
+ assert.doesNotMatch(source,/window\.open\(/);
+ assert.match(source,/srcDoc=\{preparedHtml\}/);
+ assert.match(source,/previewFrame\.current/);
+ assert.match(source,/contentWindow\.print\(\)/);
+ assert.match(source,/เตรียมและดูตัวอย่าง Tag/);
+});
