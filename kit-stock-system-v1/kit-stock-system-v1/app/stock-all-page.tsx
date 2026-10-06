@@ -3,6 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 import { useEffect, useRef, useState } from "react";
 
+import { reportOperationWarning } from "./operation-warning";
 import { OverviewIcon } from "./stock-overview-icons";
 import { stockStatus, type StockOverviewRow } from "./stock-quantities";
 
@@ -33,9 +34,11 @@ function Photo({row}:{row:StockOverviewRow}) {const [failed,setFailed]=useState(
 function Badge({row}:{row:StockOverviewRow}) {return <span className={`stock-overview-badge ${row.totalQty<0?'negative':row.availableQty>0?'ready':row.arrangedQty>0?'arranged':'zero'}`}>{stockStatus(row)}</span>;}
 export default function StockAllPage({canDetails,canExport}:{canDetails:boolean;canExport:boolean}) {
  const [filters,setFilters]=useState<Filters>(EMPTY),[data,setData]=useState<Snapshot>(INITIAL),[page,setPage]=useState(1),[pageSize,setPageSize]=useState(10),[refresh,setRefresh]=useState(0);
- const [loading,setLoading]=useState(true),[exporting,setExporting]=useState(false),[error,setError]=useState(''),[showFilters,setShowFilters]=useState(true);
+ const [loading,setLoading]=useState(true),[exporting,setExporting]=useState(false),[error,setErrorState]=useState(''),[showFilters,setShowFilters]=useState(true);
  const [checked,setChecked]=useState<string[]>([]);
- const [selected,setSelected]=useState(''),[tab,setTab]=useState('tag'),[detailPage,setDetailPage]=useState(1),[detail,setDetail]=useState<Detail|null>(null),[detailLoading,setDetailLoading]=useState(false),[detailError,setDetailError]=useState('');
+ const [selected,setSelected]=useState(''),[tab,setTab]=useState('tag'),[detailPage,setDetailPage]=useState(1),[detail,setDetail]=useState<Detail|null>(null),[detailLoading,setDetailLoading]=useState(false),[detailError,setDetailErrorState]=useState('');
+ const setError=(value:string)=>{setErrorState(value);if(value)reportOperationWarning({page:'stock-all',message:value});};
+ const setDetailError=(value:string)=>{setDetailErrorState(value);if(value)reportOperationWarning({page:'stock-all',message:value,context:{part:selected}});};
  const drawerRef=useRef<HTMLElement>(null),opener=useRef<HTMLElement|null>(null),searchRef=useRef<HTMLInputElement>(null);
  useEffect(()=>{const search=(event:Event)=>{setFilters(f=>({...f,search:String((event as CustomEvent).detail||'')}));setPage(1);setChecked([]);};const shortcut=(event:KeyboardEvent)=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='k'){event.preventDefault();searchRef.current?.focus();}};window.addEventListener('stock-overview-search',search);window.addEventListener('keydown',shortcut);return()=>{window.removeEventListener('stock-overview-search',search);window.removeEventListener('keydown',shortcut);};},[]);
  useEffect(()=>{window.dispatchEvent(new CustomEvent("stock-overview-search-value",{detail:filters.search}));},[filters.search]);

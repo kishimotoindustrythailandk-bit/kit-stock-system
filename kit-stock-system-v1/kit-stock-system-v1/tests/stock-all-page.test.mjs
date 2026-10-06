@@ -13,7 +13,7 @@ function moduleOf(source,imports={}){const m={exports:{}};new Function('require'
 const quantities=moduleOf(await readFile(new URL('../app/stock-quantities.ts',import.meta.url),'utf8'));
 const pageSource=await readFile(new URL('../app/stock-all-page.tsx',import.meta.url),'utf8');
 const icons=moduleOf(await readFile(new URL('../app/stock-overview-icons.tsx',import.meta.url),'utf8'));
-const {createOverviewWorkbook,stockFilterParams,default:Page}=moduleOf(pageSource,{'./stock-quantities':quantities,'./stock-overview-icons':icons});
+const {createOverviewWorkbook,stockFilterParams,default:Page}=moduleOf(pageSource,{'./stock-quantities':quantities,'./stock-overview-icons':icons,'./operation-warning':{reportOperationWarning:()=>{}}});
 function fixture(){const db=new DatabaseSync(':memory:');db.exec(`CREATE TABLE stock_parts(material_code TEXT,part_name TEXT,customer TEXT,location TEXT,active INTEGER);CREATE TABLE stock_tags(id INTEGER,material_code TEXT,remaining_qty INTEGER,status TEXT,job_no TEXT);CREATE TABLE stock_picks(stock_tag_id INTEGER,picked_qty INTEGER,dispatched_qty INTEGER,status TEXT);CREATE TABLE stock_allocations(stock_tag_id INTEGER,qty INTEGER,status TEXT);CREATE TABLE part_master_images(material_code TEXT,updated_at TEXT);
 INSERT INTO stock_parts VALUES('A','Part A','Customer','LOC1',1),('ZERO','Zero Part','Customer','LOC2',0);INSERT INTO stock_tags VALUES(1,'A',250,'in_stock','JOB-XYZ'),(2,'A',500,'printed','PENDING'),(3,'A',500,'ng','NG');`);return db;}
 const rows=db=>db.prepare(`${quantities.STOCK_OVERVIEW_CTE} SELECT * FROM overview ORDER BY materialCode`).all();
