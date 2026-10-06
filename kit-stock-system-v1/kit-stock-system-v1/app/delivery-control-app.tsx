@@ -3,6 +3,8 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import OperationWarningPopup from "./operation-warning-popup";
+import { reportOperationWarning } from "./operation-warning";
 import DashboardControlCenter from "./dashboard-control-center";
 import OverdueWorkPage from "./overdue-work-page";
 import StockAllPage from "./stock-all-page";
@@ -695,8 +697,13 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   useEffect(()=>{const sync=(event:Event)=>setStockOverviewSearch(String((event as CustomEvent).detail||""));window.addEventListener("stock-overview-search-value",sync);return()=>window.removeEventListener("stock-overview-search-value",sync);},[]);
   const [payload, setPayload] = useState<DuePayload>({ dues: [], imports: [], scans: [], receipts: [] });
   const [loading, setLoading] = useState(hasDueDataPermission);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [error, setErrorState] = useState("");
+  const setError = (value: string) => { setErrorState(value); if(value) reportOperationWarning({page,message:value}); };
+  const [notice, setNoticeState] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const setNotice = (value: { type: "success" | "error"; text: string; warningHandled?: boolean } | null) => {
+    setNoticeState(value);
+    if(value?.type === "error" && !value.warningHandled) reportOperationWarning({page,message:value.text});
+  };
   const [dueLoadedAt, setDueLoadedAt] = useState<string | null>(null);
   const [deadlineClock, setDeadlineClock] = useState(() => Date.now());
   const [overdueSoundEnabled, setOverdueSoundEnabled] = useState(false);
@@ -781,7 +788,8 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraPurpose, setCameraPurpose] = useState<"scan" | "stock" | "stock-count">("scan");
-  const [cameraError, setCameraError] = useState("");
+  const [cameraError, setCameraErrorState] = useState("");
+  const setCameraError = (value:string) => { setCameraErrorState(value); if(value)reportOperationWarning({page,message:value}); };
   const [selectedScan, setSelectedScan] = useState<DueScan | null>(null);
   const [settings, setSettings] = useState({ partial: true, confirm: true, sound: true, autoFocus: true });
   const [systemUsers, setSystemUsers] = useState<SystemUser[]>([]);
@@ -1681,6 +1689,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       if (!response.ok || !contentType.includes("application/json")) throw new Error(responseError || responseMessage || "ตรวจสอบ Tag ไม่สำเร็จ");
       setRawTag(scannedValue);
       setDispatchConfirmation(result);
+      if(result.verdict !== "ready" && result.verdict !== "ready_noimg") reportOperationWarning({page:'dispatch',message:result.message || 'ข้อมูลไม่พร้อมขายออก',showPopup:false,context:{verdict:result.verdict,tagId:result.tag?.tagId || '',materialCode:result.tag?.materialCode || ''}});
     } catch (caught) {
       const message = caught instanceof DOMException && caught.name === "AbortError"
         ? "ตรวจสอบ Tag ใช้เวลานานเกินไป กรุณาลองสแกนใหม่"
@@ -1749,6 +1758,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       const result = await response.json() as VerifyResult & { error?: string };
       if (!response.ok) throw new Error(result.error || "ตรวจสอบชิ้นงานไม่สำเร็จ");
       setVerifyResult(result);
+      if(result.verdict !== "ready" && result.verdict !== "ready_noimg") reportOperationWarning({page:'dispatch',message:result.message || 'ตรวจสอบชิ้นงานไม่ผ่าน',context:{verdict:result.verdict,tagId:result.tag?.tagId || ''}});
       window.setTimeout(() => {
         if (window.matchMedia("(max-width: 720px)").matches) verifyResultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
         else verifyInput.current?.focus();
@@ -1779,7 +1789,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     const warn = async (message: string) => {
       setArrangeConfirmation(null);
       setArrangeWarning({ message, date: deliveryDate, time: deliveryTime, fact: fact });
-      setNotice({ type: "error", text: message });
+      setNotice({ type: "error", text: message, warningHandled: true });
       setArrangeTag("");
       if (!warningLogged) await recordClientAudit("arrange_warning", `${message} · วันที่ ${deliveryDate || "ยังไม่เลือก"} · รอบ ${deliveryTime || "ทั้งหมด"} · ${fact || "ทุก FAC"}`, {
         warningMessage: message, deliveryDate: deliveryDate, deliveryTime: deliveryTime, fact: fact,
@@ -4331,9 +4341,10 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   if (monitorMode) return <main className="overdue-monitor-shell">
     {error && <div className="notice error">{error}</div>}
     {renderOverdueWork()}
+    <OperationWarningPopup/>
   </main>;
 
-  return <div className={`control-shell ${page === "stock-all" ? `stock-reference-shell ${stockMenuCollapsed ? "stock-sidebar-collapsed" : ""}` : ""}`}>
+  return <div onInvalidCapture={(event) => { event.preventDefault(); const field=event.target as HTMLInputElement; const label=field.closest("label")?.querySelector("span")?.textContent || field.getAttribute("aria-label") || "ข้อมูล"; reportOperationWarning({page,message:`${label}: ${field.validationMessage || "กรุณาตรวจสอบข้อมูล"}`}); }} className={`control-shell ${page === "stock-all" ? `stock-reference-shell ${stockMenuCollapsed ? "stock-sidebar-collapsed" : ""}` : ""}`}>
     <aside className={`control-sidebar ${menuOpen ? "open" : ""}`}>
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
       <div className="kit-logo">{page === "stock-all" ? <OverviewLogo/> : <b>KiT</b>}<span>DELIVERY DUE CONTROL</span></div>
@@ -4458,6 +4469,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       {(dispatchConfirmation.verdict === "ready" || dispatchConfirmation.verdict === "ready_noimg") ? <footer><button type="button" className="button secondary" onClick={() => setDispatchConfirmation(null)}>ยกเลิก / ตรวจใหม่</button><button type="button" className="button confirm-dispatch-button" disabled={checkingTag} onClick={() => void confirmDispatch()}>{checkingTag ? "กำลังขายออก…" : "✓ ยืนยันขายออกและตัดยอด"}</button></footer> : <footer className="dispatch-confirm-blocked"><p>ไม่สามารถขายออกได้: {dispatchConfirmation.message || "ข้อมูลไม่พร้อมขายออก"}</p><button type="button" className="button secondary" onClick={() => setDispatchConfirmation(null)}>ปิดและตรวจใหม่</button></footer>}
     </div></div>}
     {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>{cameraPurpose === "stock" ? "สแกน Tag รับงานเข้า Stock" : cameraPurpose === "stock-count" ? "สแกน Tag ตรวจนับสิ้นเดือน" : "สแกน Tag ด้วยกล้อง"}</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className="camera-view"><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div><p className="camera-format-hint">รองรับ QR · Data Matrix · Code 128 · Code 39</p>{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
+    <OperationWarningPopup/>
     {userEditorOpen && <div className="modal-backdrop"><form className="user-modal permission-modal" onSubmit={saveUser}>
       <header><div><h3>{userForm.id ? "แก้ไขผู้ใช้งานและสิทธิ์" : "เพิ่มผู้ใช้งาน"}</h3><p>เลือกบทบาทและกำหนดหน้าที่แต่ละคนสามารถเปิดใช้งานได้</p></div><button type="button" onClick={() => setUserEditorOpen(false)}>×</button></header>
       <div className="user-form-grid">

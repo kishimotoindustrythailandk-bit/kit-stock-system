@@ -1,3 +1,4 @@
+import { operationWarningEvent } from "../../operation-warning";
 import { getCurrentUser, hasPermission } from "../../cloudflare-auth";
 import { safeErrorMessage } from "../../api-error";
 import { getRuntimeEnv } from "../../../runtime/env";
@@ -45,8 +46,17 @@ export async function POST(request: Request) {
   try {
     const user = await getCurrentUser();
     if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
-    const body = await request.json() as { action?: string; summary?: string; details?: Record<string, unknown> };
+    const body = await request.json() as { action?: string; page?: string; summary?: string; details?: Record<string, unknown> };
     const key = String(body.action || "");
+    if (key === "operation_warning") {
+      const page = String(body.page || "");
+      const event = operationWarningEvent(page, String(body.summary || ""), body.details);
+      if (!event) return Response.json({ error: "ข้อมูลการเตือนไม่ถูกต้อง" }, { status: 400 });
+      const permission = page === "verify" ? "dispatch" : page;
+      if (!hasPermission(user, permission as Parameters<typeof hasPermission>[1])) return Response.json({ error: "ไม่มีสิทธิ์ในหน้าที่แจ้งเตือน" }, { status: 403 });
+      const saved = await writeAuditLog(user, event, request);
+      return Response.json({ success: saved }, { status: saved ? 201 : 503 });
+    }
     const definition = CLIENT_EVENTS[key];
     if (!definition) return Response.json({ error: "ไม่รู้จักกิจกรรมที่ต้องการบันทึก" }, { status: 400 });
     if (key === "arrange_warning" && !hasPermission(user, "arrange")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์จัดงาน" }, { status: 403 });
