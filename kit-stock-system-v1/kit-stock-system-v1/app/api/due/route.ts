@@ -5,7 +5,7 @@ import { deliveryDueLines, deliveryImports, deliveryTagReceipts, deliveryTagScan
 import { getRuntimeEnv } from "../../../runtime/env";
 import { writeAuditLog } from "../../audit-log";
 
-const DUE_READ_PERMISSIONS = ["dashboard", "plan", "arrange", "dispatch", "exports", "reports", "history"] as const;
+const DUE_READ_PERMISSIONS = ["dashboard", "plan", "overdue", "arrange", "dispatch", "exports", "reports", "history"] as const;
 
 function qrDate(value: string) {
   if (!/^\d{8}$/.test(value)) return "";
