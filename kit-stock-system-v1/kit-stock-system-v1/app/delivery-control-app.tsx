@@ -167,6 +167,11 @@ type ArrangementPreview = {
   tag: StockTag;
   due: DueLine & { remainingToArrange: number; remainingQty: number };
 };
+type ArrangeConfirmation = {
+  action: "preview_stage"; tag: StockTag; due: DueLine;
+  pickedQty: number; tagAvailableQty: number; dueOpenQty: number; remainingAfter: number;
+  rawPayload: string; deliveryDate: string; deliveryTime: string; fact: string;
+};
 type ReplacementRequest = {
   id: number; requestNo: string; materialCode: string; partName: string; customer: string;
   requestedQty: number; issuedQty: number; remainingQty: number; reasonType: "defect" | "shortage" | "other";
@@ -761,6 +766,10 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   const [arrangeListPage, setArrangeListPage] = useState(1);
   const [arrangedSearch, setArrangedSearch] = useState("");
   const [arrangedPage, setArrangedPage] = useState(1);
+  const [arrangeConfirmation, setArrangeConfirmation] = useState<ArrangeConfirmation | null>(null);
+  const arrangeRequestRef = useRef(false);
+  const arrangeConfirmButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (arrangeConfirmation) arrangeConfirmButtonRef.current?.focus(); }, [arrangeConfirmation]);
   const [arrangementPreview, setArrangementPreview] = useState<ArrangementPreview | null>(null);
   const [filterDate, setFilterDate] = useState("");
   const [dashboardStatusFilter, setDashboardStatusFilter] = useState<"all" | "completed" | "pending" | "over">("all");
@@ -1758,27 +1767,32 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     go("dispatch");
   }
 
-  async function stageStockTag(value?: string | FormEvent) {
+  async function stageStockTag(value?: string | FormEvent, confirmation?: ArrangeConfirmation) {
     const event = typeof value === "object" ? value : undefined;
     event?.preventDefault();
     const scannedValue = typeof value === "string" ? value.trim() : arrangeTag.trim();
-    if (checkingTag || arrangeWarning) return;
+    if (checkingTag || arrangeWarning || arrangeRequestRef.current || (arrangeConfirmation && !confirmation)) return;
+    const deliveryDate = confirmation?.deliveryDate || effectiveArrangeDueDate;
+    const deliveryTime = confirmation ? confirmation.deliveryTime : arrangeDueTime;
+    const fact = confirmation ? confirmation.fact : arrangeDueFact;
     let warningLogged = false;
     const warn = async (message: string) => {
-      setArrangeWarning({ message, date: effectiveArrangeDueDate, time: arrangeDueTime, fact: arrangeDueFact });
+      setArrangeConfirmation(null);
+      setArrangeWarning({ message, date: deliveryDate, time: deliveryTime, fact: fact });
       setNotice({ type: "error", text: message });
       setArrangeTag("");
-      if (!warningLogged) await recordClientAudit("arrange_warning", `${message} · วันที่ ${effectiveArrangeDueDate || "ยังไม่เลือก"} · รอบ ${arrangeDueTime || "ทั้งหมด"} · ${arrangeDueFact || "ทุก FAC"}`, {
-        warningMessage: message, deliveryDate: effectiveArrangeDueDate, deliveryTime: arrangeDueTime, fact: arrangeDueFact,
+      if (!warningLogged) await recordClientAudit("arrange_warning", `${message} · วันที่ ${deliveryDate || "ยังไม่เลือก"} · รอบ ${deliveryTime || "ทั้งหมด"} · ${fact || "ทุก FAC"}`, {
+        warningMessage: message, deliveryDate: deliveryDate, deliveryTime: deliveryTime, fact: fact,
         stockTagCode: /^KITSTK-[A-Z0-9-]+$/i.test(scannedValue) ? scannedValue : "[Tag ไม่ถูกต้อง]",
       });
     };
-    if (!effectiveArrangeDueDate || !scannedValue) {
-      await warn(!effectiveArrangeDueDate ? "กรุณาเลือกวันที่ Due ก่อนสแกน Tag" : "กรุณาสแกนหรือระบุ KIT Stock Tag");
+    if (!deliveryDate || !scannedValue) {
+      await warn(!deliveryDate ? "กรุณาเลือกวันที่ Due ก่อนสแกน Tag" : "กรุณาสแกนหรือระบุ KIT Stock Tag");
       return;
     }
     // Keep the chosen scope even after its last remaining Due is arranged.
-    setArrangeDueDate(effectiveArrangeDueDate);
+    setArrangeDueDate(deliveryDate);
+    arrangeRequestRef.current = true;
     setCheckingTag(true);
     setArrangementPreview(null);
     setNotice(null);
@@ -1788,22 +1802,30 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           action: "stage",
-          deliveryDate: effectiveArrangeDueDate,
-          deliveryTime: arrangeDueTime,
-          fact: arrangeDueFact,
+          deliveryDate: deliveryDate,
+          deliveryTime: deliveryTime,
+          fact: fact,
           rawPayload: scannedValue,
-          qty: Number(arrangeQty || 0),
+          qty: confirmation ? confirmation.pickedQty : Number(arrangeQty || 0),
+          preview: !confirmation,
+          ...(confirmation ? { dueLineId: confirmation.due.id } : {}),
         }),
       });
-      const result = await response.json() as ArrangementPreview & { error?: string; warningLogged?: boolean };
+      const result = await response.json() as (ArrangementPreview | ArrangeConfirmation) & { error?: string; warningLogged?: boolean };
       warningLogged = Boolean(result.warningLogged);
       if (!response.ok) throw new Error(result.error || "จัดงานไม่สำเร็จ");
+      if (!confirmation && result.action === "preview_stage") {
+        setArrangeConfirmation({ ...result, rawPayload: scannedValue, deliveryDate, deliveryTime, fact });
+        return;
+      }
+      if (result.action !== "staged") throw new Error("ข้อมูลจัดงานไม่ถูกต้อง กรุณาสแกนใหม่");
+      setArrangeConfirmation(null);
       setArrangementPreview(result);
       setArrangeTag("");
       setArrangeQty("");
       setNotice({
         type: "success",
-        text: `จัด ${fmt(result.pick.pickedQty)} ชิ้นจาก Job ${result.tag.jobNo} รอขายออก — ยังไม่ตัด Stock และ Due`,
+        text: `จัด ${fmt(result.pick.pickedQty)} ชิ้นจาก Job ${result.tag.jobNo} รอขายออก — ย้ายยอดจาก Stock พร้อมใช้ไปจัดงานรอส่งแล้ว`,
       });
       await Promise.all([loadDue(), loadStock()]);
       window.setTimeout(() => {
@@ -1813,6 +1835,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     } catch (caught) {
       await warn(caught instanceof Error ? caught.message : "จัดงานไม่สำเร็จ");
     } finally {
+      arrangeRequestRef.current = false;
       setCheckingTag(false);
     }
   }
@@ -2635,6 +2658,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       setMenuOpen(false);
       return;
     }
+    setArrangeConfirmation(null);
     setPage(next);
     updatePageLocation(next);
     if (next === "parts" || next === "settings") void loadPartImages();
@@ -3620,12 +3644,12 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
                 </> : <Empty title="กรุณาเลือกวันที่ Due" text="เลือกวันที่ส่งงานก่อนสแกน KIT Tag" />}
               </div>
             </div>
-            <form className="arrange-action-form" onSubmit={stageStockTag}>
+            <form className="arrange-action-form" onSubmit={(event) => void stageStockTag(event)}>
               <label><span>จำนวนที่จะจัด</span><input type="number" min="1" value={arrangeQty} onChange={(e) => setArrangeQty(e.target.value)} placeholder="อัตโนมัติตาม Due" /></label>
               <label className="arrange-tag-field"><span>KIT Stock Tag *</span><input ref={tagInput} value={arrangeTag} onChange={(e) => { setArrangeTag(e.target.value); setArrangementPreview(null); }} placeholder="ยิง Tag แล้วเครื่องส่ง Enter" autoComplete="off" /></label>
-              <button className="button primary" disabled={!effectiveArrangeDueDate || !arrangeTag.trim() || checkingTag}>{checkingTag ? "กำลังจัดงาน…" : "✓ ยืนยันจัดงาน"}</button>
+              <button className="button primary" disabled={!effectiveArrangeDueDate || !arrangeTag.trim() || checkingTag}>{checkingTag ? "กำลังจัดงาน…" : "ตรวจสอบก่อนจัดงาน"}</button>
             </form>
-            <div className="arrange-help">ⓘ ขั้นตอนนี้บันทึกงาน “รอขายออก” เท่านั้น ยังไม่ลด Stock และ Due จนกว่าผู้ตรวจจะขายออก</div>
+            <div className="arrange-help">ⓘ ขั้นตอนนี้ย้ายยอดจาก Stock พร้อมใช้ไปจัดงานรอส่ง คงเหลือรวมไม่ลดจนกว่าจะขายออก</div>
           </section>
 
           <aside className="arrange-due-panel">
@@ -4406,6 +4430,19 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         </section>
       </div>
       <footer><button type="button" className="button secondary" onClick={() => { setStockReceivePreview(null); setStockReceiveQty(""); setStockReceiveProductionDate(""); setStockScan(""); }}>ยกเลิก / สแกนใหม่</button><button type="button" className="button confirm-dispatch-button stock-confirm-receive-button" disabled={stockSaving || stockReceiveQty === "" || !stockReceiveProductionDate || Number(stockReceiveQty) < 0 || Number(stockReceiveQty) > Number(stockReceivePreview.tag.qty)} onClick={() => void confirmReceiveStockTag()}>{stockSaving ? "กำลังรับเข้า…" : "✓ ยืนยันรับเข้า Stock"}</button></footer>
+    </div></div>}
+    {arrangeConfirmation && <div className="modal-backdrop dispatch-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="arrange-confirm-title" onKeyDown={(event) => { if (event.key === "Escape" && !checkingTag) { setArrangeConfirmation(null); tagInput.current?.focus(); } if (event.key === "Tab") { const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")); const first = buttons[0], last = buttons[buttons.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); } } }}><div className="dispatch-confirm-modal">
+      <header><div><span>✓</span><div><small>ตรวจพบ KIT Stock Tag</small><h3 id="arrange-confirm-title">ตรวจสอบงานก่อนจัดงาน</h3></div></div><button type="button" disabled={checkingTag} onClick={() => { setArrangeConfirmation(null); tagInput.current?.focus(); }} aria-label="ปิด">×</button></header>
+      <div className="dispatch-confirm-content">
+        <section className="dispatch-confirm-images"><PartImagePair materialCode={arrangeConfirmation.tag.materialCode} masterVersion={partImages.find(item => item.materialCode === arrangeConfirmation.tag.materialCode)?.updatedAt} actualVersion={partActualImages.find(item => item.materialCode === arrangeConfirmation.tag.materialCode)?.updatedAt}/></section>
+        <section className="dispatch-confirm-info">
+          <div className="dispatch-confirm-part"><small>PART / MATERIAL</small><b>{arrangeConfirmation.tag.materialCode}</b><p>{arrangeConfirmation.due.materialDescription || "ไม่ระบุชื่อชิ้นงาน"}</p></div>
+          <div className="dispatch-confirm-details"><div><small>KIT Stock Tag</small><b>{arrangeConfirmation.tag.tagId}</b></div><div><small>Job</small><b>{arrangeConfirmation.tag.jobNo}</b></div><div><small>รอบ / FAC</small><b>{arrangeConfirmation.due.deliveryTime} / {arrangeConfirmation.due.fact}</b></div><div><small>วันที่ส่ง / DO</small><b>{formatDate(arrangeConfirmation.due.deliveryDate)} / {arrangeConfirmation.due.doNo}</b></div></div>
+          <div className="dispatch-confirm-qty"><div><small>Tag พร้อมจัด</small><b>{fmt(arrangeConfirmation.tagAvailableQty)}</b><em>ชิ้น</em></div><div><small>Due เหลือจัด</small><b>{fmt(arrangeConfirmation.dueOpenQty)}</b><em>ชิ้น</em></div><div className="current"><small>จัดครั้งนี้</small><b>{fmt(arrangeConfirmation.pickedQty)}</b><em>ชิ้น</em></div><div><small>Due เหลือหลังจัด</small><b>{fmt(arrangeConfirmation.remainingAfter)}</b><em>ชิ้น</em></div></div>
+          <p className="dispatch-staged-note">กดยืนยันเพื่อย้ายยอดไปจัดงานรอส่ง · คงเหลือรวมยังเท่าเดิม</p>
+        </section>
+      </div>
+      <footer><button type="button" className="button secondary" disabled={checkingTag} onClick={() => { setArrangeConfirmation(null); tagInput.current?.focus(); }}>ยกเลิก / สแกนใหม่</button><button ref={arrangeConfirmButtonRef} type="button" className="button confirm-dispatch-button" disabled={checkingTag} onClick={() => void stageStockTag(arrangeConfirmation.rawPayload, arrangeConfirmation)}>{checkingTag ? "กำลังจัดงาน…" : "✓ ยืนยันจัดงาน"}</button></footer>
     </div></div>}
     {dispatchConfirmation && <div className="modal-backdrop dispatch-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="dispatch-confirm-title"><div className="dispatch-confirm-modal">
       <header><div><span>✓</span><div><small>ตรวจพบ Tag ลูกค้า</small><h3 id="dispatch-confirm-title">ตรวจสอบงานก่อนขายออก</h3></div></div><button type="button" onClick={() => setDispatchConfirmation(null)} aria-label="ปิด">×</button></header>
