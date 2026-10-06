@@ -17,9 +17,9 @@ import { speakThaiAlert } from "./voice-alert";
 
 type PageKey = "stock-all" | "overdue" | "dashboard" | "stock" | "manual-stock" | "stock-count" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
 
-type AppPermission = PageKey | "stock-all-details" | "stock-all-export";
+type AppPermission = PageKey | "stock-all-details" | "stock-all-export" | "parts-add";
 
-const STOCK_ACCESS_LABELS: Record<string,string> = { "stock-all-details": "Stock ทั้งหมด: ดู Tag / Job / Movement", "stock-all-export": "Stock ทั้งหมด: ส่งออก Excel" };
+const STOCK_ACCESS_LABELS: Record<string,string> = { "stock-all-details": "Stock ทั้งหมด: ดู Tag / Job / Movement", "stock-all-export": "Stock ทั้งหมด: ส่งออก Excel", "parts-add": "ทะเบียน Part: เพิ่มข้อมูล Part ใหม่" };
 
 type DueLine = {
   id: number;
@@ -3139,21 +3139,21 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         </div>}
       </Card>}
 
-      {user.role === "admin" && <Card className="part-editor-card" title={stockPartForm.materialCode ? "แก้ไข Part" : "เพิ่ม / แก้ไข Part"} action={<button className="button primary" form="part-editor-form" disabled={stockSaving}>▣ {stockSaving ? "กำลังบันทึก…" : "บันทึก Part"}</button>}>
+      {(user.role === "admin" || user.permissions.includes("parts-add")) && <Card className="part-editor-card" title={user.role !== "admin" ? "เพิ่ม Part ใหม่" : stockPartForm.materialCode ? "แก้ไข Part" : "เพิ่ม / แก้ไข Part"} action={<button className="button primary" form="part-editor-form" disabled={stockSaving}>▣ {stockSaving ? "กำลังบันทึก…" : "บันทึก Part"}</button>}>
         <form id="part-editor-form" className="part-editor-grid" onSubmit={saveStockPart}>
           <label><span>Part / Material No. *</span><input value={stockPartForm.materialCode} onChange={(e) => { const code=e.target.value.toUpperCase(); setStockPartForm((current) => ({ ...current, materialCode: code })); setPartImageCode(code); }} required /></label>
           <label><span>ชื่อชิ้นงาน *</span><input value={stockPartForm.partName} onChange={(e) => setStockPartForm((current) => ({ ...current, partName: e.target.value }))} required /></label>
           <label><span>ลูกค้า</span><input value={stockPartForm.customer} onChange={(e) => setStockPartForm((current) => ({ ...current, customer: e.target.value }))} /></label>
           <label><span>Location</span><input value={stockPartForm.location} onChange={(e) => setStockPartForm((current) => ({ ...current, location: e.target.value.toUpperCase() }))} placeholder="เช่น A-01 หรือ RACK-02" /></label>
           <label><span>จำนวนสูงสุดต่อกล่อง *</span><input type="number" min="1" value={stockPartForm.standardQty} onChange={(e) => setStockPartForm((current) => ({ ...current, standardQty: e.target.value }))} required /></label>
-          <div className="part-photo-editor">
+          {user.role === "admin" && <div className="part-photo-editor">
             <div className="part-current-photo">{stockPartForm.materialCode ? <PartImage materialCode={stockPartForm.materialCode} version={formImage?.updatedAt} /> : <span>▧</span>}</div>
             <label className="part-change-photo"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setPartImageFile(e.target.files?.[0] || null)} /><b>⇧ {formImage ? "เปลี่ยนรูปตัวอย่าง" : "เพิ่มรูปตัวอย่าง"}</b><small>{partImageFile?.name || "รูป Master · JPG, PNG, WebP (ไม่เกิน 5MB)"}</small></label>
-          </div>
-          <div className="part-photo-editor">
+          </div>}
+          {user.role === "admin" && <div className="part-photo-editor">
             <div className="part-current-photo">{stockPartForm.materialCode ? <PartImage materialCode={stockPartForm.materialCode} slot="actual" version={formActualImage?.updatedAt} /> : <span>▧</span>}</div>
             <label className="part-change-photo"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setPartActualImageFile(e.target.files?.[0] || null)} /><b>⇧ {formActualImage ? "เปลี่ยนรูปชิ้นงานในกล่อง" : "เพิ่มรูปชิ้นงานในกล่อง"}</b><small>{partActualImageFile?.name || "รูปชิ้นงานที่จัดวางในกล่อง · ใช้เทียบตอนขายออก"}</small></label>
-          </div>
+          </div>}
         </form>
         <div className="part-editor-foot"><span>Excel รองรับคอลัมน์: Part / Material No., Part Name, Customer, Location และ Max Qty per Box</span>{stockPartForm.materialCode && <button type="button" className="tiny-button" onClick={clearPartForm}>＋ เพิ่ม Part ใหม่</button>}</div>
       </Card>}
@@ -4516,12 +4516,13 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
               ...current,
               permissions: event.target.checked
                 ? [...new Set([...current.permissions, item.key])]
-                : current.permissions.filter((key) => key !== item.key && (item.key !== "stock-all" || !["stock-all-details", "stock-all-export"].includes(key))),
+                : current.permissions.filter((key) => key !== item.key && (item.key !== "stock-all" || !["stock-all-details", "stock-all-export"].includes(key)) && (item.key !== "parts" || key !== "parts-add")),
             }))} />
             <span>{item.icon}</span><div><b>{item.label}</b><small>{PERMISSION_HELP[item.key]}</small></div>
           </label>;
         })}</div>
         <div className="permission-grid">{([{key:"stock-all-details",label:"Stock ทั้งหมด: ดู Tag / Job / Movement"},{key:"stock-all-export",label:"Stock ทั้งหมด: ส่งออก Excel"}] as const).map((item) => <label key={item.key} className="permission-option"><input type="checkbox" disabled={!userForm.permissions.includes("stock-all")} checked={userForm.permissions.includes(item.key)} onChange={(event) => setUserForm((current) => ({...current,permissions:event.target.checked ? [...new Set([...current.permissions,item.key])] : current.permissions.filter((key) => key !== item.key)}))}/><div><b>{item.label}</b><small>ต้องมีสิทธิ์ดูหน้า Stock ทั้งหมดด้วย</small></div></label>)}</div>
+        <div className="permission-grid"><label className="permission-option"><input type="checkbox" disabled={!userForm.permissions.includes("parts")} checked={userForm.permissions.includes("parts-add")} onChange={(event) => setUserForm((current) => ({...current,permissions:event.target.checked ? [...new Set([...current.permissions,"parts-add" as const])] : current.permissions.filter((key) => key !== "parts-add")}))}/><div><b>ทะเบียน Part: เพิ่มข้อมูล Part ใหม่</b><small>ต้องมีสิทธิ์หน้าทะเบียน Part · เพิ่มข้อมูลใหม่ได้ ส่วนแก้ไข ลบ นำเข้า Excel และรูปยังเป็นสิทธิ์ Admin</small></div></label></div>
       </section>
       <footer><button type="button" className="button secondary" onClick={() => setUserEditorOpen(false)}>ยกเลิก</button><button className="button primary" disabled={userSaving || !userForm.permissions.length}>{userSaving ? "กำลังบันทึก…" : "บันทึกผู้ใช้งานและสิทธิ์"}</button></footer>
     </form></div>}
