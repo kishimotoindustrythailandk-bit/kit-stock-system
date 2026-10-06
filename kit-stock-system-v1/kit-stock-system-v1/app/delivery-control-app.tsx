@@ -14,6 +14,7 @@ import { OverviewIcon, OverviewLogo, OverviewFactory, OVERVIEW_NAV_ICONS } from 
 import { createForecastExportWorkbook, createForecastExportBinary } from "./forecast-export";
 import { normalizeDueExcelDate } from "./due-excel-date";
 import { speakThaiAlert } from "./voice-alert";
+import VoiceAlertControl from "./voice-alert-control";
 
 type PageKey = "stock-all" | "overdue" | "dashboard" | "stock" | "manual-stock" | "stock-count" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
 
@@ -803,6 +804,11 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   const setCameraError = (value:string) => { setCameraErrorState(value); if(value)reportOperationWarning({page,message:value}); };
   const [selectedScan, setSelectedScan] = useState<DueScan | null>(null);
   const [settings, setSettings] = useState({ partial: true, confirm: true, sound: true, autoFocus: true });
+  function changeVoiceEnabled(sound:boolean) {
+    const next={...settings,sound};
+    setSettings(next);
+    try {window.localStorage.setItem('kit-due-settings',JSON.stringify(next));} catch { /* settings remain active for this session */ }
+  }
   useEffect(() => {
     if (notice) speakThaiAlert(notice.type, page, notice.text, settings.sound);
   }, [notice, page, settings.sound]);
@@ -4403,6 +4409,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         <div className="top-user"><button type="button" className={`notification overdue-sound-shortcut ${overdueSoundEnabled ? "enabled" : ""}`} onClick={() => void toggleOverdueSound()} aria-label={overdueSoundEnabled ? "ปิดเสียงแจ้งเตือนงานเกิน Due" : "เปิดเสียงแจ้งเตือนงานเกิน Due"} aria-pressed={overdueSoundEnabled}>{overdueSoundEnabled ? "🔔" : "🔕"}</button><button className="notification" onClick={showOverduePlan} disabled={!overdueDues.length || !allowedPages.has("plan")} aria-label={`งานเกินดิวจัดส่ง ${overdueDues.length} รายการ`}>♧<i>{fmt(overdueDues.length)}</i></button><span className="user-avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div><b>{user.displayName}</b><small>{ROLE_LABELS[user.role] || user.role}</small></div><a href={signOutPath} onClick={signOut}>ออกจากระบบ</a></div>
       </header>
       <div className="control-content">
+        <VoiceAlertControl enabled={settings.sound} onEnabledChange={changeVoiceEnabled}/>
         {notice && <div className={`toast ${notice.type} auto-dismiss`}><span>{notice.type === "success" ? "✓" : "!"}</span><p>{notice.text}</p><button onClick={() => setNotice(null)}>×</button></div>}
         {error && <div className="toast error"><span>!</span><p>{error}</p><button onClick={() => void loadDue()}>ลองใหม่</button></div>}
         {loading && page !== "overdue" ? <div className="loading-state"><span /><p>กำลังโหลดข้อมูล Due…</p></div> : pageContent[page]()}
