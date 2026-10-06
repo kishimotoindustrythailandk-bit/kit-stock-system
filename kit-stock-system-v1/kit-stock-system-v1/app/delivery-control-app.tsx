@@ -6,6 +6,7 @@ import { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent, ReactNode, useEf
 import DashboardControlCenter from "./dashboard-control-center";
 import OverdueWorkPage from "./overdue-work-page";
 import StockAllPage from "./stock-all-page";
+import { OverviewIcon, OverviewLogo, OverviewFactory, OVERVIEW_NAV_ICONS } from "./stock-overview-icons";
 import { createForecastExportWorkbook, createForecastExportBinary } from "./forecast-export";
 import { normalizeDueExcelDate } from "./due-excel-date";
 
@@ -684,6 +685,9 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   const hasDueDataPermission = user.role === "admin" || DUE_DATA_PAGES.some((key) => user.permissions.includes(key));
   const [page, setPage] = useState<PageKey>(initialPage);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [stockMenuCollapsed, setStockMenuCollapsed] = useState(false);
+  const [stockOverviewSearch,setStockOverviewSearch]=useState("");
+  useEffect(()=>{const sync=(event:Event)=>setStockOverviewSearch(String((event as CustomEvent).detail||""));window.addEventListener("stock-overview-search-value",sync);return()=>window.removeEventListener("stock-overview-search-value",sync);},[]);
   const [payload, setPayload] = useState<DuePayload>({ dues: [], imports: [], scans: [], receipts: [] });
   const [loading, setLoading] = useState(hasDueDataPermission);
   const [error, setError] = useState("");
@@ -4305,18 +4309,19 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     {renderOverdueWork()}
   </main>;
 
-  return <div className="control-shell">
+  return <div className={`control-shell ${page === "stock-all" ? `stock-reference-shell ${stockMenuCollapsed ? "stock-sidebar-collapsed" : ""}` : ""}`}>
     <aside className={`control-sidebar ${menuOpen ? "open" : ""}`}>
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
-      <div className="kit-logo"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
-      <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
+      <div className="kit-logo">{page === "stock-all" ? <OverviewLogo/> : <b>KiT</b>}<span>DELIVERY DUE CONTROL</span></div>
+      <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{page === "stock-all" ? <OverviewIcon name={OVERVIEW_NAV_ICONS[item.key]}/> : item.icon}</span>{item.label}</button>)}</nav>
+      {page === "stock-all" && <OverviewFactory/>}
       <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.23.0</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
       <header className={`control-topbar settings-topbar ${page === "settings" || page === "users" || page === "history" || page === "reports" || page === "exports" ? "settings-banner-topbar" : ""} ${page === "users" ? "users-banner-topbar" : ""} ${page === "history" ? "history-banner-topbar" : ""} ${page === "reports" ? "reports-banner-topbar" : ""} ${page === "exports" ? "exports-banner-topbar" : ""}`}>
-        <button className="menu-button" onClick={() => setMenuOpen(true)}>☰</button>
-        {page === "settings" ? <div className="topbar-settings-banner">
+        <button className="menu-button" aria-label="เปิด/ปิดเมนู" onClick={() => page === "stock-all" && window.innerWidth > 720 ? setStockMenuCollapsed(value=>!value) : setMenuOpen(true)}>{page === "stock-all" ? <OverviewIcon name="menu"/> : "☰"}</button>
+        {page === "stock-all" ? <div className="stock-reference-top-search"><OverviewIcon name="search"/><input type="search" aria-label="ค้นหา Stock จากแถบด้านบน" placeholder="ค้นหา Part No. / ชื่อชิ้นงาน / ลูกค้า / Job / Location ..." value={stockOverviewSearch} onChange={(event) => {setStockOverviewSearch(event.target.value);window.dispatchEvent(new CustomEvent("stock-overview-search", {detail:event.target.value}));}}/><kbd>Ctrl + K</kbd></div> : page === "settings" ? <div className="topbar-settings-banner">
           <div className="settings-hero-title"><span>⚙</span><div><h2>ตั้งค่า</h2><p>หน้าหลัก <b>›</b> ตั้งค่า</p></div></div>
           <div className="settings-hero-copy"><b>ตั้งค่าระบบให้ทำงานได้เต็มประสิทธิภาพ</b><span>เพื่อการส่งมอบที่ตรงเวลา</span><div><em>🚀 เร็วขึ้น</em><em>◎ แม่นยำ</em><em>◆ เชื่อถือได้</em></div></div>
           <div className="settings-hero-art"><strong>Control Today</strong><strong>Deliver Tomorrow</strong></div>
