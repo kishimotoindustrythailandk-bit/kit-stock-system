@@ -1184,6 +1184,7 @@ export async function POST(request: Request) {
             LIMIT 1
           `).bind(deliveryDate, tag.materialCode, deliveryTime, fact).first<StageDue>();
         if (!due) return await stageWarning(hasLegacyDueId ? "ไม่พบ Due ที่เลือก หรือข้อมูลถูกลบไปแล้ว" : `ไม่พบ Due ของ Part ${tag.materialCode} ที่ยังจัดไม่ครบในวันที่ ${deliveryDate} · รอบ ${deliveryTime || "ทั้งหมด"} · ${fact || "ทุก FAC"}`, 404);
+        if (deliveryDate && due.deliveryDate !== deliveryDate) return await stageWarning("Due ไม่ตรงกับวันที่ส่งงานที่เลือก", 409);
         if ((deliveryTime && due.deliveryTime !== deliveryTime) || (fact && due.fact !== fact)) {
           return await stageWarning("Due ไม่ตรงกับรอบส่งงานหรือ FAC ที่เลือก", 409);
         }
@@ -1195,6 +1196,11 @@ export async function POST(request: Request) {
         const pickedQty = requestedQty > 0 ? requestedQty : Math.min(dueOpenQty, tagAvailableQty);
         if (pickedQty > dueOpenQty) return await stageWarning(`จำนวนเกิน Due ที่จับคู่อัตโนมัติ เหลือจัดได้ ${dueOpenQty} ชิ้น`, 409);
         if (pickedQty > tagAvailableQty) return await stageWarning(`Tag Stock นี้พร้อมจัดเพียง ${tagAvailableQty} ชิ้น`, 409);
+        if (body.preview === true) {
+          return Response.json({ action: "preview_stage", tag, due,
+            pickedQty, tagAvailableQty, dueOpenQty,
+            remainingAfter: Math.max(dueOpenQty - pickedQty, 0) });
+        }
         // จองงานแบบ atomic: ดึง stock_tag_id จาก subquery ที่คืนค่าเฉพาะเมื่อ ณ ตอนนี้
         // Tag ยัง in_stock และมีของว่างพอ (หักงานที่จัด/จองแล้ว) และ Due ยังเปิดให้จัดพอ
         // ถ้าเงื่อนไขใดพลาด (อีกเครื่องจัด Tag/Due เดียวกันชนกัน) subquery คืน NULL ชน

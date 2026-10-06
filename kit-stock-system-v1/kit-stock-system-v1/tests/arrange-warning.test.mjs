@@ -17,6 +17,7 @@ const parseInternalTag = new Function(parseCompiled + "return parseInternalTag;"
 
 async function attempt(options = {}) {
   const logs = [];
+  let mutations = 0;
   const user = { id: 7, employeeCode: "62043", displayName: "Tester", email: "", role: "delivery" };
   const body = { deliveryDate: "2026-10-07", deliveryTime: "09:00", fact: "FAC1", rawPayload: "KITSTK-TEST", ...options.body };
   const tag = { id: 1, tagId: "KITSTK-TEST", materialCode: "PART", status: "in_stock", remainingQty: 100, stagedQty: 0, legacyReservedQty: 0, jobNo: "JOB", ...options.tag };
@@ -28,7 +29,7 @@ async function attempt(options = {}) {
       if (sql.includes("SELECT count(*)")) return { openCount: options.complete ? 0 : 1 };
       return options.missingPart ? null : due;
     },
-    async run() { return { meta: { last_row_id: 3 } }; },
+    async run() { mutations++; return { meta: { last_row_id: 3 } }; },
   }; } }; } };
   const values = { action: "stage", body, user, request: new Request("https://kit.test/api/stock"),
     clean: (v, max) => String(v ?? "").trim().slice(0, max),
@@ -42,7 +43,7 @@ async function attempt(options = {}) {
     const response = await stage();
     responses.push({ status: response.status, data: await response.json() });
   }
-  return { logs, responses, user };
+  return { logs, responses, user, mutations };
 }
 
 test("each scan of a completed scope warns and audits the actor and exact scope", async () => {
@@ -106,6 +107,7 @@ function clientAttempt(response, options = {}) {
   const noop = () => {};
   const values = {
     effectiveArrangeDueDate: "2026-10-07", arrangeDueTime: "09:00", arrangeDueFact: "FAC1",
+    arrangeConfirmation: null, arrangeRequestRef: { current: false }, setArrangeConfirmation: noop,
     arrangeTag: "KITSTK-TEST", arrangeQty: "", checkingTag: false, arrangeWarning: null,
     setArrangeWarning: (value) => warnings.push(value), setNotice: noop, setArrangeTag: noop,
     recordClientAudit: async (...args) => audits.push(args),
@@ -157,4 +159,42 @@ test("permission denial is audited before any stock mutation", async () => {
   assert.equal(responses[0].status, 403);
   assert.equal(logs.length, 1);
   assert.equal(logs[0].event.action, "arrange_warning");
+});
+
+ test("preview validates scope and quantities without creating picks or success audit", async () => {
+  const result = await attempt({ body: { preview: true, qty: 30 } });
+  assert.equal(result.responses[0].data.action, "preview_stage");
+  assert.equal(result.responses[0].data.pickedQty, 30);
+  assert.equal(result.responses[0].data.remainingAfter, 70);
+  assert.equal(result.mutations, 0);
+  assert.equal(result.logs.length, 0);
+});
+ test("preview still rejects invalid quantities and audits warning", async () => {
+  const result = await attempt({ body: { preview: true, qty: 101 } });
+  assert.equal(result.responses[0].status, 409);
+  assert.equal(result.mutations, 0);
+  assert.equal(result.logs.length, 1);
+});
+
+ test("scanning requests a read-only preview and opens confirmation", async () => {
+  const confirmations = [];
+  const client = clientAttempt({ action: "preview_stage", tag: { tagId: "KITSTK-TEST" }, due: { id: 2 }, pickedQty: 30 }, { setArrangeConfirmation: value => confirmations.push(value) });
+  await client.stage("KITSTK-TEST");
+  assert.equal(client.requests.length, 1);
+  assert.equal(client.requests[0].preview, true);
+  assert.equal(confirmations[0].rawPayload, "KITSTK-TEST");
+  assert.equal(confirmations[0].deliveryTime, "09:00");
+  assert.equal(confirmations[0].fact, "FAC1");
+  assert.equal(client.warnings.length, 0);
+});
+ test("confirmation submits the displayed quantity and pinned Due scope", async () => {
+  const confirmation = { rawPayload: "KITSTK-TEST", pickedQty: 30, due: { id: 2 }, deliveryDate: "2026-10-07", deliveryTime: "09:00", fact: "FAC1" };
+  const client = clientAttempt({ action: "staged", pick: { pickedQty: 30 }, tag: { jobNo: "JOB" } }, { arrangeConfirmation: confirmation, arrangeDueTime: "11:00", arrangeDueFact: "FAC2" });
+  await client.stage("KITSTK-TEST", confirmation);
+  assert.equal(client.requests[0].preview, false);
+  assert.equal(client.requests[0].qty, 30);
+  assert.equal(client.requests[0].dueLineId, 2);
+  assert.equal(client.requests[0].deliveryTime, "09:00");
+  assert.equal(client.requests[0].fact, "FAC1");
+  assert.equal(client.warnings.length, 0);
 });
