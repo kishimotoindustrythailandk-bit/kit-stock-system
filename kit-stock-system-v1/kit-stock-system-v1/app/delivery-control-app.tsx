@@ -3,6 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { validArrangementQuantity } from "./arrangement-quantity";
 import SplitTagPopup from "./split-tag-popup";
 import OperationWarningPopup from "./operation-warning-popup";
 import { reportOperationWarning } from "./operation-warning";
@@ -774,6 +775,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   const [arrangeListPage, setArrangeListPage] = useState(1);
   const [arrangedSearch, setArrangedSearch] = useState("");
   const [arrangedPage, setArrangedPage] = useState(1);
+  const [arrangeConfirmQty,setArrangeConfirmQty]=useState("");
   const [arrangeConfirmation, setArrangeConfirmation] = useState<ArrangeConfirmation | null>(null);
   const arrangeRequestRef = useRef(false);
   const arrangeConfirmButtonRef = useRef<HTMLButtonElement>(null);
@@ -1804,6 +1806,10 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         stockTagCode: /^KITSTK-[A-Z0-9-]+$/i.test(scannedValue) ? scannedValue : "[Tag ไม่ถูกต้อง]",
       });
     };
+    if (confirmation && !validArrangementQuantity(confirmation.pickedQty,Math.min(confirmation.tagAvailableQty,confirmation.dueOpenQty))) {
+      await warn("กรุณาระบุจำนวนจัดงานเป็นจำนวนเต็ม มากกว่า 0 และไม่เกิน Stock พร้อมใช้ / Due ที่เหลือ");
+      return;
+    }
     if (!deliveryDate || !scannedValue) {
       await warn(!deliveryDate ? "กรุณาเลือกวันที่ Due ก่อนสแกน Tag" : "กรุณาสแกนหรือระบุ KIT Stock Tag");
       return;
@@ -1833,6 +1839,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       warningLogged = Boolean(result.warningLogged);
       if (!response.ok) throw new Error(result.error || "จัดงานไม่สำเร็จ");
       if (!confirmation && result.action === "preview_stage") {
+        setArrangeConfirmQty(String(result.pickedQty));
         setArrangeConfirmation({ ...result, rawPayload: scannedValue, deliveryDate, deliveryTime, fact });
         return;
       }
@@ -4455,18 +4462,19 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       </div>
       <footer><button type="button" className="button secondary" onClick={() => { setStockReceivePreview(null); setStockReceiveQty(""); setStockReceiveProductionDate(""); setStockScan(""); }}>ยกเลิก / สแกนใหม่</button><button type="button" className="button confirm-dispatch-button stock-confirm-receive-button" disabled={stockSaving || stockReceiveQty === "" || !stockReceiveProductionDate || Number(stockReceiveQty) < 0 || Number(stockReceiveQty) > Number(stockReceivePreview.tag.qty)} onClick={() => void confirmReceiveStockTag()}>{stockSaving ? "กำลังรับเข้า…" : "✓ ยืนยันรับเข้า Stock"}</button></footer>
     </div></div>}
-    {arrangeConfirmation && <div className="modal-backdrop dispatch-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="arrange-confirm-title" onKeyDown={(event) => { if (event.key === "Escape" && !checkingTag) { setArrangeConfirmation(null); tagInput.current?.focus(); } if (event.key === "Tab") { const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")); const first = buttons[0], last = buttons[buttons.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); } } }}><div className="dispatch-confirm-modal">
+    {arrangeConfirmation && <div className="modal-backdrop dispatch-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="arrange-confirm-title" onKeyDown={(event) => { if (event.key === "Escape" && !checkingTag) { setArrangeConfirmation(null); tagInput.current?.focus(); } if (event.key === "Tab") { const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("button:not(:disabled),input:not(:disabled)")); const first = buttons[0], last = buttons[buttons.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); } } }}><div className="dispatch-confirm-modal">
       <header><div><span>✓</span><div><small>ตรวจพบ KIT Stock Tag</small><h3 id="arrange-confirm-title">ตรวจสอบงานก่อนจัดงาน</h3></div></div><button type="button" disabled={checkingTag} onClick={() => { setArrangeConfirmation(null); tagInput.current?.focus(); }} aria-label="ปิด">×</button></header>
       <div className="dispatch-confirm-content">
         <section className="dispatch-confirm-images"><PartImagePair materialCode={arrangeConfirmation.tag.materialCode} masterVersion={partImages.find(item => item.materialCode === arrangeConfirmation.tag.materialCode)?.updatedAt} actualVersion={partActualImages.find(item => item.materialCode === arrangeConfirmation.tag.materialCode)?.updatedAt}/></section>
         <section className="dispatch-confirm-info">
           <div className="dispatch-confirm-part"><small>PART / MATERIAL</small><b>{arrangeConfirmation.tag.materialCode}</b><p>{arrangeConfirmation.due.materialDescription || "ไม่ระบุชื่อชิ้นงาน"}</p></div>
           <div className="dispatch-confirm-details"><div><small>KIT Stock Tag</small><b>{arrangeConfirmation.tag.tagId}</b></div><div><small>Job</small><b>{arrangeConfirmation.tag.jobNo}</b></div><div><small>รอบ / FAC</small><b>{arrangeConfirmation.due.deliveryTime} / {arrangeConfirmation.due.fact}</b></div><div><small>วันที่ส่ง / DO</small><b>{formatDate(arrangeConfirmation.due.deliveryDate)} / {arrangeConfirmation.due.doNo}</b></div></div>
-          <div className="dispatch-confirm-qty"><div><small>Tag พร้อมจัด</small><b>{fmt(arrangeConfirmation.tagAvailableQty)}</b><em>ชิ้น</em></div><div><small>Due เหลือจัด</small><b>{fmt(arrangeConfirmation.dueOpenQty)}</b><em>ชิ้น</em></div><div className="current"><small>จัดครั้งนี้</small><b>{fmt(arrangeConfirmation.pickedQty)}</b><em>ชิ้น</em></div><div><small>Due เหลือหลังจัด</small><b>{fmt(arrangeConfirmation.remainingAfter)}</b><em>ชิ้น</em></div></div>
-          <p className="dispatch-staged-note">กดยืนยันเพื่อย้ายยอดไปจัดงานรอส่ง · คงเหลือรวมยังเท่าเดิม</p>
+          <div className="dispatch-confirm-qty"><div><small>Tag พร้อมจัด</small><b>{fmt(arrangeConfirmation.tagAvailableQty)}</b><em>ชิ้น</em></div><div><small>Due เหลือจัด</small><b>{fmt(arrangeConfirmation.dueOpenQty)}</b><em>ชิ้น</em></div><label className="current" style={{padding:16}}><small>จัดครั้งนี้ (แก้ไขได้)</small><input aria-label="จำนวนจัดงานครั้งนี้" type="number" inputMode="numeric" min="1" step="1" max={Math.min(arrangeConfirmation.tagAvailableQty,arrangeConfirmation.dueOpenQty)} value={arrangeConfirmQty} disabled={checkingTag} onChange={event=>setArrangeConfirmQty(event.target.value)} style={{width:"100%",fontSize:28,fontWeight:700,textAlign:"center"}}/><em>ชิ้น</em></label><div><small>Due เหลือหลังจัด</small><b>{fmt(Math.max(arrangeConfirmation.dueOpenQty-(Number(arrangeConfirmQty)||0),0))}</b><em>ชิ้น</em></div></div>
+          <p className="dispatch-staged-note">แก้จำนวนจัดครั้งนี้ได้ 1–{fmt(Math.min(arrangeConfirmation.tagAvailableQty,arrangeConfirmation.dueOpenQty))} ชิ้น · Stock พร้อมใช้หลังจัด {fmt(Math.max(arrangeConfirmation.tagAvailableQty-(Number(arrangeConfirmQty)||0),0))} ชิ้น · คงเหลือรวมยังเท่าเดิม</p>
+          {!validArrangementQuantity(arrangeConfirmQty,Math.min(arrangeConfirmation.tagAvailableQty,arrangeConfirmation.dueOpenQty))&&<p role="alert">กรุณาระบุจำนวนเต็ม 1–{fmt(Math.min(arrangeConfirmation.tagAvailableQty,arrangeConfirmation.dueOpenQty))} ชิ้นก่อนยืนยัน</p>}
         </section>
       </div>
-      <footer><button type="button" className="button secondary" disabled={checkingTag} onClick={() => { setArrangeConfirmation(null); tagInput.current?.focus(); }}>ยกเลิก / สแกนใหม่</button><button ref={arrangeConfirmButtonRef} type="button" className="button confirm-dispatch-button" disabled={checkingTag} onClick={() => void stageStockTag(arrangeConfirmation.rawPayload, arrangeConfirmation)}>{checkingTag ? "กำลังจัดงาน…" : "✓ ยืนยันจัดงาน"}</button></footer>
+      <footer><button type="button" className="button secondary" disabled={checkingTag} onClick={() => { setArrangeConfirmation(null); tagInput.current?.focus(); }}>ยกเลิก / สแกนใหม่</button><button ref={arrangeConfirmButtonRef} type="button" className="button confirm-dispatch-button" disabled={checkingTag || !validArrangementQuantity(arrangeConfirmQty,Math.min(arrangeConfirmation.tagAvailableQty,arrangeConfirmation.dueOpenQty))} onClick={() => void stageStockTag(arrangeConfirmation.rawPayload, {...arrangeConfirmation,pickedQty:Number(arrangeConfirmQty)})}>{checkingTag ? "กำลังจัดงาน…" : "✓ ยืนยันจัดงาน"}</button></footer>
     </div></div>}
     {dispatchConfirmation && <div className="modal-backdrop dispatch-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="dispatch-confirm-title"><div className="dispatch-confirm-modal">
       <header><div><span>✓</span><div><small>ตรวจพบ Tag ลูกค้า</small><h3 id="dispatch-confirm-title">ตรวจสอบงานก่อนขายออก</h3></div></div><button type="button" onClick={() => setDispatchConfirmation(null)} aria-label="ปิด">×</button></header>

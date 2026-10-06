@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 import { arrangementWarningEvent } from "../app/arrangement-warning.ts";
+import { validArrangementQuantity } from "../app/arrangement-quantity.ts";
 import { safeErrorMessage } from "../app/api-error.ts";
 
 const source = await readFile(new URL("../app/api/stock/route.ts", import.meta.url), "utf8");
@@ -112,7 +113,7 @@ function clientAttempt(response, options = {}) {
     setArrangeWarning: (value) => warnings.push(value), setNotice: noop, setArrangeTag: noop,
     recordClientAudit: async (...args) => audits.push(args),
     setArrangeDueDate: (date) => chosenDates.push(date), setCheckingTag: noop,
-    setArrangementPreview: noop, setArrangeQty: noop, fmt: String,
+    setArrangeConfirmQty: noop, validArrangementQuantity, setArrangementPreview: noop, setArrangeQty: noop, fmt: String,
     loadDue: async () => {}, loadStock: async () => {}, window: { setTimeout: noop },
     fetch: async (_, request) => {
       requests.push(JSON.parse(request.body));
@@ -188,7 +189,7 @@ test("permission denial is audited before any stock mutation", async () => {
   assert.equal(client.warnings.length, 0);
 });
  test("confirmation submits the displayed quantity and pinned Due scope", async () => {
-  const confirmation = { rawPayload: "KITSTK-TEST", pickedQty: 30, due: { id: 2 }, deliveryDate: "2026-10-07", deliveryTime: "09:00", fact: "FAC1" };
+  const confirmation = { rawPayload: "KITSTK-TEST", pickedQty: 30, tagAvailableQty:100, dueOpenQty:100, due: { id: 2 }, deliveryDate: "2026-10-07", deliveryTime: "09:00", fact: "FAC1" };
   const client = clientAttempt({ action: "staged", pick: { pickedQty: 30 }, tag: { jobNo: "JOB" } }, { arrangeConfirmation: confirmation, arrangeDueTime: "11:00", arrangeDueFact: "FAC2" });
   await client.stage("KITSTK-TEST", confirmation);
   assert.equal(client.requests[0].preview, false);
@@ -197,4 +198,18 @@ test("permission denial is audited before any stock mutation", async () => {
   assert.equal(client.requests[0].deliveryTime, "09:00");
   assert.equal(client.requests[0].fact, "FAC1");
   assert.equal(client.warnings.length, 0);
+});
+
+ test("edited confirmation quantity is staged exactly once and checked against preview limits", async () => {
+  const confirmation = { rawPayload: "KITSTK-TEST", pickedQty: 50, tagAvailableQty:100, dueOpenQty:100, due: {id:2}, deliveryDate:"2026-10-07", deliveryTime:"09:00", fact:"FAC1" };
+  const client=clientAttempt({action:"staged",pick:{pickedQty:50},tag:{jobNo:"JOB"}},{arrangeConfirmation:confirmation});
+  await client.stage(confirmation.rawPayload,confirmation);
+  assert.equal(client.requests.length,1);assert.equal(client.requests[0].qty,50);assert.equal(client.requests[0].preview,false);
+  for(const qty of [0,-1,1.5,101]){
+   const invalid=clientAttempt({}, {arrangeConfirmation:confirmation});await invalid.stage(confirmation.rawPayload,{...confirmation,pickedQty:qty});assert.equal(invalid.requests.length,0);assert.equal(invalid.warnings.length,1);
+  }
+});
+ test("blank and decimal quantity edits cannot confirm; whole quantities within both limits can",()=>{
+  for(const qty of ['', ' ', '0','-1','1.5','101','Infinity'])assert.equal(validArrangementQuantity(qty,100),false);
+  assert.equal(validArrangementQuantity('50',100),true);assert.equal(validArrangementQuantity('50',40),false);assert.equal(validArrangementQuantity('40',40),true);
 });
