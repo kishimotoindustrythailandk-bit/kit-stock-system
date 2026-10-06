@@ -278,7 +278,8 @@ export async function POST(request: Request) {
     if (!runtimeDb) throw new Error("ไม่พบการเชื่อมต่อ D1");
 
     if (action === "save_part") {
-      if (user.role !== "admin" || !hasPermission(user, "tags")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์เพิ่มหรือแก้ไข Part" }, { status: 403 });
+      const admin = user.role === "admin";
+      if (!admin && (!hasPermission(user, "parts") || !hasPermission(user, "parts-add"))) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์เพิ่มข้อมูลทะเบียน Part" }, { status: 403 });
       const materialCode = clean(body.materialCode, 100).toUpperCase();
       const partName = clean(body.partName, 240);
       const customer = clean(body.customer, 160);
@@ -289,13 +290,15 @@ export async function POST(request: Request) {
       }
       const previousPart = await runtimeDb.prepare(`SELECT material_code AS materialCode, part_name AS partName, customer, location, standard_qty AS standardQty FROM stock_parts WHERE material_code = ?1 LIMIT 1`)
         .bind(materialCode).first();
-      await runtimeDb.prepare(`
+      if (!admin && previousPart) return Response.json({ error: "Part นี้มีอยู่แล้ว สิทธิ์นี้เพิ่ม Part ใหม่ได้เท่านั้น กรุณาติดต่อ Admin เพื่อแก้ไข" }, { status: 409 });
+      const saved = await runtimeDb.prepare(`
         INSERT INTO stock_parts (material_code, part_name, customer, location, standard_qty, active, created_at, updated_at)
         VALUES (?1, ?2, ?3, ?4, ?5, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        ON CONFLICT(material_code) DO UPDATE SET
+        ON CONFLICT(material_code) ${admin ? `DO UPDATE SET
           part_name = excluded.part_name, customer = excluded.customer, location = excluded.location,
-          standard_qty = excluded.standard_qty, active = 1, updated_at = CURRENT_TIMESTAMP
+          standard_qty = excluded.standard_qty, active = 1, updated_at = CURRENT_TIMESTAMP` : "DO NOTHING"}
       `).bind(materialCode, partName, customer, location, standardQty).run();
+      if (!admin && !saved.meta.changes) return Response.json({ error: "Part นี้ถูกเพิ่มแล้ว กรุณารีเฟรชข้อมูล" }, { status: 409 });
       await writeAuditLog(user, {
         module: "parts", moduleLabel: "ทะเบียน Part", action: previousPart ? "update_part" : "create_part",
         actionLabel: previousPart ? "แก้ไข Part" : "เพิ่ม Part", entityType: "stock_part", entityId: materialCode,
