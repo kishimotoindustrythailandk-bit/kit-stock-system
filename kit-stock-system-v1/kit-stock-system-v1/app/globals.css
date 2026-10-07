@@ -295,6 +295,18 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .confirm-row { display: grid; grid-template-columns: .8fr 1.2fr; gap: 11px; margin-top: 14px; }
 
 .report-grid { display: grid; grid-template-columns: .8fr 1.2fr; gap: 18px; }
+.dispatch-scope-panel { display: grid; grid-template-columns: minmax(230px,.75fr) minmax(0,2fr); gap: 18px; align-items: center; margin-bottom: 16px; padding: 18px; border: 1px solid #b9d8ff; border-radius: 14px; background: linear-gradient(135deg,#f5faff,#e5f2ff); box-shadow: 0 8px 24px rgba(20,89,165,.08); }
+.dispatch-scope-panel > header { display: flex; align-items: center; gap: 12px; }
+.dispatch-scope-panel > header > span { display: grid; place-items: center; width: 46px; height: 46px; flex: 0 0 46px; color: #fff; border-radius: 13px; background: linear-gradient(145deg,#48aaff,#075fe0); font-size: 24px; box-shadow: 0 7px 16px rgba(7,95,224,.22); }
+.dispatch-scope-panel h3, .dispatch-scope-panel p { margin: 0; }
+.dispatch-scope-panel h3 { color: #173b6d; font-size: 17px; }
+.dispatch-scope-panel p { margin-top: 4px; color: #66809f; font-size: 11px; line-height: 1.45; }
+.dispatch-scope-grid { display: grid; grid-template-columns: 1.15fr .8fr .8fr 1.35fr; gap: 10px; align-items: end; }
+.dispatch-scope-grid label { display: grid; gap: 6px; color: #3c5878; font-size: 11px; font-weight: 700; }
+.dispatch-scope-grid select { width: 100%; min-height: 42px; padding: 0 11px; color: #18365f; border: 1px solid #bfd2e8; border-radius: 9px; background: #fff; font-weight: 700; }
+.dispatch-scope-summary { min-height: 42px; display: grid; align-content: center; padding: 7px 12px; border: 1px solid #a8cef8; border-radius: 9px; background: #fff; }
+.dispatch-scope-summary small, .dispatch-scope-summary span { color: #6b84a3; font-size: 9px; }
+.dispatch-scope-summary b { color: #0c5fbd; font-size: 11px; }
 .report-export-actions { display: grid; grid-template-columns: 1fr repeat(3, 118px); align-items: center; gap: 10px; }
 .report-export-actions > div b, .report-export-actions > div small { display: block; }
 .report-export-actions > div b { color: #18365f; font-size: 18px; }
@@ -456,6 +468,8 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 }
 
 @media (max-width: 720px) {
+  .dispatch-scope-panel { grid-template-columns: 1fr; padding: 14px; }
+  .dispatch-scope-grid { grid-template-columns: 1fr; }
   body { font-size: 13px; }
   .control-content { padding: 12px 10px calc(92px + env(safe-area-inset-bottom)); }
   .control-topbar { min-height: 66px; padding: 9px 12px; }
