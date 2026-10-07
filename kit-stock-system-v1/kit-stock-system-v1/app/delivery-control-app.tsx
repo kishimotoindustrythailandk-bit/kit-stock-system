@@ -131,6 +131,16 @@ type StockJobClosure = {
   ngQty: number; ngTagCount: number; reason: string; closedByName: string;
   closedByCode: string; closedAt: string;
 };
+type JobQuantityAdjustmentPreview = {
+  jobNo: string; materialCode: string; partName: string; customer: string; packQty: number;
+  currentQty: number; targetQty: number; difference: number; lockedQty: number; pendingQty: number;
+  productionDate: string; keptTagCount: number;
+  cancelledTags: Array<{ id: number; tagId: string; qty: number }>;
+  newTagQtys: number[];
+};
+type JobQuantityAdjustment = {
+  jobNo: string; materialCode: string; partName: string; currentQty: number;
+};
 type StockManualReceipt = {
   id: number; stockTagId: number; tagId: string; materialCode: string; partName: string;
   qty: number; jobNo: string; productionDate: string; referenceNo: string; note: string;
@@ -872,6 +882,13 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   });
   const replacementInputRef = useRef<HTMLInputElement>(null);
   const [jobClosingKey, setJobClosingKey] = useState("");
+  const [jobQtyAdjustment, setJobQtyAdjustment] = useState<JobQuantityAdjustment | null>(null);
+  const [jobQtyTarget, setJobQtyTarget] = useState("");
+  const [jobQtyReason, setJobQtyReason] = useState("");
+  const [jobQtyPreview, setJobQtyPreview] = useState<JobQuantityAdjustmentPreview | null>(null);
+  const [jobQtySaving, setJobQtySaving] = useState(false);
+  const [jobQtyCreatedTags, setJobQtyCreatedTags] = useState<StockTag[]>([]);
+  const [jobQtyAdjusted, setJobQtyAdjusted] = useState(false);
   const [jobCloseSearch, setJobCloseSearch] = useState("");
   const [jobClosePage, setJobClosePage] = useState(1);
   const [stockLoading, setStockLoading] = useState(false);
@@ -2517,6 +2534,70 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     }
   }
 
+  function openJobQuantityAdjustment(job: JobQuantityAdjustment) {
+    setJobQtyAdjustment(job);
+    setJobQtyTarget(String(job.currentQty));
+    setJobQtyReason("");
+    setJobQtyPreview(null);
+    setJobQtyCreatedTags([]);
+    setJobQtyAdjusted(false);
+  }
+
+  function closeJobQuantityAdjustment() {
+    if (jobQtySaving) return;
+    setJobQtyAdjustment(null);
+    setJobQtyPreview(null);
+    setJobQtyCreatedTags([]);
+    setJobQtyAdjusted(false);
+  }
+
+  async function previewJobQuantity(event: FormEvent) {
+    event.preventDefault();
+    if (!jobQtyAdjustment) return;
+    const targetQty = Number(jobQtyTarget);
+    if (!Number.isSafeInteger(targetQty) || targetQty < 0) return setNotice({ type: "error", text: "กรุณากรอกจำนวนผลิตจริงเป็นเลขจำนวนเต็มตั้งแต่ 0 ชิ้นขึ้นไป" });
+    if (!jobQtyReason.trim()) return setNotice({ type: "error", text: "กรุณาระบุสาเหตุที่ปรับจำนวนผลิตจริง" });
+    setJobQtySaving(true);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "preview_job_qty_adjustment", jobNo: jobQtyAdjustment.jobNo, materialCode: jobQtyAdjustment.materialCode, targetQty }),
+      });
+      const data = await response.json() as { preview?: JobQuantityAdjustmentPreview; error?: string };
+      if (!response.ok || !data.preview) throw new Error(data.error || "ตรวจสอบการปรับจำนวนไม่สำเร็จ");
+      setJobQtyPreview(data.preview);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบการปรับจำนวนไม่สำเร็จ" });
+    } finally {
+      setJobQtySaving(false);
+    }
+  }
+
+  async function confirmJobQuantityAdjustment() {
+    if (!jobQtyAdjustment || !jobQtyPreview) return;
+    setJobQtySaving(true);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "adjust_job_qty", jobNo: jobQtyAdjustment.jobNo, materialCode: jobQtyAdjustment.materialCode,
+          targetQty: jobQtyPreview.targetQty, expectedCurrentQty: jobQtyPreview.currentQty, reason: jobQtyReason.trim(),
+        }),
+      });
+      const data = await response.json() as { tags?: StockTag[]; preview?: JobQuantityAdjustmentPreview; error?: string };
+      if (!response.ok) throw new Error(data.error || "ปรับจำนวนผลิตจริงไม่สำเร็จ");
+      setJobQtyCreatedTags(data.tags || []);
+      setJobQtyAdjusted(true);
+      setNotice({ type: "success", text: `ปรับ Job ${jobQtyAdjustment.jobNo} เป็น ${fmt(jobQtyPreview.targetQty)} ชิ้นแล้ว${data.tags?.length ? ` · สร้าง Tag ใหม่ ${fmt(data.tags.length)} ใบ` : ""}` });
+      await loadStock();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ปรับจำนวนผลิตจริงไม่สำเร็จ" });
+      setJobQtyPreview(null);
+    } finally {
+      setJobQtySaving(false);
+    }
+  }
+
   async function deleteStockTag(tag: StockTag) {
     if (!window.confirm(`ยืนยันลบ Tag ${tag.tagId}\nPart ${tag.materialCode} · Job ${tag.jobNo} หรือไม่?\n\nลบได้เฉพาะ Tag ที่ยังไม่เคยรับเข้า Stock เท่านั้น`)) return;
     setDeletingStockTagId(tag.tagId);
@@ -3275,10 +3356,15 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       if (current === 1 || current === tagTotalPages || Math.abs(current - safeTagPage) <= 1) tagPageButtons.push(current);
       else if (tagPageButtons[tagPageButtons.length - 1] !== "…") tagPageButtons.push("…");
     }
-    const jobGroupMap = new Map<string, { jobNo: string; materialCode: string; partName: string; totalQty: number; receivedQty: number; pendingQty: number; ngQty: number; tagCount: number }>();
+    const jobGroupMap = new Map<string, { jobNo: string; materialCode: string; partName: string; totalQty: number; receivedQty: number; pendingQty: number; ngQty: number; tagCount: number; cancelledQty: number }>();
     stock.tags.forEach((tag) => {
       const key = tag.jobNo + "|" + tag.materialCode;
-      const current = jobGroupMap.get(key) || { jobNo: tag.jobNo, materialCode: tag.materialCode, partName: tag.partName, totalQty: 0, receivedQty: 0, pendingQty: 0, ngQty: 0, tagCount: 0 };
+      const current = jobGroupMap.get(key) || { jobNo: tag.jobNo, materialCode: tag.materialCode, partName: tag.partName, totalQty: 0, receivedQty: 0, pendingQty: 0, ngQty: 0, tagCount: 0, cancelledQty: 0 };
+      if (tag.status === "cancelled") {
+        current.cancelledQty += Number(tag.qty);
+        jobGroupMap.set(key, current);
+        return;
+      }
       current.totalQty += Number(tag.qty);
       current.tagCount += 1;
       if (tag.status === "printed") current.pendingQty += Number(tag.qty);
@@ -3289,6 +3375,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       }
       jobGroupMap.set(key, current);
     });
+    const closedJobKeys = new Set(stock.jobClosures.map((item) => item.jobNo + "|" + item.materialCode));
     const stockJobGroups = [...jobGroupMap.values()].sort((a, b) => b.pendingQty - a.pendingQty || b.ngQty - a.ngQty || a.jobNo.localeCompare(b.jobNo));
     const jobCloseNeedle = jobCloseSearch.trim().toLowerCase();
     const filteredStockJobGroups = stockJobGroups.filter((group) => !jobCloseNeedle
@@ -3339,8 +3426,8 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
           <div className="tag-modern-body">{paginatedTags.map((item) => {
             const image = partImages.find((entry) => entry.materialCode === item.materialCode);
             const boxMatch = item.tagId.match(/-B(\d+)OF(\d+)$/);
-            const statusText = item.status === "ng" ? "NG / ปิดรับเข้า" : item.status === "depleted" ? "ขายออกหมด" : item.status === "printed" ? "รอรับเข้า" : item.reservedQty ? "รอขายออก" : "รับเข้าแล้ว";
-            const statusClass = item.status === "ng" || item.status === "depleted" ? "over" : item.status === "printed" || item.reservedQty ? "partial" : "completed";
+            const statusText = item.status === "cancelled" ? "ยกเลิกแล้ว" : item.status === "ng" ? "NG / ปิดรับเข้า" : item.status === "depleted" ? "ขายออกหมด" : item.status === "printed" ? "รอรับเข้า" : item.reservedQty ? "รอขายออก" : "รับเข้าแล้ว";
+            const statusClass = item.status === "cancelled" || item.status === "ng" || item.status === "depleted" ? "over" : item.status === "printed" || item.reservedQty ? "partial" : "completed";
             return <div className="tag-modern-row" key={item.id}>
               <span className="tag-id-cell"><b>{item.tagId}</b><small>{item.splitLabelId ? "ถูกแบ่งแล้ว · ล็อก Tag ต้นฉบับ" : boxMatch ? `กล่อง ${Number(boxMatch[1])} / ${Number(boxMatch[2])}` : "Tag งาน"}</small></span>
               <span className="tag-product-cell"><PartImage materialCode={item.materialCode} compact version={image?.updatedAt} /><span><b>{item.materialCode}</b><small>{item.partName}</small><small>{item.customer || "ไม่ระบุลูกค้า"}</small></span></span>
@@ -3348,7 +3435,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
               <span><b>{item.jobNo}</b></span>
               <span><b>ออก Tag: {formatDateOnly(item.createdAt)}</b><small>{item.receivedAt ? `รับเข้า Stock: ${formatDateTime(item.receivedAt)}` : "วันที่ผลิต: รอรับเข้า Stock"}</small></span>
               <span><em className={`status ${statusClass}`}>{statusText}</em></span>
-              <span className="tag-row-actions">{item.splitLabelId ? <button className="tiny-button" type="button" onClick={() => setSplitTagRequest({ labelId: item.splitLabelId })}>▤ ดู Tag แบ่ง</button> : <button className="tiny-button" onClick={() => void printStockTags(item)}>▤ พิมพ์</button>}{user.role === "admin" && item.status === "printed" && <button type="button" className="tiny-button danger-outline" disabled={Boolean(deletingStockTagId)} onClick={() => void deleteStockTag(item)}>{deletingStockTagId === item.tagId ? "กำลังลบ…" : "♲ ลบ"}</button>}</span>
+              <span className="tag-row-actions">{item.status === "cancelled" ? <small>ห้ามใช้ Tag ใบนี้</small> : item.splitLabelId ? <button className="tiny-button" type="button" onClick={() => setSplitTagRequest({ labelId: item.splitLabelId })}>▤ ดู Tag แบ่ง</button> : <button className="tiny-button" onClick={() => void printStockTags(item)}>▤ พิมพ์</button>}{user.role === "admin" && item.status === "printed" && <button type="button" className="tiny-button danger-outline" disabled={Boolean(deletingStockTagId)} onClick={() => void deleteStockTag(item)}>{deletingStockTagId === item.tagId ? "กำลังลบ…" : "♲ ลบ"}</button>}</span>
             </div>;
           })}</div>
           <footer>
@@ -3359,7 +3446,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         </div> : <Empty title={tagNeedle ? "ไม่พบ Tag ที่ค้นหา" : "ยังไม่มี Tag"} text={tagNeedle ? "ลองเปลี่ยนคำค้นหา" : "เลือก Part และสร้าง Tag สำหรับนำงานเข้า Stock"} />}
       </Card>}
       {canEditPage("stock") && <Card className="stock-job-close-card" title="ปิดรับเข้า Job / จัดการงาน NG">
-        <p className="stock-job-close-help">เมื่อรับงานเข้าไม่ครบตาม Tag ให้ตรวจยอดแล้วกดปิดรับเข้า ระบบจะเปลี่ยนเฉพาะ Tag ที่ยังไม่ถูกยิงเป็น NG และไม่นับรวมใน Stock</p>
+        <p className="stock-job-close-help">ก่อนปิด Job สามารถกด “ปรับจำนวนผลิตจริง” ได้: ผลิตเกินระบบจะสร้าง Tag เพิ่ม ส่วนผลิตไม่ถึงระบบจะยกเลิกเฉพาะ Tag ที่ยังไม่รับเข้าและออก Tag เศษใหม่ โดยไม่แก้ Tag เดิม</p>
         <div className="stock-job-close-search"><span>⌕</span><input value={jobCloseSearch} onChange={(event) => { setJobCloseSearch(event.target.value); setJobClosePage(1); }} placeholder="ค้นหา Job, Part No. หรือชื่อชิ้นงาน..." />{jobCloseSearch && <button type="button" onClick={() => { setJobCloseSearch(""); setJobClosePage(1); }}>×</button>}</div>
         {filteredStockJobGroups.length ? <><div className="stock-job-close-summary">{paginatedStockJobGroups.map((group) => {
           const key = group.jobNo + "|" + group.materialCode;
@@ -3370,7 +3457,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
             <span className="job-metric received"><small>รับเข้าแล้ว</small><b>{fmt(group.receivedQty)}</b></span>
             <span className="job-metric waiting"><small>รอรับเข้า</small><b>{fmt(group.pendingQty)}</b></span>
             <span className="job-metric ng"><small>NG</small><b>{fmt(group.ngQty)}</b></span>
-            <span className="job-actions">{group.pendingQty > 0 && <button className="button danger" disabled={Boolean(jobClosingKey)} onClick={() => void closeStockJob(group.jobNo, group.materialCode, group.totalQty, group.receivedQty, group.pendingQty)}>{jobClosingKey === key ? "กำลังปิด…" : "ปิดรับเข้า Job"}</button>}{group.ngQty > 0 && user.role === "admin" && <button className="button secondary" disabled={Boolean(jobClosingKey)} onClick={() => void reopenNgStockJob(group.jobNo, group.materialCode, group.ngQty)}>เปิด Job คืน</button>}{group.pendingQty === 0 && group.ngQty === 0 && <em className="stock-job-complete">✓ รับเข้าครบแล้ว</em>}</span>
+            <span className="job-actions">{group.ngQty === 0 && !closedJobKeys.has(key) && <button className="button secondary" disabled={Boolean(jobClosingKey)} onClick={() => openJobQuantityAdjustment({ jobNo: group.jobNo, materialCode: group.materialCode, partName: group.partName, currentQty: group.totalQty })}>± ปรับจำนวนผลิตจริง</button>}{group.pendingQty > 0 && <button className="button danger" disabled={Boolean(jobClosingKey)} onClick={() => void closeStockJob(group.jobNo, group.materialCode, group.totalQty, group.receivedQty, group.pendingQty)}>{jobClosingKey === key ? "กำลังปิด…" : "ปิดรับเข้า Job"}</button>}{group.ngQty > 0 && user.role === "admin" && <button className="button secondary" disabled={Boolean(jobClosingKey)} onClick={() => void reopenNgStockJob(group.jobNo, group.materialCode, group.ngQty)}>เปิด Job คืน</button>}{group.pendingQty === 0 && group.ngQty === 0 && <em className="stock-job-complete">✓ รับเข้าครบแล้ว</em>}</span>
           </div>;
         })}</div><footer className="stock-job-close-pagination"><span>แสดง {fmt(jobCloseStartIndex + 1)} - {fmt(Math.min(jobCloseStartIndex + jobClosePageSize, filteredStockJobGroups.length))} จาก {fmt(filteredStockJobGroups.length)} Job</span><nav aria-label="หน้ารายการปิดรับเข้า Job"><button disabled={safeJobClosePage === 1} onClick={() => setJobClosePage(Math.max(1, safeJobClosePage - 1))}>‹</button>{jobClosePageButtons.map((item, index) => item === "…" ? <span key={"job-dots-" + index}>…</span> : <button className={item === safeJobClosePage ? "active" : ""} key={item} onClick={() => setJobClosePage(item)}>{item}</button>)}<button disabled={safeJobClosePage === jobCloseTotalPages} onClick={() => setJobClosePage(Math.min(jobCloseTotalPages, safeJobClosePage + 1))}>›</button></nav><b>10 Job / หน้า</b></footer></> : <Empty title={jobCloseSearch ? "ไม่พบ Job ที่ค้นหา" : "ยังไม่มี Job"} text={jobCloseSearch ? "ลองค้นหาด้วย Job, Part No. หรือชื่อชิ้นงาน" : "เมื่อสร้าง Tag แล้ว Job จะแสดงในส่วนนี้"} />}
         {stock.jobClosures.length > 0 && <div className="stock-job-close-history"><b>ประวัติปิดรับเข้าล่าสุด</b><ul>{stock.jobClosures.slice(0, 5).map((item) => <li key={item.id}><b>{item.jobNo}</b><span>{item.materialCode}</span><em>NG {fmt(item.ngQty)} ชิ้น</em><span>{item.reason}</span><span>{item.closedByName} · {formatDateTime(item.closedAt)}</span></li>)}</ul></div>}
@@ -4563,6 +4650,26 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       </div>
       {(dispatchConfirmation.verdict === "ready" || dispatchConfirmation.verdict === "ready_noimg") ? <footer><button type="button" className="button secondary" onClick={() => setDispatchConfirmation(null)}>ยกเลิก / ตรวจใหม่</button><button type="button" className="button confirm-dispatch-button" disabled={checkingTag} onClick={() => void confirmDispatch()}>{checkingTag ? "กำลังขายออก…" : "✓ ยืนยันขายออกและตัดยอด"}</button></footer> : <footer className="dispatch-confirm-blocked"><p>ไม่สามารถขายออกได้: {dispatchConfirmation.message || "ข้อมูลไม่พร้อมขายออก"}</p><button type="button" className="button secondary" onClick={() => setDispatchConfirmation(null)}>ปิดและตรวจใหม่</button></footer>}
     </div></div>}
+    {jobQtyAdjustment && <div className="modal-backdrop job-qty-adjust-backdrop" role="dialog" aria-modal="true" aria-labelledby="job-qty-adjust-title"><section className="job-qty-adjust-modal">
+      <header><div><span>±</span><div><small>ก่อนปิดรับเข้า Job</small><h3 id="job-qty-adjust-title">ปรับจำนวนผลิตจริง</h3></div></div><button type="button" disabled={jobQtySaving} onClick={closeJobQuantityAdjustment} aria-label="ปิด">×</button></header>
+      <div className="job-qty-adjust-content">
+        <section className="job-qty-adjust-job"><div><small>JOB</small><b>{jobQtyAdjustment.jobNo}</b></div><div><small>PART</small><b>{jobQtyAdjustment.materialCode}</b><span>{jobQtyAdjustment.partName}</span></div></section>
+        {!jobQtyPreview && !jobQtyAdjusted && <form id="job-qty-adjust-form" onSubmit={(event) => void previewJobQuantity(event)}>
+          <div className="job-qty-current"><small>จำนวน Tag ปัจจุบัน</small><b>{fmt(jobQtyAdjustment.currentQty)}</b><em>ชิ้น</em></div>
+          <label><span>จำนวนผลิตจริงทั้งหมด *</span><input type="number" min="0" step="1" inputMode="numeric" value={jobQtyTarget} onChange={(event) => setJobQtyTarget(event.target.value)} required /><small>กรอกยอดรวมที่ผลิตได้จริง ไม่ใช่จำนวนใบ Tag</small></label>
+          <label><span>สาเหตุ *</span><textarea value={jobQtyReason} onChange={(event) => setJobQtyReason(event.target.value)} maxLength={300} placeholder="เช่น ผลิตเกินแผน / ผลิตไม่ครบตาม Job" required /></label>
+        </form>}
+        {jobQtyPreview && <>
+          <div className="job-qty-compare"><article><small>Tag ปัจจุบัน</small><b>{fmt(jobQtyPreview.currentQty)}</b></article><span>→</span><article><small>ผลิตจริง</small><b>{fmt(jobQtyPreview.targetQty)}</b></article><article className={jobQtyPreview.difference > 0 ? "positive" : "negative"}><small>ผลต่าง</small><b>{jobQtyPreview.difference > 0 ? "+" : ""}{fmt(jobQtyPreview.difference)}</b></article></div>
+          <div className="job-qty-safety"><span>ยอดที่รับเข้า/นำไปใช้งานแล้ว <b>{fmt(jobQtyPreview.lockedQty)}</b> ชิ้น — ระบบจะไม่แก้ไข</span><span>ยกเลิก Tag เดิม <b>{fmt(jobQtyPreview.cancelledTags.length)}</b> ใบ / สร้าง Tag ใหม่ <b>{fmt(jobQtyPreview.newTagQtys.length)}</b> ใบ</span></div>
+          {jobQtyPreview.cancelledTags.length > 0 && <section className="job-qty-tag-list cancelled"><b>Tag ที่จะยกเลิก</b>{jobQtyPreview.cancelledTags.map((tag) => <span key={tag.id}><code>{tag.tagId}</code><em>{fmt(tag.qty)} ชิ้น</em></span>)}</section>}
+          {jobQtyPreview.newTagQtys.length > 0 && <section className="job-qty-tag-list created"><b>Tag ใหม่ที่จะสร้าง</b>{jobQtyPreview.newTagQtys.map((qty, index) => <span key={index}><code>ใบใหม่ {index + 1}</code><em>{fmt(qty)} ชิ้น</em></span>)}</section>}
+          <p className="job-qty-reason"><b>สาเหตุ:</b> {jobQtyReason}</p>
+          {jobQtyAdjusted && <div className="job-qty-success"><b>✓ ปรับจำนวนผลิตจริงเรียบร้อย</b><span>{jobQtyCreatedTags.length ? `สร้าง Tag ใหม่ ${fmt(jobQtyCreatedTags.length)} ใบ กรุณาพิมพ์และนำไปใช้แทน` : "ไม่มี Tag ใหม่ที่ต้องพิมพ์"}</span></div>}
+        </>}
+      </div>
+      <footer>{!jobQtyPreview && !jobQtyAdjusted ? <><button type="button" className="button secondary" onClick={closeJobQuantityAdjustment}>ยกเลิก</button><button type="submit" form="job-qty-adjust-form" className="button primary" disabled={jobQtySaving}>{jobQtySaving ? "กำลังตรวจสอบ…" : "ตรวจสอบ Tag ที่จะเปลี่ยน"}</button></> : jobQtyAdjusted ? <><button type="button" className="button secondary" onClick={closeJobQuantityAdjustment}>ปิด</button>{jobQtyCreatedTags.length > 0 && <button type="button" className="button primary" onClick={() => void printStockTags(jobQtyCreatedTags)}>▤ พิมพ์ Tag ใหม่</button>}</> : <><button type="button" className="button secondary" disabled={jobQtySaving} onClick={() => setJobQtyPreview(null)}>กลับไปแก้ไข</button><button type="button" className="button primary" disabled={jobQtySaving} onClick={() => void confirmJobQuantityAdjustment()}>{jobQtySaving ? "กำลังบันทึก…" : "✓ ยืนยันปรับจำนวนผลิตจริง"}</button></>}</footer>
+    </section></div>}
     {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>{cameraPurpose === "stock" ? "สแกน Tag รับงานเข้า Stock" : cameraPurpose === "stock-count" ? "สแกน Tag ตรวจนับสิ้นเดือน" : "สแกน Tag ด้วยกล้อง"}</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className="camera-view"><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div><p className="camera-format-hint">รองรับ QR · Data Matrix · Code 128 · Code 39</p>{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
     {splitTagRequest&&<SplitTagPopup {...splitTagRequest} page={page} onClose={closeSplitTag}/>}
     <OperationWarningPopup voiceEnabled={settings.sound}/>

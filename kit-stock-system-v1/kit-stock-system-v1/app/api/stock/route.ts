@@ -30,6 +30,73 @@ function createTagId(batchCode: string, boxNo: number, boxCount: number) {
   return `${batchCode}-B${String(boxNo).padStart(width, "0")}OF${String(boxCount).padStart(width, "0")}`;
 }
 
+type JobAdjustmentTag = {
+  id: number; tagId: string; qty: number; status: string; productionDate: string;
+};
+
+async function previewJobQuantityAdjustment(DB: D1Database, jobNo: string, materialCode: string, targetQty: number) {
+  if (!Number.isSafeInteger(targetQty) || targetQty < 0) throw new Error("จำนวนผลิตจริงต้องเป็นเลขจำนวนเต็มตั้งแต่ 0 ชิ้นขึ้นไป");
+  const part = await DB.prepare(`
+    SELECT material_code AS materialCode, part_name AS partName, customer,
+      standard_qty AS packQty
+    FROM stock_parts WHERE material_code = ?1 LIMIT 1
+  `).bind(materialCode).first<{ materialCode: string; partName: string; customer: string; packQty: number }>();
+  if (!part) throw new Error("ไม่พบ Part ของ Job นี้ในทะเบียน");
+  const packQty = Number(part.packQty || 0);
+  if (!Number.isSafeInteger(packQty) || packQty <= 0) throw new Error(`Part ${materialCode} ยังไม่ได้กำหนด Packing Qty`);
+  const closed = await DB.prepare(`
+    SELECT id FROM stock_job_closures WHERE job_no = ?1 AND material_code = ?2 LIMIT 1
+  `).bind(jobNo, materialCode).first<{ id: number }>();
+  if (closed) throw new Error("Job นี้เคยปิดรับเข้าแล้ว จึงปรับจำนวนผลิตจริงไม่ได้");
+  const result = await DB.prepare(`
+    SELECT id, tag_id AS tagId, qty, status, production_date AS productionDate
+    FROM stock_tags WHERE job_no = ?1 AND material_code = ?2 ORDER BY id ASC
+  `).bind(jobNo, materialCode).all<JobAdjustmentTag>();
+  const allTags = result.results || [];
+  if (!allTags.length) throw new Error("ไม่พบ Tag ของ Job นี้");
+  if (allTags.some((tag) => tag.status === "ng")) throw new Error("Job นี้มี Tag NG หรือถูกปิดแล้ว กรุณาเปิด Job คืนและตรวจสอบประวัติก่อน");
+  const activeTags = allTags.filter((tag) => tag.status !== "cancelled");
+  const lockedTags = activeTags.filter((tag) => tag.status !== "printed");
+  const pendingTags = activeTags.filter((tag) => tag.status === "printed");
+  const currentQty = activeTags.reduce((sum, tag) => sum + Number(tag.qty), 0);
+  const lockedQty = lockedTags.reduce((sum, tag) => sum + Number(tag.qty), 0);
+  const pendingQty = pendingTags.reduce((sum, tag) => sum + Number(tag.qty), 0);
+  if (targetQty < lockedQty) throw new Error(`ลดต่ำกว่า ${lockedQty} ชิ้นไม่ได้ เพราะมี Tag ที่รับเข้า/จัดงานแล้ว`);
+  if (targetQty === currentQty) throw new Error("จำนวนผลิตจริงเท่ากับจำนวน Tag ปัจจุบันแล้ว ไม่ต้องปรับรายการ");
+
+  const desiredPendingQty = targetQty - lockedQty;
+  const cancelledTags: JobAdjustmentTag[] = [];
+  const keptPendingTags: JobAdjustmentTag[] = [];
+  let keptPendingQty = 0;
+  if (targetQty < currentQty) {
+    let cancelling = false;
+    for (const tag of pendingTags) {
+      if (!cancelling && keptPendingQty + Number(tag.qty) <= desiredPendingQty) {
+        keptPendingTags.push(tag);
+        keptPendingQty += Number(tag.qty);
+      } else {
+        cancelling = true;
+        cancelledTags.push(tag);
+      }
+    }
+  } else {
+    keptPendingTags.push(...pendingTags);
+    keptPendingQty = pendingQty;
+  }
+  const qtyToCreate = desiredPendingQty - keptPendingQty;
+  const newTagCount = qtyToCreate > 0 ? Math.ceil(qtyToCreate / packQty) : 0;
+  if (newTagCount > 200) throw new Error(`ส่วนต่างนี้ต้องสร้าง ${newTagCount} Tag เกินขีดจำกัด 200 ใบต่อครั้ง กรุณาแบ่งปรับเพิ่มหลายครั้ง`);
+  const newTagQtys = Array.from({ length: newTagCount }, (_, index) => index < newTagCount - 1 ? packQty : qtyToCreate - (packQty * (newTagCount - 1)));
+  return {
+    jobNo, materialCode, partName: part.partName, customer: part.customer, packQty,
+    currentQty, targetQty, difference: targetQty - currentQty, lockedQty, pendingQty,
+    productionDate: activeTags[0]?.productionDate || allTags[0].productionDate,
+    cancelledTags: cancelledTags.map((tag) => ({ id: tag.id, tagId: tag.tagId, qty: Number(tag.qty) })),
+    keptTagCount: keptPendingTags.length + lockedTags.length,
+    newTagQtys,
+  };
+}
+
 async function findExistingStockJob(DB: D1Database, jobNo: string) {
   return DB.prepare(`
     SELECT tag_id AS tagId, material_code AS materialCode
@@ -299,13 +366,18 @@ export async function POST(request: Request) {
         : [];
       if (!tagIds.length || tagIds.length > 200) return Response.json({ error: "รายการ Tag สำหรับพิมพ์ไม่ถูกต้อง" }, { status: 400 });
       const existingTagIds = new Set<string>();
+      const statusByTagId = new Map<string, string>();
       const splitIssueRows: Array<{ splitLabelId: string; splitIssuedAt: string; sourceTagId: string }> = [];
       // Keep each statement below D1's binding limit when a Job contains many boxes.
       for (let offset = 0; offset < tagIds.length; offset += 80) {
         const chunk = tagIds.slice(offset, offset + 80);
         const placeholders = chunk.map((_, index) => `?${index + 1}`).join(",");
-        const existing = await runtimeDb.prepare(`SELECT tag_id AS tagId FROM stock_tags WHERE tag_id IN (${placeholders})`).bind(...chunk).all<{ tagId: string }>();
-        for (const tag of existing.results || []) existingTagIds.add(String(tag.tagId).toUpperCase());
+        const existing = await runtimeDb.prepare(`SELECT tag_id AS tagId, status FROM stock_tags WHERE tag_id IN (${placeholders})`).bind(...chunk).all<{ tagId: string; status: string }>();
+        for (const tag of existing.results || []) {
+          const tagId = String(tag.tagId).toUpperCase();
+          existingTagIds.add(tagId);
+          statusByTagId.set(tagId, String(tag.status));
+        }
         const splitIssues = await runtimeDb.prepare(`
           SELECT entity_id AS splitLabelId, created_at AS splitIssuedAt,
             json_extract(detail_json, '$.snapshot.tag.tagId') AS sourceTagId
@@ -317,6 +389,10 @@ export async function POST(request: Request) {
         splitIssueRows.push(...(splitIssues.results || []));
       }
       if (existingTagIds.size !== tagIds.length) return Response.json({ error: "พบ Tag บางรายการไม่อยู่ในระบบ กรุณารีเฟรชแล้วลองใหม่" }, { status: 404 });
+      const cancelledTagId = tagIds.find((tagId) => statusByTagId.get(tagId) === "cancelled");
+      if (cancelledTagId) return Response.json({
+        error: `Tag ${cancelledTagId} ถูกยกเลิกจากการปรับจำนวนผลิตจริง จึงพิมพ์ซ้ำไม่ได้`, blockedTagId: cancelledTagId,
+      }, { status: 409 });
       const issueByTag = new Map<string, { splitLabelId: string; splitIssuedAt: string; sourceTagId: string }>();
       for (const issue of splitIssueRows) {
         const sourceTagId = String(issue.sourceTagId || "").toUpperCase();
@@ -521,7 +597,7 @@ export async function POST(request: Request) {
       if (!tag) return Response.json({ error: "ไม่พบ Tag ที่ต้องการลบ" }, { status: 404 });
       if (tag.status !== "printed" || tag.receivedAt) {
         return Response.json({
-          error: "Tag นี้รับเข้า Stock แล้ว จึงลบไม่ได้ เพื่อรักษาข้อมูลย้อนหลัง",
+          error: tag.status === "cancelled" ? "Tag นี้ถูกยกเลิกจากการปรับจำนวนแล้ว จึงลบไม่ได้ เพื่อรักษาประวัติ" : "Tag นี้รับเข้า Stock แล้ว จึงลบไม่ได้ เพื่อรักษาข้อมูลย้อนหลัง",
         }, { status: 409 });
       }
       const result = await DB.prepare(`
@@ -541,6 +617,103 @@ export async function POST(request: Request) {
         entityType: "stock_tag", entityId: tag.tagId, summary: `ลบ Tag ${tag.tagId} ที่ยังไม่รับเข้า Stock`, before: tag,
       }, request);
       return Response.json({ success: true, deleted: 1, tagId: tag.tagId });
+    }
+
+    if (action === "preview_job_qty_adjustment" || action === "adjust_job_qty") {
+      if (!hasPermission(user, "stock") || !hasPermission(user, "stock-edit")) {
+        return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ปรับจำนวนผลิตจริงของ Job" }, { status: 403 });
+      }
+      const jobNo = clean(body.jobNo, 160).toUpperCase();
+      const materialCode = clean(body.materialCode, 100).toUpperCase();
+      const targetQty = Number(body.targetQty);
+      if (!jobNo || !materialCode || !Number.isSafeInteger(targetQty) || targetQty < 0) {
+        return Response.json({ error: "กรุณาระบุ Job, Part และจำนวนผลิตจริงเป็นเลขจำนวนเต็ม" }, { status: 400 });
+      }
+      let preview;
+      try {
+        preview = await previewJobQuantityAdjustment(runtimeDb, jobNo, materialCode, targetQty);
+      } catch (error) {
+        return Response.json({ error: error instanceof Error ? error.message : "ตรวจสอบการปรับจำนวนไม่สำเร็จ" }, { status: 409 });
+      }
+      if (action === "preview_job_qty_adjustment") return Response.json({ preview });
+
+      const reason = clean(body.reason, 300);
+      const expectedCurrentQty = Number(body.expectedCurrentQty);
+      if (!reason) return Response.json({ error: "กรุณาระบุสาเหตุที่ปรับจำนวนผลิตจริง" }, { status: 400 });
+      if (!Number.isSafeInteger(expectedCurrentQty) || expectedCurrentQty !== preview.currentQty) {
+        return Response.json({ error: "ยอด Tag เปลี่ยนจากหน้าตัวอย่าง กรุณาตรวจสอบใหม่ก่อนยืนยัน" }, { status: 409 });
+      }
+      const batchCode = preview.newTagQtys.length ? createTagBatchCode() : "";
+      const newTagDrafts = preview.newTagQtys.map((qty, index) => ({
+        tagId: createTagId(batchCode, index + 1, preview.newTagQtys.length), qty,
+      }));
+      const cancelledIds = preview.cancelledTags.map((tag) => tag.id);
+      const statements = [
+        runtimeDb.prepare(`
+          SELECT CASE WHEN
+            coalesce((SELECT sum(CASE WHEN status <> 'cancelled' THEN qty ELSE 0 END)
+              FROM stock_tags WHERE job_no = ?1 AND material_code = ?2), 0) = ?3
+            AND NOT EXISTS (SELECT 1 FROM stock_job_closures WHERE job_no = ?1 AND material_code = ?2)
+            AND NOT EXISTS (SELECT 1 FROM stock_tags WHERE job_no = ?1 AND material_code = ?2 AND status = 'ng')
+          THEN 1 ELSE abs(-9223372036854775808) END AS valid
+        `).bind(jobNo, materialCode, preview.currentQty),
+      ];
+      if (cancelledIds.length) {
+        statements.push(runtimeDb.prepare(`
+          UPDATE stock_tags SET status = 'cancelled'
+          WHERE id IN (SELECT cast(value AS INTEGER) FROM json_each(?1)) AND status = 'printed'
+        `).bind(JSON.stringify(cancelledIds)));
+      }
+      if (newTagDrafts.length) {
+        statements.push(runtimeDb.prepare(`
+          INSERT INTO stock_tags
+            (tag_id, material_code, qty, remaining_qty, job_no, production_date, status,
+             printed_by_name, received_by_name, received_by_code, received_at, created_at)
+          SELECT json_extract(value, '$.tagId'), ?2,
+            cast(json_extract(value, '$.qty') AS INTEGER), cast(json_extract(value, '$.qty') AS INTEGER),
+            ?3, ?4, 'printed', ?5, '', '', NULL, CURRENT_TIMESTAMP
+          FROM json_each(?1)
+        `).bind(JSON.stringify(newTagDrafts), materialCode, jobNo, preview.productionDate, user.displayName));
+      }
+      statements.push(runtimeDb.prepare(`
+        SELECT CASE WHEN
+          coalesce((SELECT sum(CASE WHEN status <> 'cancelled' THEN qty ELSE 0 END)
+            FROM stock_tags WHERE job_no = ?1 AND material_code = ?2), 0) = ?3
+        THEN 1 ELSE abs(-9223372036854775808) END AS valid
+      `).bind(jobNo, materialCode, targetQty));
+      try {
+        await runtimeDb.batch(statements);
+      } catch {
+        return Response.json({ error: "ยอด Tag เปลี่ยนจากอีกเครื่อง ระบบยกเลิกรายการแล้ว กรุณารีเฟรชและลองใหม่" }, { status: 409 });
+      }
+
+      const inserted = newTagDrafts.length ? await runtimeDb.prepare(`
+        SELECT t.id, t.tag_id AS tagId, t.material_code AS materialCode, t.qty,
+          t.remaining_qty AS remainingQty, t.job_no AS jobNo, t.production_date AS productionDate,
+          t.status, t.printed_by_name AS printedByName, t.received_by_name AS receivedByName,
+          t.received_at AS receivedAt, t.created_at AS createdAt,
+          p.part_name AS partName, p.customer, p.location
+        FROM stock_tags t INNER JOIN stock_parts p ON p.material_code = t.material_code
+        WHERE t.tag_id LIKE ?1 ORDER BY t.id ASC
+      `).bind(`${batchCode}-%`).all<Record<string, unknown>>() : { results: [] as Record<string, unknown>[] };
+      const draftById = new Map(newTagDrafts.map((tag, index) => [tag.tagId, { ...tag, boxNo: index + 1 }]));
+      const tags = (inserted.results || []).map((tag) => {
+        const draft = draftById.get(String(tag.tagId));
+        return {
+          ...tag, boxNo: draft?.boxNo || 0, boxCount: newTagDrafts.length, deliveryQty: targetQty,
+          payload: `KITSTOCK|${tag.tagId}|${materialCode}|${Number(tag.qty)}|${jobNo}|${preview.productionDate}`,
+        };
+      });
+      const saved = await writeAuditLog(user, {
+        module: "tags", moduleLabel: "พิมพ์ Tag", action: "adjust_job_actual_qty", actionLabel: "ปรับจำนวนผลิตจริง",
+        entityType: "stock_job", entityId: `${jobNo}|${materialCode}`,
+        summary: `ปรับ Job ${jobNo} · ${materialCode} จาก ${preview.currentQty} เป็น ${targetQty} ชิ้น`,
+        before: { totalQty: preview.currentQty, pendingQty: preview.pendingQty, lockedQty: preview.lockedQty },
+        after: { totalQty: targetQty, difference: preview.difference },
+        details: { reason, cancelledTags: preview.cancelledTags, newTags: newTagDrafts, packQty: preview.packQty },
+      }, request);
+      if (!saved) console.error("adjust_job_actual_qty audit log was not saved", { jobNo, materialCode, targetQty });
+      return Response.json({ success: true, preview, tags, reason });
     }
 
     if (action === "create_tag") {
@@ -654,7 +827,7 @@ export async function POST(request: Request) {
       const { DB } = getRuntimeEnv();
       if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
       const summary = await DB.prepare(`
-        SELECT coalesce(sum(st.qty), 0) AS totalQty,
+        SELECT coalesce(sum(CASE WHEN st.status <> 'cancelled' THEN st.qty ELSE 0 END), 0) AS totalQty,
           coalesce(sum(CASE WHEN st.status IN ('in_stock', 'depleted') THEN
             coalesce((
               SELECT r.received_qty FROM stock_receipt_adjustments r
@@ -712,7 +885,7 @@ export async function POST(request: Request) {
       const tagId = parseInternalTag(clean(body.rawPayload, 1000));
       const [tag] = await db.select().from(stockTags).where(eq(stockTags.tagId, tagId)).limit(1);
       if (!tag) return Response.json({ error: "ไม่พบ Tag Stock นี้ในระบบ" }, { status: 404 });
-      if (tag.status !== "printed") return Response.json({ error: tag.status === "ng" ? "Tag นี้ถูกบันทึกเป็น NG แล้ว กรุณาให้ Admin ตรวจสอบ" : tag.status === "depleted" ? "Tag นี้ถูกขายออกหมดแล้ว" : "Tag นี้รับเข้า Stock แล้ว" }, { status: 409 });
+      if (tag.status !== "printed") return Response.json({ error: tag.status === "cancelled" ? "Tag นี้ถูกยกเลิกจากการปรับจำนวนผลิตจริง จึงรับเข้า Stock ไม่ได้" : tag.status === "ng" ? "Tag นี้ถูกบันทึกเป็น NG แล้ว กรุณาให้ Admin ตรวจสอบ" : tag.status === "depleted" ? "Tag นี้ถูกขายออกหมดแล้ว" : "Tag นี้รับเข้า Stock แล้ว" }, { status: 409 });
 
       const part = await runtimeDb.prepare(`
         SELECT part_name AS partName, customer, location

@@ -13,9 +13,9 @@ const compiled = ts.transpileModule(routeSource, {
 function routeFixture({ permitted = true } = {}) {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec(`
-    CREATE TABLE stock_tags(tag_id TEXT PRIMARY KEY);
+    CREATE TABLE stock_tags(tag_id TEXT PRIMARY KEY,status TEXT);
     CREATE TABLE audit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT, action_key TEXT, entity_id TEXT, detail_json TEXT, created_at TEXT);
-    INSERT INTO stock_tags VALUES('KITSTK-ORIGINAL');
+    INSERT INTO stock_tags VALUES('KITSTK-ORIGINAL','printed');
   `);
   const DB = {
     prepare(sql) {
