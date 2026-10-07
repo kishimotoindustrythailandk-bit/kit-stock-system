@@ -18,6 +18,6 @@ export default function VoiceAlertControl({enabled,onEnabledChange}:{enabled:boo
     speakThaiAlert('success','settings','เปิดเสียงพูดแล้ว จัดงานสำเร็จ',true);
   }}>🔊 เปิด / ทดสอบเสียงพูด</button>
   {enabled&&<button type="button" className="tiny-button" onClick={()=>{stopThaiVoice();onEnabledChange(false);setStatus(null);}}>ปิดเสียง</button>}
-  <span role="status" style={{fontSize:12,color:status?.state==='error'?'#ba263b':'#31587b'}}>{!enabled?'ปิดเสียงพูดอยู่':status?.message||'กดทดสอบเสียงหนึ่งครั้งก่อนเริ่มสแกน'}</span>
+  <span role="status" style={{fontSize:12,color:status?.state==='error'?'#ba263b':'#31587b'}}>{!enabled?'ปิดเสียงพูดอยู่':status?.message||'พูดภาษาไทย ตามด้วยภาษาอังกฤษ · เลือกเสียงผู้ชายก่อนถ้าเครื่องมี'}</span>
  </div>;
 }
