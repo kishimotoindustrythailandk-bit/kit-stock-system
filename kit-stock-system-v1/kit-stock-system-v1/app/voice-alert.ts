@@ -14,16 +14,26 @@ export function stopThaiVoice() {
   if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
 }
 
+export function speechPronunciation(message: string) {
+  return message
+    .replace(/Stock/gi, "สต็อก")
+    .replace(/Tag/gi, "แท็ก")
+    .replace(/FAC/gi, "แฟค")
+    .replace(/Due/gi, "ดิว")
+    .replace(/Job/gi, "จ๊อบ")
+    .replace(/NG/gi, "เอ็นจี");
+}
+
 export function voiceAlertMessage(type: VoiceAlertType, page: string, message: string) {
   const clean = message.replace(/\s+/g, " ").trim();
   if (!clean) return "";
-  if (type === "error") return clean.slice(0, 240);
-  if (page === "arrange") return "จัดงานสำเร็จ";
-  if (page === "dispatch") return "ขายออกสำเร็จ";
-  if (page === "stock" || page === "manual-stock") return "รับเข้า Stock สำเร็จ";
-  if (page === "stock-count") return "ปรับยอด Stock สำเร็จ";
-  if (page === "replacement") return "เบิกงานทดแทนสำเร็จ";
-  return clean.slice(0, 180);
+  let spokenText = clean.slice(0, type === "error" ? 240 : 180);
+  if (type === "success" && page === "arrange") spokenText = "จัดงานสำเร็จ";
+  if (type === "success" && page === "dispatch") spokenText = "ขายออกสำเร็จ";
+  if (type === "success" && (page === "stock" || page === "manual-stock")) spokenText = "รับเข้า Stock สำเร็จ";
+  if (type === "success" && page === "stock-count") spokenText = "ปรับยอด Stock สำเร็จ";
+  if (type === "success" && page === "replacement") spokenText = "เบิกงานทดแทนสำเร็จ";
+  return speechPronunciation(spokenText);
 }
 
 export function speakThaiAlert(type: VoiceAlertType, page: string, message: string, enabled = true) {
@@ -43,8 +53,8 @@ export function speakThaiAlert(type: VoiceAlertType, page: string, message: stri
   const utterance = new window.SpeechSynthesisUtterance(text);
   currentUtterance = utterance;
   utterance.lang = "th-TH";
-  utterance.rate = 0.95;
-  utterance.pitch = 1;
+  utterance.rate = 0.9;
+  utterance.pitch = 0.85;
   utterance.volume = 1;
   let timer: number | undefined;
   const cleanup = () => {
@@ -59,7 +69,8 @@ export function speakThaiAlert(type: VoiceAlertType, page: string, message: stri
     const voices = synth.getVoices();
     if(!voices.length)return;
     cleanup();
-    const thaiVoice = voices.find(voice=>voice.lang.toLowerCase().replace('_','-').startsWith('th'));
+    const thaiVoices = voices.filter(voice=>voice.lang.toLowerCase().replace('_','-').startsWith('th'));
+    const thaiVoice = thaiVoices.find(voice=>/male|ชาย|pattara/i.test(`${voice.name ?? ""} ${voice.voiceURI ?? ""}`)) ?? thaiVoices[0];
     if(!thaiVoice){fail("ไม่พบเสียงภาษาไทยบนเครื่องนี้ กรุณาเพิ่มเสียงภาษาไทยในตั้งค่าของอุปกรณ์ แล้วกดทดสอบเสียงอีกครั้ง");return;}
     utterance.voice = thaiVoice;
     utterance.onstart = () => {if(currentUtterance!==utterance)return;cleanup();reportVoiceStatus({state:"playing",message:"กำลังพูด: "+text});};
