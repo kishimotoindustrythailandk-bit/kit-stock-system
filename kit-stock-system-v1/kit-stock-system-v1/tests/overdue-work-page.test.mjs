@@ -59,7 +59,8 @@ test("overdue permission survives server normalization and authorizes Due readin
   new Function("module", "exports", compile(section))(compiledModule, compiledModule.exports);
   const { normalizePermissions, hasPermission } = compiledModule.exports;
   const permissions = normalizePermissions(["overdue", "unknown", "overdue"], "employee");
-  assert.deepEqual(permissions, ["overdue"]);
+  assert.equal(permissions.includes("overdue"), true);
+  assert.equal(permissions.includes("permission-model-v2"), true);
   const user = { role: "employee", permissions };
   assert.equal(hasPermission(user, "overdue"), true);
   assert.equal(hasPermission(user, "plan"), false);

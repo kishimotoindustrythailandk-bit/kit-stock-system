@@ -20,11 +20,13 @@ function canAccess(user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>
 
 function canRequest(user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>) {
   return hasPermission(user, "replacement")
+    && hasPermission(user, "replacement-edit")
     && (user.role === "admin" || user.role === "qc" || user.role === "inspector");
 }
 
 function canIssue(user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>) {
   return hasPermission(user, "replacement")
+    && hasPermission(user, "replacement-edit")
     && (user.role === "admin" || user.role === "delivery" || user.role === "dispatcher");
 }
 
@@ -258,6 +260,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "mark_printed") {
+      if (!hasPermission(user, "replacement-edit")) return Response.json({ error: "บัญชีนี้มีสิทธิ์ดูงานทดแทนเท่านั้น" }, { status: 403 });
       const issueId = Number(body.issueId || 0);
       if (!Number.isInteger(issueId) || issueId <= 0) return Response.json({ error: "ไม่พบรายการที่จะพิมพ์" }, { status: 400 });
       const result = await DB.prepare(`

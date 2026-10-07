@@ -610,6 +610,14 @@ td small { margin-top: 3px; color: #8794a9; font-size: 9px; }
 .permission-option div { display: grid; gap: 2px; }
 .permission-option b { color: #183153; font-size: 12px; }
 .permission-option small { color: #71809a; font-size: 10px; line-height: 1.35; }
+.permission-option-levels { grid-template-columns: 34px minmax(0, 1fr); cursor: default; }
+.permission-option-levels > span { grid-row: 1; }
+.permission-option-copy { grid-row: 1; }
+.permission-levels { grid-column: 1 / -1; display: flex !important; flex-wrap: wrap; gap: 8px 18px !important; padding-top: 8px; border-top: 1px solid #e1e8f2; }
+.permission-levels label { display: flex; align-items: center; gap: 6px; color: #294567; font-size: 11px; font-weight: 700; cursor: pointer; }
+.permission-levels em { color: #8794a8; font-size: 10px; font-style: normal; }
+.read-only-permission-banner { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; padding: 10px 14px; border: 1px solid #b9d3fb; border-radius: 10px; background: #eef6ff; color: #24528c; font-size: 12px; }
+.read-only-permission-banner b { color: #173f73; }
 .permission-summary { display: flex; flex-wrap: wrap; gap: 4px; max-width: 280px; }
 .permission-summary span { padding: 3px 7px; border-radius: 999px; background: #edf4ff; color: #2861b4; font-size: 9px; white-space: nowrap; }
 .scan-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }

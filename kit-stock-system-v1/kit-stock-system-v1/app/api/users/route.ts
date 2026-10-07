@@ -8,6 +8,10 @@ import { writeAuditLog } from "../../audit-log";
 
 const CANONICAL_ROLES = new Set(["production", "stock", "qc", "delivery"]);
 const LEGACY_ROLES = new Set(["dispatcher", "inspector"]);
+const PAGE_PERMISSION_KEYS = new Set<PermissionKey>([
+  "dashboard", "stock", "stock-all", "manual-stock", "stock-count", "forecast", "parts", "tags", "plan",
+  "overdue", "arrange", "replacement", "dispatch", "exports", "reports", "history", "settings", "users",
+]);
 
 async function requireAdmin() {
   const user = await getCurrentUser();
@@ -30,8 +34,20 @@ function validate(code: string, name: string, role: string, roleAllowed: boolean
 
 function permissionsFromBody(value: unknown, role: string): { permissions?: PermissionKey[]; error?: string } {
   if (!Array.isArray(value)) return { error: "กรุณาเลือกสิทธิ์เข้าใช้งานอย่างน้อย 1 หน้า" };
-  const permissions = normalizePermissions(value, role);
-  if (!permissions.length) return { error: "กรุณาเลือกสิทธิ์เข้าใช้งานอย่างน้อย 1 หน้า" };
+  const normalized = normalizePermissions(value, role);
+  const selected = new Set(normalized);
+  const permissions = normalized.filter((permission) => {
+    if (permission.endsWith("-edit")) {
+      const page = permission.slice(0, -5) as PermissionKey;
+      return selected.has(page);
+    }
+    if (permission === "stock-all-details" || permission === "stock-all-export") return selected.has("stock-all");
+    if (permission === "parts-add") return selected.has("parts");
+    return true;
+  });
+  if (!permissions.some((permission) => PAGE_PERMISSION_KEYS.has(permission))) {
+    return { error: "กรุณาเลือกสิทธิ์เข้าใช้งานอย่างน้อย 1 หน้า" };
+  }
   return { permissions };
 }
 
