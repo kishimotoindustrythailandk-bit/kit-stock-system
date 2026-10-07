@@ -36,3 +36,15 @@ test('English operational terms are converted only for Thai speech',()=>{
  assert.equal(speechPronunciation('รับเข้า Stock สำเร็จ'),'รับเข้า สต็อก สำเร็จ');
  assert.equal(speechPronunciation('Tag ผิด Job ไม่มีใน Due FAC1 และเป็น NG'),'แท็ก ผิด จ๊อบ ไม่มีใน ดิว แฟค1 และเป็น เอ็นจี');
 });
+
+test('Part numbers are spoken one character at a time while quantities stay whole',()=>{
+ assert.equal(speechPronunciation('Part DK02A671G04 จำนวน 150 ชิ้น'),'Part ดี เค ศูนย์ สอง เอ หก เจ็ด หนึ่ง จี ศูนย์ สี่ จำนวน 150 ชิ้น');
+ assert.equal(speechPronunciation('Part BK00N214G20-F'),'Part บี เค ศูนย์ ศูนย์ เอ็น สอง หนึ่ง สี่ จี สอง ศูนย์ ขีด เอฟ');
+});
+
+test('ISO and display dates are spoken day-month-year and rounds use natural time',()=>{
+ assert.equal(speechPronunciation('วันที่ 2026-10-07 รอบ 09:00'),'วันที่ 7 ตุลาคม 2026 รอบ 9 นาฬิกา');
+ assert.equal(speechPronunciation('Due 07/10/2026 09:30'),'ดิว วันที่ 7 ตุลาคม 2026 9 นาฬิกา 30 นาที');
+ assert.equal(speechPronunciation('2026-10-07T09:00:00Z'),'วันที่ 7 ตุลาคม 2026 เวลา 9 นาฬิกา');
+ assert.equal(speechPronunciation('วันที่ 2026-13-40'),'วันที่ 2026-13-40');
+});
