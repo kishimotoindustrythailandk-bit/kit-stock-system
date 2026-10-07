@@ -150,7 +150,7 @@ test("labels full and remainder boxes on every printed Tag", async () => {
   assert.match(appSource, /const tagsPerPage = 8/);
 });
 
-test("searches created Tags and reprints the original Tag ID without creating Stock", async () => {
+test("searches created Tags and locks original printing after split labels are issued", async () => {
   const appSource = await source("../app/delivery-control-app.tsx");
   assert.match(appSource, /Tag ที่สร้างแล้ว/);
   assert.match(appSource, /ค้นหา Tag ID, Part No\., Job, ลูกค้า หรือวันที่ออก Tag/);
@@ -159,9 +159,11 @@ test("searches created Tags and reprints the original Tag ID without creating St
     assert.match(appSource, new RegExp(`item\\.${field}`));
   }
   assert.match(appSource, /printStockTags\(item\)/);
-  assert.match(appSource, /การพิมพ์ซ้ำใช้ Tag ID เดิมและไม่เพิ่มยอด Stock/);
+  assert.match(appSource, /ล็อกการพิมพ์ Tag ต้นฉบับและให้พิมพ์ซ้ำจาก Tag แบ่งเท่านั้น/);
   const originalPrint = sourceSection(appSource, "  async function printStockTags(", "  const dates = useMemo");
-  assert.doesNotMatch(originalPrint, /setSplitTagRequest|tag\.status/);
+  assert.match(originalPrint, /authorize_tag_print/);
+  assert.match(originalPrint, /setSplitTagRequest/);
+  assert.doesNotMatch(originalPrint, /tag\.status/);
   assert.match(originalPrint, /STOCK RECEIVING TAG/);
   assert.match(originalPrint, /fmt\(tag\.qty\)/);
   assert.match(appSource, /setSplitTagRequest\(\{pickId:arrangementPreview\.pick\.id\}\)/);

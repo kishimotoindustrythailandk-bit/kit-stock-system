@@ -140,6 +140,21 @@ export async function GET() {
       // ต้องคืน Tag ครบทั้งหมด เพราะหน้า Stock และไฟล์ Excel ใช้ชุดข้อมูลนี้คำนวณยอดรวม
       // การจำกัด 250 แถวทำให้ยอดคงเหลือ ยอดจอง และยอดในพื้นที่ Stock ต่ำกว่าฐานข้อมูลจริง
       .orderBy(desc(stockTags.id));
+    const splitIssueResult = await DB.prepare(`
+      SELECT entity_id AS splitLabelId, created_at AS splitIssuedAt,
+        json_extract(detail_json, '$.snapshot.tag.tagId') AS sourceTagId
+      FROM audit_logs
+      WHERE action_key = 'issue_split_labels'
+      ORDER BY id DESC
+    `).all<{ splitLabelId: string; splitIssuedAt: string; sourceTagId: string }>();
+    const latestSplitIssueByTag = new Map<string, { splitLabelId: string; splitIssuedAt: string }>();
+    for (const issue of splitIssueResult.results || []) {
+      const sourceTagId = String(issue.sourceTagId || "").toUpperCase();
+      if (sourceTagId && !latestSplitIssueByTag.has(sourceTagId)) {
+        latestSplitIssueByTag.set(sourceTagId, { splitLabelId: issue.splitLabelId, splitIssuedAt: issue.splitIssuedAt });
+      }
+    }
+    const taggedWithSplitStatus = tags.map((tag) => ({ ...tag, ...(latestSplitIssueByTag.get(tag.tagId.toUpperCase()) || {}) }));
     const allocations = await db.select({
       id: stockAllocations.id,
       customerTagId: stockAllocations.customerTagId,
@@ -256,7 +271,7 @@ export async function GET() {
       FROM days ORDER BY movementDate
     `).all();
     return Response.json({
-      parts, tags, allocations, picks: picks.results, dispatchLinks: dispatchLinks.results,
+      parts, tags: taggedWithSplitStatus, allocations, picks: picks.results, dispatchLinks: dispatchLinks.results,
       jobClosures: jobClosures.results, manualReceipts: manualReceipts.results,
       countAdjustments: countAdjustments.results, countAdjustmentLines: countAdjustmentLines.results,
       movementDays: movementDays.results,
@@ -276,6 +291,47 @@ export async function POST(request: Request) {
     const db = getDb();
     const { DB: runtimeDb } = getRuntimeEnv();
     if (!runtimeDb) throw new Error("ไม่พบการเชื่อมต่อ D1");
+
+    if (action === "authorize_tag_print") {
+      if (!hasPermission(user, "tags")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์พิมพ์ Tag" }, { status: 403 });
+      const tagIds = Array.isArray(body.tagIds)
+        ? [...new Set(body.tagIds.map((value) => clean(value, 120).toUpperCase()).filter((value) => /^KITSTK-[A-Z0-9-]+$/.test(value)))]
+        : [];
+      if (!tagIds.length || tagIds.length > 200) return Response.json({ error: "รายการ Tag สำหรับพิมพ์ไม่ถูกต้อง" }, { status: 400 });
+      const existingTagIds = new Set<string>();
+      const splitIssueRows: Array<{ splitLabelId: string; splitIssuedAt: string; sourceTagId: string }> = [];
+      // Keep each statement below D1's binding limit when a Job contains many boxes.
+      for (let offset = 0; offset < tagIds.length; offset += 80) {
+        const chunk = tagIds.slice(offset, offset + 80);
+        const placeholders = chunk.map((_, index) => `?${index + 1}`).join(",");
+        const existing = await runtimeDb.prepare(`SELECT tag_id AS tagId FROM stock_tags WHERE tag_id IN (${placeholders})`).bind(...chunk).all<{ tagId: string }>();
+        for (const tag of existing.results || []) existingTagIds.add(String(tag.tagId).toUpperCase());
+        const splitIssues = await runtimeDb.prepare(`
+          SELECT entity_id AS splitLabelId, created_at AS splitIssuedAt,
+            json_extract(detail_json, '$.snapshot.tag.tagId') AS sourceTagId
+          FROM audit_logs
+          WHERE action_key = 'issue_split_labels'
+            AND json_extract(detail_json, '$.snapshot.tag.tagId') IN (${placeholders})
+          ORDER BY id DESC
+        `).bind(...chunk).all<{ splitLabelId: string; splitIssuedAt: string; sourceTagId: string }>();
+        splitIssueRows.push(...(splitIssues.results || []));
+      }
+      if (existingTagIds.size !== tagIds.length) return Response.json({ error: "พบ Tag บางรายการไม่อยู่ในระบบ กรุณารีเฟรชแล้วลองใหม่" }, { status: 404 });
+      const issueByTag = new Map<string, { splitLabelId: string; splitIssuedAt: string; sourceTagId: string }>();
+      for (const issue of splitIssueRows) {
+        const sourceTagId = String(issue.sourceTagId || "").toUpperCase();
+        if (sourceTagId && !issueByTag.has(sourceTagId)) issueByTag.set(sourceTagId, issue);
+      }
+      const blockedTagId = tagIds.find((tagId) => issueByTag.has(tagId));
+      if (blockedTagId) {
+        const issue = issueByTag.get(blockedTagId)!;
+        return Response.json({
+          error: `Tag ${blockedTagId} ถูกแบ่งแล้ว จึงพิมพ์ Tag ต้นฉบับไม่ได้ กรุณาพิมพ์ Tag แบ่งแทน`,
+          blockedTagId, splitLabelId: issue.splitLabelId, splitIssuedAt: issue.splitIssuedAt,
+        }, { status: 409 });
+      }
+      return Response.json({ allowed: true, tagIds });
+    }
 
     if (action === "save_part") {
       if (!hasPermission(user, "parts") || !hasPermission(user, "parts-edit")) return Response.json({ error: "บัญชีนี้ดูทะเบียน Part ได้ แต่ไม่มีสิทธิ์เพิ่มหรือแก้ไขข้อมูล" }, { status: 403 });

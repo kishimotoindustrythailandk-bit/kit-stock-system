@@ -110,7 +110,7 @@ type PartBundlePreview = {
   unmatchedActual: string[];
   duplicateImages: string[];
 };
-type StockTag = { id: number; tagId: string; materialCode: string; partName: string; customer: string; qty: number; remainingQty: number; reservedQty: number; receivedQty?: number; ngQty?: number; jobNo: string; productionDate: string; status: string; printedByName: string; receivedByName: string; receivedAt?: string; createdAt: string; payload?: string; boxNo?: number; boxCount?: number; deliveryQty?: number; location?: string };
+type StockTag = { id: number; tagId: string; materialCode: string; partName: string; customer: string; qty: number; remainingQty: number; reservedQty: number; receivedQty?: number; ngQty?: number; jobNo: string; productionDate: string; status: string; printedByName: string; receivedByName: string; receivedAt?: string; createdAt: string; payload?: string; boxNo?: number; boxCount?: number; deliveryQty?: number; location?: string; splitLabelId?: string; splitIssuedAt?: string };
 type StockReceivePreview = { action: "receive_preview"; rawPayload: string; tag: StockTag; master: { materialCode: string; partName: string; customer: string; hasImage: boolean } };
 type StockAllocation = { id: number; customerTagId: string; stockTagCode: string; materialCode: string; qty: number; status: string; reservedByName: string; reservedAt: string; dispatchedByName: string; dispatchedAt?: string };
 type StockPick = {
@@ -2540,9 +2540,29 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   async function printStockTags(input: StockTag | StockTag[]) {
     const tags = Array.isArray(input) ? input : [input];
     if (!tags.length) return;
-    const qrcode = await import("qrcode");
     const popup = window.open("", "_blank", "width=900,height=950");
     if (!popup) return setNotice({ type: "error", text: "เบราว์เซอร์บล็อกหน้าพิมพ์ กรุณาอนุญาต Pop-up" });
+    popup.document.write('<!doctype html><html lang="th"><head><meta charset="utf-8"><title>กำลังตรวจสอบ Tag</title></head><body style="font-family:Arial,sans-serif;padding:32px"><b>กำลังตรวจสอบสิทธิ์พิมพ์ Tag…</b></body></html>');
+    popup.document.close();
+    try {
+      const authorization = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "authorize_tag_print", tagIds: tags.map((tag) => tag.tagId) }),
+      });
+      const result = await authorization.json() as { allowed?: boolean; error?: string; blockedTagId?: string; splitLabelId?: string };
+      if (!authorization.ok || !result.allowed) {
+        popup.close();
+        if (result.splitLabelId) setSplitTagRequest({ labelId: result.splitLabelId });
+        setNotice({ type: "error", text: result.error || "Tag นี้ไม่สามารถพิมพ์ได้" });
+        await loadStock();
+        return;
+      }
+    } catch (caught) {
+      popup.close();
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบสิทธิ์พิมพ์ Tag ไม่สำเร็จ" });
+      return;
+    }
+    const qrcode = await import("qrcode");
     let imageUrl = "";
     try {
       const imageResponse = await fetch(`/api/part-images?materialCode=${encodeURIComponent(tags[0].materialCode)}`, { cache: "no-store" });
@@ -2583,6 +2603,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     const pages = Array.from({ length: Math.ceil(tagMarkups.length / tagsPerPage) }, (_, pageIndex) =>
       `<div class="sheet">${tagMarkups.slice(pageIndex * tagsPerPage, pageIndex * tagsPerPage + tagsPerPage).join("")}</div>`,
     ).join("");
+    popup.document.open();
     popup.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${html(tags[0].jobNo)} · ${fmt(tags.length)} Tag</title><style>
       @page{size:A4 portrait;margin:4mm}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;font-family:Arial,"Noto Sans Thai",sans-serif;color:#071a35;font-weight:500}
       .sheet{height:289mm;display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(4,1fr);gap:2mm;break-after:page}.sheet:last-child{break-after:auto}.tag{min-width:0;min-height:0;border:1.6px solid #003f98;border-radius:2mm;overflow:hidden;display:grid;grid-template-rows:auto auto 1fr auto;break-inside:avoid;background:#fff;box-shadow:inset 0 0 0 .25mm #c5d7ed}
@@ -3312,7 +3333,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
 
       {canPrintTags && <Card className="tag-list-card" title="Tag ที่สร้างแล้ว" action={<button className="button secondary" onClick={() => void loadStock()}>↻ รีเฟรช</button>}>
         <div className="tag-list-toolbar"><input value={tagSearch} onChange={(event) => { setTagSearch(event.target.value); setTagPage(1); }} placeholder="⌕ ค้นหา Tag ID, Part No., Job, ลูกค้า หรือวันที่ออก Tag" />{tagSearch && <button type="button" className="button secondary" onClick={() => { setTagSearch(""); setTagPage(1); }}>ล้าง</button>}</div>
-        <p className="tag-list-help">พบ {fmt(visibleTags.length)} จาก {fmt(stock.tags.length)} Tag · Tag ที่สร้างแล้วแก้ไขไม่ได้ การพิมพ์ซ้ำใช้ Tag ID เดิมและไม่เพิ่มยอด Stock</p>
+        <p className="tag-list-help">พบ {fmt(visibleTags.length)} จาก {fmt(stock.tags.length)} Tag · Tag ที่สร้างแล้วแก้ไขไม่ได้ · หากออก Tag แบ่งแล้ว ระบบจะล็อกการพิมพ์ Tag ต้นฉบับและให้พิมพ์ซ้ำจาก Tag แบ่งเท่านั้น</p>
         {stockLoading ? <div className="inline-loading">กำลังโหลด Tag…</div> : visibleTags.length ? <div className="tag-modern-table">
           <div className="tag-modern-head"><span>Tag ID</span><span>Part / รูปชิ้นงาน</span><span>จำนวน/กล่อง</span><span>Job</span><span>วันที่ออก Tag / รับเข้า Stock</span><span>สถานะ</span><span>จัดการ</span></div>
           <div className="tag-modern-body">{paginatedTags.map((item) => {
@@ -3321,13 +3342,13 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
             const statusText = item.status === "ng" ? "NG / ปิดรับเข้า" : item.status === "depleted" ? "ขายออกหมด" : item.status === "printed" ? "รอรับเข้า" : item.reservedQty ? "รอขายออก" : "รับเข้าแล้ว";
             const statusClass = item.status === "ng" || item.status === "depleted" ? "over" : item.status === "printed" || item.reservedQty ? "partial" : "completed";
             return <div className="tag-modern-row" key={item.id}>
-              <span className="tag-id-cell"><b>{item.tagId}</b><small>{boxMatch ? `กล่อง ${Number(boxMatch[1])} / ${Number(boxMatch[2])}` : "Tag งาน"}</small></span>
+              <span className="tag-id-cell"><b>{item.tagId}</b><small>{item.splitLabelId ? "ถูกแบ่งแล้ว · ล็อก Tag ต้นฉบับ" : boxMatch ? `กล่อง ${Number(boxMatch[1])} / ${Number(boxMatch[2])}` : "Tag งาน"}</small></span>
               <span className="tag-product-cell"><PartImage materialCode={item.materialCode} compact version={image?.updatedAt} /><span><b>{item.materialCode}</b><small>{item.partName}</small><small>{item.customer || "ไม่ระบุลูกค้า"}</small></span></span>
               <span><b>{fmt(item.qty)} ชิ้น</b></span>
               <span><b>{item.jobNo}</b></span>
               <span><b>ออก Tag: {formatDateOnly(item.createdAt)}</b><small>{item.receivedAt ? `รับเข้า Stock: ${formatDateTime(item.receivedAt)}` : "วันที่ผลิต: รอรับเข้า Stock"}</small></span>
               <span><em className={`status ${statusClass}`}>{statusText}</em></span>
-              <span className="tag-row-actions"><button className="tiny-button" onClick={() => void printStockTags(item)}>▤ พิมพ์</button>{user.role === "admin" && item.status === "printed" && <button type="button" className="tiny-button danger-outline" disabled={Boolean(deletingStockTagId)} onClick={() => void deleteStockTag(item)}>{deletingStockTagId === item.tagId ? "กำลังลบ…" : "♲ ลบ"}</button>}</span>
+              <span className="tag-row-actions">{item.splitLabelId ? <button className="tiny-button" type="button" onClick={() => setSplitTagRequest({ labelId: item.splitLabelId })}>▤ ดู Tag แบ่ง</button> : <button className="tiny-button" onClick={() => void printStockTags(item)}>▤ พิมพ์</button>}{user.role === "admin" && item.status === "printed" && <button type="button" className="tiny-button danger-outline" disabled={Boolean(deletingStockTagId)} onClick={() => void deleteStockTag(item)}>{deletingStockTagId === item.tagId ? "กำลังลบ…" : "♲ ลบ"}</button>}</span>
             </div>;
           })}</div>
           <footer>
