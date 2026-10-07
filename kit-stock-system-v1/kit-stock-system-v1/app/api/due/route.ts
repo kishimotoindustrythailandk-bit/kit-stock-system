@@ -36,7 +36,30 @@ function parseCustomerTag(raw: string) {
   return parsed;
 }
 
-async function resolveCustomerDue(tag: ReturnType<typeof parseCustomerTag>) {
+type DispatchScope = { deliveryDate: string; deliveryTime: string; fact: string };
+
+function dispatchScopeFromPayload(payload: Record<string, unknown>): DispatchScope | null {
+  const deliveryDate = String(payload.deliveryDate ?? "").trim().slice(0, 10);
+  const deliveryTime = String(payload.deliveryTime ?? "").trim().slice(0, 5);
+  const fact = String(payload.fact ?? "").trim().toUpperCase().slice(0, 40);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) return null;
+  if (deliveryTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(deliveryTime)) return null;
+  return { deliveryDate, deliveryTime, fact };
+}
+
+function inDispatchScope(row: { deliveryDate: string; deliveryTime: string; fact: string }, scope?: DispatchScope | null) {
+  return !scope || (
+    row.deliveryDate === scope.deliveryDate
+    && (!scope.deliveryTime || row.deliveryTime === scope.deliveryTime)
+    && (!scope.fact || row.fact === scope.fact)
+  );
+}
+
+function dispatchScopeText(scope: DispatchScope) {
+  return `${scope.deliveryDate} / รอบ ${scope.deliveryTime || "ทั้งหมด"} / ${scope.fact || "ทุก FAC"}`;
+}
+
+async function resolveCustomerDue(tag: ReturnType<typeof parseCustomerTag>, scope?: DispatchScope | null) {
   const db = getDb();
   const exact = await db.select().from(deliveryDueLines).where(and(
     eq(deliveryDueLines.doNo, tag.doNo),
@@ -46,15 +69,17 @@ async function resolveCustomerDue(tag: ReturnType<typeof parseCustomerTag>) {
     eq(deliveryDueLines.line, tag.line),
     eq(deliveryDueLines.shop, tag.shop),
   )).limit(20);
-  if (exact.length === 1) return { matches: exact, matchMode: "exact" };
+  const scopedExact = exact.filter((row) => inDispatchScope(row, scope));
+  if (scopedExact.length === 1) return { matches: scopedExact, matchMode: "exact" };
 
   // ไฟล์ Due และ QR ลูกค้าบางรุ่นเขียน DO / Line / Shop ต่างรูปแบบกัน
   // แต่ Part + Seq + Delivery Date เป็นกุญแจงานเดียวกัน จึงใช้เป็นตัวสำรอง
-  let candidates = exact.length ? exact : await db.select().from(deliveryDueLines).where(and(
+  const fallback = exact.length ? exact : await db.select().from(deliveryDueLines).where(and(
     eq(deliveryDueLines.materialCode, tag.materialCode),
     eq(deliveryDueLines.seq, tag.seq),
     eq(deliveryDueLines.deliveryDate, tag.deliveryDate),
   )).limit(20);
+  let candidates = fallback.filter((row) => inDispatchScope(row, scope));
   if (candidates.length === 1) return { matches: candidates, matchMode: "part_seq_date" };
 
   // รองรับข้อมูลเก่าที่ถูกนำเข้าวัน/เดือนสลับกัน เช่น QR = 2026-09-02
@@ -70,8 +95,9 @@ async function resolveCustomerDue(tag: ReturnType<typeof parseCustomerTag>) {
         eq(deliveryDueLines.seq, tag.seq),
         eq(deliveryDueLines.deliveryDate, swappedDate),
       )).limit(20);
-      if (swapped.length === 1) return { matches: swapped, matchMode: "swapped_date" };
-      if (swapped.length) candidates = swapped;
+      const scopedSwapped = swapped.filter((row) => inDispatchScope(row, scope));
+      if (scopedSwapped.length === 1) return { matches: scopedSwapped, matchMode: "swapped_date" };
+      if (scopedSwapped.length) candidates = scopedSwapped;
     }
   }
 
@@ -112,7 +138,8 @@ async function resolveCustomerDue(tag: ReturnType<typeof parseCustomerTag>) {
       const [stagedRow] = stagedRows;
       const selectedId = Number(stagedRow?.id);
       const selected = await db.select().from(deliveryDueLines).where(eq(deliveryDueLines.id, selectedId)).limit(1);
-      return { matches: selected, matchMode: "unique_staged_part_seq" };
+      const scopedSelected = selected.filter((row) => inDispatchScope(row, scope));
+      if (scopedSelected.length) return { matches: scopedSelected, matchMode: "unique_staged_part_seq" };
     }
   }
 
@@ -123,7 +150,7 @@ async function resolveCustomerDue(tag: ReturnType<typeof parseCustomerTag>) {
 // แต่ "อ่านอย่างเดียว" ไม่แตะ Stock หรือ Due — ให้ผู้ตรวจเทียบรูป master กับของจริง
 // ในกล่องก่อน แล้วจึงไปกดขายออกจริง คืน verdict เสมอ (ไม่ throw) เพื่อบอกสาเหตุ
 // ที่หน้าจอได้ครบทุกกรณี
-async function verifyCustomerTag(rawPayload: string) {
+async function verifyCustomerTag(rawPayload: string, scope?: DispatchScope | null) {
   const { DB } = getRuntimeEnv();
   if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
   const db = getDb();
@@ -148,9 +175,10 @@ async function verifyCustomerTag(rawPayload: string) {
   }
 
 
-  const { matches, matchMode } = await resolveCustomerDue(tag);
+  const { matches, matchMode } = await resolveCustomerDue(tag, scope);
   if (!matches.length) {
-    return Response.json({ action: "verify", verdict: "no_due", tag, master, message: `ไม่พบ Due ที่ตรงกับ ${tag.materialCode} / Seq ${tag.seq} / ${tag.deliveryDate}` });
+    const selected = scope ? ` ในขอบเขต ${dispatchScopeText(scope)}` : "";
+    return Response.json({ action: "verify", verdict: "no_due", tag, master, message: `ไม่พบ Due ที่ตรงกับ ${tag.materialCode} / Seq ${tag.seq} / ${tag.deliveryDate}${selected}` });
   }
   if (matches.length > 1) {
     return Response.json({ action: "verify", verdict: "ambiguous", tag, master, message: "พบ Due ซ้ำมากกว่า 1 รายการ กรุณาให้ผู้ดูแลตรวจไฟล์นำเข้า" });
@@ -279,8 +307,11 @@ export async function POST(request: Request) {
     const user = await getCurrentUser();
     if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
     if (!hasPermission(user, "dispatch")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ตรวจและขายออก" }, { status: 403 });
-    const payload = await request.json() as { rawPayload?: string; mode?: string };
+    const payload = await request.json() as Record<string, unknown> & { rawPayload?: string; mode?: string };
     if (payload.mode === "verify") return await verifyCustomerTag(payload.rawPayload ?? "");
+    const dispatchScope = dispatchScopeFromPayload(payload);
+    if (!dispatchScope) return Response.json({ error: "กรุณาเลือกวันที่ส่งงานก่อนตรวจและขายออก" }, { status: 400 });
+    if (payload.mode === "dispatch_verify") return await verifyCustomerTag(payload.rawPayload ?? "", dispatchScope);
     if (!hasPermission(user, "dispatch-edit")) return Response.json({ error: "บัญชีนี้ดูข้อมูลได้ แต่ไม่มีสิทธิ์ขายออกและตัดยอด" }, { status: 403 });
     const tag = parseCustomerTag(payload.rawPayload ?? "");
     const db = getDb();
@@ -289,9 +320,9 @@ export async function POST(request: Request) {
     if (duplicate.length) return Response.json({ error: "Tag นี้ถูกผู้ตรวจสแกนส่งออกและตัดยอดแล้ว" }, { status: 409 });
 
 
-    const { matches, matchMode } = await resolveCustomerDue(tag);
+    const { matches, matchMode } = await resolveCustomerDue(tag, dispatchScope);
     if (!matches.length) {
-      return Response.json({ error: `ไม่พบ Due ที่ตรงกับ ${tag.materialCode} / Seq ${tag.seq} / ${tag.deliveryDate}` }, { status: 404 });
+      return Response.json({ error: `ไม่พบ Due ที่ตรงกับ ${tag.materialCode} / Seq ${tag.seq} / ${tag.deliveryDate} ในขอบเขต ${dispatchScopeText(dispatchScope)}` }, { status: 404 });
     }
     if (matches.length > 1) {
       return Response.json({ error: "พบ Due ซ้ำมากกว่า 1 รายการ กรุณาให้ผู้ดูแลตรวจไฟล์นำเข้า" }, { status: 409 });
@@ -419,7 +450,7 @@ export async function POST(request: Request) {
       module: "dispatch", moduleLabel: "ตรวจและขายออก", action: "dispatch_stock", actionLabel: "ตรวจและขายออก",
       entityType: "customer_tag", entityId: tag.tagId,
       summary: `ขายออก Tag ${tag.tagId} · ${tag.materialCode} จำนวน ${tag.qty} ${tag.unit}`,
-      details: { customerTagId: tag.tagId, materialCode: tag.materialCode, qty: tag.qty, unit: tag.unit, dueLineId: due.id, deliveryDate: due.deliveryDate, stockTags: consumed.map((item) => ({ tagId: item.stockTagCode, qty: item.qty })) },
+      details: { customerTagId: tag.tagId, materialCode: tag.materialCode, qty: tag.qty, unit: tag.unit, dueLineId: due.id, deliveryDate: due.deliveryDate, selectedScope: dispatchScope, stockTags: consumed.map((item) => ({ tagId: item.stockTagCode, qty: item.qty })) },
     }, request);
     return Response.json({
       action: "dispatched", tag,

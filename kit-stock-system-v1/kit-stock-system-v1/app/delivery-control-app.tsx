@@ -767,6 +767,9 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   const [rawTag, setRawTag] = useState("");
   const [tagPreview, setTagPreview] = useState<TagPreview | null>(null);
   const [dispatchConfirmation, setDispatchConfirmation] = useState<VerifyResult | null>(null);
+  const [dispatchDueDate, setDispatchDueDate] = useState("");
+  const [dispatchDueTime, setDispatchDueTime] = useState("");
+  const [dispatchDueFact, setDispatchDueFact] = useState("");
   const [checkingTag, setCheckingTag] = useState(false);
   const [verifyRaw, setVerifyRaw] = useState("");
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
@@ -1693,6 +1696,10 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       dispatchScanTimerRef.current = null;
     }
     const scannedValue = typeof value === "string" ? value.trim() : rawTag.trim();
+    if (!effectiveDispatchDueDate) {
+      setNotice({ type: "error", text: "กรุณาเลือกวันที่ส่งงานก่อนสแกน Tag ลูกค้า" });
+      return;
+    }
     if (!scannedValue || dispatchScanRequestRef.current) return;
     dispatchScanRequestRef.current = true;
     setCheckingTag(true);
@@ -1705,7 +1712,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       const response = await fetch("/api/due", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ rawPayload: scannedValue, mode: "verify" }),
+        body: JSON.stringify({ rawPayload: scannedValue, mode: "dispatch_verify", deliveryDate: effectiveDispatchDueDate, deliveryTime: dispatchDueTime, fact: dispatchDueFact }),
         signal: controller.signal,
       });
       const contentType = response.headers.get("content-type") || "";
@@ -1735,10 +1742,10 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     const rawPayload = dispatchConfirmation?.tag?.rawPayload;
     if (!rawPayload || checkingTag) return;
     setDispatchConfirmation(null);
-    await processTag(rawPayload);
+    await processTag(rawPayload, { deliveryDate: effectiveDispatchDueDate, deliveryTime: dispatchDueTime, fact: dispatchDueFact });
   }
 
-  async function processTag(value?: string | FormEvent) {
+  async function processTag(value?: string | FormEvent, scope?: { deliveryDate: string; deliveryTime: string; fact: string }) {
     const event = typeof value === "object" ? value : undefined;
     event?.preventDefault();
     const scannedValue = typeof value === "string" ? value.trim() : rawTag.trim();
@@ -1750,7 +1757,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       const response = await fetch("/api/due", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ rawPayload: scannedValue }),
+        body: JSON.stringify({ rawPayload: scannedValue, deliveryDate: scope?.deliveryDate || effectiveDispatchDueDate, deliveryTime: scope?.deliveryTime ?? dispatchDueTime, fact: scope?.fact ?? dispatchDueFact }),
       });
       const result = await response.json() as TagPreview & { action?: string; error?: string };
       if (!response.ok) throw new Error(result.error || "บันทึก Tag ไม่สำเร็จ");
@@ -2692,6 +2699,27 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     && (!arrangeDueTime || due.deliveryTime === arrangeDueTime)
     && (!arrangeDueFact || due.fact === arrangeDueFact)
   ), [arrangeableDues, effectiveArrangeDueDate, arrangeDueTime, arrangeDueFact]);
+  const dispatchableDues = useMemo(() => payload.dues.filter((due) =>
+    Number(due.reqQty) > Number(due.scannedQty)
+    && Number(due.arrangedQty || 0) > 0
+  ), [payload.dues]);
+  const dispatchDueDates = useMemo(() => [...new Set(payload.dues.map((due) => due.deliveryDate))].sort(), [payload.dues]);
+  const effectiveDispatchDueDate = dispatchDueDate
+    ? dispatchDueDate
+    : dispatchDueDates.includes(bangkokDateTimeKey().slice(0, 10))
+      ? bangkokDateTimeKey().slice(0, 10)
+      : dispatchDueDates[0] || "";
+  const dispatchDueTimes = useMemo(() => [...new Set(payload.dues
+    .filter((due) => due.deliveryDate === effectiveDispatchDueDate)
+    .map((due) => due.deliveryTime))].filter(Boolean).sort(), [payload.dues, effectiveDispatchDueDate]);
+  const dispatchDueFacts = useMemo(() => [...new Set(payload.dues
+    .filter((due) => due.deliveryDate === effectiveDispatchDueDate && (!dispatchDueTime || due.deliveryTime === dispatchDueTime))
+    .map((due) => due.fact))].filter(Boolean).sort(), [payload.dues, effectiveDispatchDueDate, dispatchDueTime]);
+  const dispatchScopeDues = useMemo(() => dispatchableDues.filter((due) =>
+    due.deliveryDate === effectiveDispatchDueDate
+    && (!dispatchDueTime || due.deliveryTime === dispatchDueTime)
+    && (!dispatchDueFact || due.fact === dispatchDueFact)
+  ), [dispatchableDues, effectiveDispatchDueDate, dispatchDueTime, dispatchDueFact]);
 
 
 
@@ -3778,11 +3806,20 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         <article className="dispatch-stat orange"><span>◷</span><div><small>รอตัด</small><b>{fmt(dispatchPendingQty)}</b><em>ชิ้น · {fmt(dispatchPending.length)} รายการ</em></div></article>
         <article className="dispatch-stat red"><span>!</span><div><small>สแกนไม่พบ</small><b>{fmt(unmatchedCount)}</b><em>รายการล่าสุด</em></div></article>
       </div>
+      <section className="dispatch-scope-panel">
+        <header><span>▤</span><div><h3>เลือก Due ที่จะตรวจและขายออก</h3><p>เลือกวันที่ รอบส่งงาน และ FAC ก่อนสแกน Tag ลูกค้า ระบบจะตรวจเฉพาะงานในขอบเขตนี้</p></div></header>
+        <div className="dispatch-scope-grid">
+          <label><span>วันที่ส่งงาน *</span><select aria-label="วันที่ส่งงานสำหรับตรวจและขายออก" disabled={checkingTag} value={effectiveDispatchDueDate} onChange={(event) => { setDispatchDueDate(event.target.value); setDispatchDueTime(""); setDispatchDueFact(""); setRawTag(""); setDispatchConfirmation(null); setTagPreview(null); }}><option value="">เลือกวันที่ส่งงาน</option>{dispatchDueDates.map((date) => <option key={date} value={date}>{formatDate(date)} · {fmt(dispatchableDues.filter((due) => due.deliveryDate === date).length)} รายการรอขาย</option>)}</select></label>
+          <label><span>รอบส่งงาน</span><select aria-label="รอบส่งงานสำหรับตรวจและขายออก" disabled={checkingTag || !effectiveDispatchDueDate} value={dispatchDueTime} onChange={(event) => { setDispatchDueDate(effectiveDispatchDueDate); setDispatchDueTime(event.target.value); setDispatchDueFact(""); setRawTag(""); setDispatchConfirmation(null); setTagPreview(null); }}><option value="">ทุกรอบ</option>{dispatchDueTimes.map((time) => <option key={time} value={time}>{time}</option>)}</select></label>
+          <label><span>FAC</span><select aria-label="FAC สำหรับตรวจและขายออก" disabled={checkingTag || !effectiveDispatchDueDate} value={dispatchDueFact} onChange={(event) => { setDispatchDueDate(effectiveDispatchDueDate); setDispatchDueFact(event.target.value); setRawTag(""); setDispatchConfirmation(null); setTagPreview(null); }}><option value="">ทุก FAC</option>{dispatchDueFacts.map((fact) => <option key={fact} value={fact}>{fact}</option>)}</select></label>
+          <div className="dispatch-scope-summary"><small>ขอบเขตที่เลือก</small><b>{effectiveDispatchDueDate ? `${formatDate(effectiveDispatchDueDate)} · รอบ ${dispatchDueTime || "ทั้งหมด"} · ${dispatchDueFact || "ทุก FAC"}` : "ยังไม่มีงานจัดรอขาย"}</b><span>{fmt(dispatchScopeDues.length)} รายการ · รอขาย {fmt(dispatchScopeDues.reduce((sum, due) => sum + Number(due.arrangedQty || 0), 0))} ชิ้น</span></div>
+        </div>
+      </section>
       {canEditPage("dispatch") && <div className="scan-layout">
         <section className="scanner-card">
-          <div className="scanner-title"><div><h3>ผู้ตรวจ: ยิง Tag ลูกค้าเพื่อขายออก</h3><p>ระบบจับคู่กับ KIT Tag ที่จัดไว้ แล้วลด Stock และ Due พร้อมกัน</p></div><button className="camera-button" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>▣ เปิดกล้อง</button></div>
-          <button type="button" className="scanner-visual" aria-label="เปิดกล้องสแกน QR Tag เพื่อขายออก" disabled={checkingTag} onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}><span className="scan-frame"><span className="qr-symbol">▦</span><b>{checkingTag ? "กำลังบันทึก…" : "พร้อมรับ QR Tag"}</b><small>วาง QR ให้อยู่ในกรอบ ยิง Tag หรือแตะเพื่อเปิดกล้อง</small><i /></span></button>
-          <form className="manual-scan" onSubmit={previewDispatchTag}><label><span>Tag ลูกค้า / ข้อมูลจาก QR</span><input ref={tagInput} value={rawTag} onChange={(e) => updateDispatchScannerValue(e.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void previewDispatchTag(value); } }} placeholder="ยิง Tag ลูกค้าได้ทันที" autoComplete="off" /></label><button className="button primary" disabled={!rawTag.trim() || checkingTag}>{checkingTag ? "กำลังตรวจสอบ…" : "ตรวจสอบก่อนขายออก"}</button></form>
+          <div className="scanner-title"><div><h3>ผู้ตรวจ: ยิง Tag ลูกค้าเพื่อขายออก</h3><p>ระบบจับคู่กับ KIT Tag ที่จัดไว้ตามวันที่ รอบ และ FAC ที่เลือก แล้วลด Stock และ Due พร้อมกัน</p></div><button className="camera-button" disabled={!effectiveDispatchDueDate || checkingTag} onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>▣ เปิดกล้อง</button></div>
+          <button type="button" className="scanner-visual" aria-label="เปิดกล้องสแกน QR Tag เพื่อขายออก" disabled={!effectiveDispatchDueDate || checkingTag} onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}><span className="scan-frame"><span className="qr-symbol">▦</span><b>{checkingTag ? "กำลังบันทึก…" : effectiveDispatchDueDate ? "พร้อมรับ QR Tag" : "กรุณาเลือกวันที่ส่งงาน"}</b><small>วาง QR ให้อยู่ในกรอบ ยิง Tag หรือแตะเพื่อเปิดกล้อง</small><i /></span></button>
+          <form className="manual-scan" onSubmit={previewDispatchTag}><label><span>Tag ลูกค้า / ข้อมูลจาก QR</span><input ref={tagInput} value={rawTag} disabled={!effectiveDispatchDueDate} onChange={(e) => updateDispatchScannerValue(e.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void previewDispatchTag(value); } }} placeholder={effectiveDispatchDueDate ? "ยิง Tag ลูกค้าได้ทันที" : "เลือกวันที่ส่งงานก่อน"} autoComplete="off" /></label><button className="button primary" disabled={!effectiveDispatchDueDate || !rawTag.trim() || checkingTag}>{checkingTag ? "กำลังตรวจสอบ…" : "ตรวจสอบก่อนขายออก"}</button></form>
         </section>
         <section className="tag-result" ref={tagResultRef}>
           <header><div><p>Customer Tag / Due</p><h3>{tagPreview?.due.materialCode || "รอการสแกน"}</h3></div><span className={`status ${tagPreview ? "completed" : "pending"}`}>{tagPreview ? "ขายออกสำเร็จ" : "ยังไม่มี Tag"}</span></header>
