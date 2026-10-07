@@ -14,8 +14,45 @@ export function stopThaiVoice() {
   if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
 }
 
+const THAI_MONTHS = [
+  "", "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
+  "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม",
+];
+const SPOKEN_CHARACTERS: Record<string, string> = {
+  A: "เอ", B: "บี", C: "ซี", D: "ดี", E: "อี", F: "เอฟ", G: "จี", H: "เอช", I: "ไอ",
+  J: "เจ", K: "เค", L: "แอล", M: "เอ็ม", N: "เอ็น", O: "โอ", P: "พี", Q: "คิว", R: "อาร์",
+  S: "เอส", T: "ที", U: "ยู", V: "วี", W: "ดับเบิลยู", X: "เอ็กซ์", Y: "วาย", Z: "แซด",
+  "0": "ศูนย์", "1": "หนึ่ง", "2": "สอง", "3": "สาม", "4": "สี่",
+  "5": "ห้า", "6": "หก", "7": "เจ็ด", "8": "แปด", "9": "เก้า", "-": "ขีด",
+};
+
+function spokenDate(yearText: string, monthText: string, dayText: string) {
+  const year = Number(yearText), month = Number(monthText), day = Number(dayText);
+  const daysInMonth = month >= 1 && month <= 12 ? new Date(Date.UTC(year, month, 0)).getUTCDate() : 0;
+  if (year < 1900 || year > 2999 || day < 1 || day > daysInMonth) return "";
+  return `วันที่ ${day} ${THAI_MONTHS[month]} ${year}`;
+}
+
+function spokenTime(hourText: string, minuteText: string) {
+  const hour = Number(hourText), minute = Number(minuteText);
+  if (hour > 23 || minute > 59) return "";
+  return minute === 0 ? `${hour} นาฬิกา` : `${hour} นาฬิกา ${minute} นาที`;
+}
+
+function spellOperationalCode(code: string) {
+  return [...code.toUpperCase()].map(character => SPOKEN_CHARACTERS[character] ?? character).join(" ");
+}
+
 export function speechPronunciation(message: string) {
   return message
+    .replace(/(?:วันที่\s*)?(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?\b/g, (original, year, month, day, hour, minute) => {
+      const date = spokenDate(year, month, day), time = spokenTime(hour, minute);
+      return date && time ? `${date} เวลา ${time}` : original;
+    })
+    .replace(/(?:วันที่\s*)?(\d{4})-(\d{2})-(\d{2})\b/g, (original, year, month, day) => spokenDate(year, month, day) || original)
+    .replace(/(?:วันที่\s*)?(\d{1,2})\/(\d{1,2})\/(\d{4})\b/g, (original, day, month, year) => spokenDate(year, month, day) || original)
+    .replace(/\b(\d{1,2}):(\d{2})\b/g, (original, hour, minute) => spokenTime(hour, minute) || original)
+    .replace(/\b(?=[A-Z0-9-]{5,}\b)(?=[A-Z0-9-]*[A-Z])(?=[A-Z0-9-]*\d)[A-Z0-9]+(?:-[A-Z0-9]+)*\b/gi, spellOperationalCode)
     .replace(/Stock/gi, "สต็อก")
     .replace(/Tag/gi, "แท็ก")
     .replace(/FAC/gi, "แฟค")
