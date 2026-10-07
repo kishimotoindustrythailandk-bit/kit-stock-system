@@ -250,8 +250,8 @@ export async function POST(request: Request) {
   try {
     const user = await getCurrentUser();
     if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
-    if (user.role !== "admin" || !hasPermission(user, "forecast")) {
-      return Response.json({ error: "เฉพาะ Admin ที่มีสิทธิ์ Forecast เท่านั้นที่นำเข้าไฟล์ได้" }, { status: 403 });
+    if (!hasPermission(user, "forecast") || !hasPermission(user, "forecast-edit")) {
+      return Response.json({ error: "บัญชีนี้มีสิทธิ์ดู Forecast เท่านั้น" }, { status: 403 });
     }
     const { DB } = getRuntimeEnv();
     if (!DB) return Response.json({ error: "ไม่พบการเชื่อมต่อ D1" }, { status: 500 });

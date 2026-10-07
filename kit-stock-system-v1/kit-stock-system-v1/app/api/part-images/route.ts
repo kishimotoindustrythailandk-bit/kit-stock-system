@@ -29,10 +29,11 @@ function keyPrefixForSlot(slot: Slot) {
   return slot === "actual" ? "part-actual-images" : "part-master-images";
 }
 
-async function requireUser(adminOnly = false) {
+async function requireUser(mode: "read" | "edit" | "delete" = "read") {
   const user = await getCurrentUser();
   if (!user) return { error: Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 }) };
-  if (adminOnly && !hasPermission(user, "parts") && !hasPermission(user, "settings")) return { error: Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์จัดการรูปชิ้นงาน" }, { status: 403 }) };
+  if (mode === "edit" && (!hasPermission(user, "parts") || !hasPermission(user, "parts-edit"))) return { error: Response.json({ error: "บัญชีนี้ดูทะเบียน Part ได้ แต่ไม่มีสิทธิ์เพิ่มหรือแก้ไขรูป" }, { status: 403 }) };
+  if (mode === "delete" && user.role !== "admin") return { error: Response.json({ error: "เฉพาะ Admin เท่านั้นที่ลบรูปชิ้นงานได้" }, { status: 403 }) };
   return { user };
 }
 
@@ -168,7 +169,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   let newObjectKey = "";
   try {
-    const auth = await requireUser(true);
+    const auth = await requireUser("edit");
     if (auth.error) return auth.error;
     const { DB, BUCKET } = getRuntimeEnv();
     if (!DB || !BUCKET) return Response.json({ error: "ไม่พบการเชื่อมต่อ D1 หรือ R2" }, { status: 500 });
@@ -211,7 +212,7 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
-    const auth = await requireUser(true);
+    const auth = await requireUser("delete");
     if (auth.error) return auth.error;
     const { DB, BUCKET } = getRuntimeEnv();
     if (!DB || !BUCKET) return Response.json({ error: "ไม่พบการเชื่อมต่อ D1 หรือ R2" }, { status: 500 });

@@ -281,6 +281,7 @@ export async function POST(request: Request) {
     if (!hasPermission(user, "dispatch")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ตรวจและขายออก" }, { status: 403 });
     const payload = await request.json() as { rawPayload?: string; mode?: string };
     if (payload.mode === "verify") return await verifyCustomerTag(payload.rawPayload ?? "");
+    if (!hasPermission(user, "dispatch-edit")) return Response.json({ error: "บัญชีนี้ดูข้อมูลได้ แต่ไม่มีสิทธิ์ขายออกและตัดยอด" }, { status: 403 });
     const tag = parseCustomerTag(payload.rawPayload ?? "");
     const db = getDb();
     const duplicate = await db.select({ id: deliveryTagScans.id }).from(deliveryTagScans)

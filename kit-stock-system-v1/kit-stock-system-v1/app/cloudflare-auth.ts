@@ -14,7 +14,11 @@ export type CloudUser = {
 };
 
 export const SESSION_COOKIE = "kit_session";
-export const PERMISSION_KEYS = ["dashboard", "stock", "stock-all", "stock-all-details", "stock-all-export", "manual-stock", "stock-count", "forecast", "parts", "parts-add", "tags", "plan", "overdue", "arrange", "replacement", "dispatch", "exports", "reports", "history", "settings", "users"] as const;
+export const EDITABLE_PAGE_KEYS = ["stock", "manual-stock", "stock-count", "forecast", "parts", "tags", "plan", "arrange", "replacement", "dispatch"] as const;
+export type EditablePageKey = (typeof EDITABLE_PAGE_KEYS)[number];
+export const EDIT_PERMISSION_KEYS = EDITABLE_PAGE_KEYS.map((page) => `${page}-edit` as const);
+export const PERMISSION_MODEL_KEY = "permission-model-v2" as const;
+export const PERMISSION_KEYS = ["dashboard", "stock", "stock-all", "stock-all-details", "stock-all-export", "manual-stock", "stock-count", "forecast", "parts", "parts-add", "tags", "plan", "overdue", "arrange", "replacement", "dispatch", "exports", "reports", "history", "settings", "users", "stock-edit", "manual-stock-edit", "stock-count-edit", "forecast-edit", "parts-edit", "tags-edit", "plan-edit", "arrange-edit", "replacement-edit", "dispatch-edit", "permission-model-v2"] as const;
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
 
 const ROLE_DEFAULTS: Record<string, PermissionKey[]> = {
@@ -25,7 +29,7 @@ const ROLE_DEFAULTS: Record<string, PermissionKey[]> = {
 };
 
 export function defaultPermissions(role: string): PermissionKey[] {
-  return [...(ROLE_DEFAULTS[role] || [])];
+  return normalizePermissions(ROLE_DEFAULTS[role] || [], role);
 }
 
 export function normalizePermissions(value: unknown, role: string): PermissionKey[] {
@@ -33,11 +37,26 @@ export function normalizePermissions(value: unknown, role: string): PermissionKe
   const source = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
   const allowed = new Set<string>(PERMISSION_KEYS);
   const normalized = source.map((item) => String(item).trim()).filter((item): item is PermissionKey => allowed.has(item));
+  // บัญชีเดิมเคยใช้สิทธิ์เข้า "หน้า" เป็นสิทธิ์ทำรายการด้วย จึงรักษาพฤติกรรมเดิม
+  // จนกว่า Admin จะเปิดและบันทึกหน้าสิทธิ์แบบใหม่ (มี marker นี้)
+  if (!normalized.includes("permission-model-v2")) {
+    for (const page of ["stock", "manual-stock", "stock-count", "forecast", "parts", "tags", "plan", "arrange", "replacement", "dispatch"] as const) {
+      const previouslyWritable = page === "parts"
+        ? normalized.includes("parts-add")
+        : page !== "forecast" && normalized.includes(page);
+      if (previouslyWritable) normalized.push(`${page}-edit` as PermissionKey);
+    }
+    normalized.push("permission-model-v2");
+  }
   return [...new Set(normalized)];
 }
 
 export function hasPermission(user: Pick<CloudUser, "role" | "permissions">, permission: PermissionKey) {
   return user.role === "admin" || user.permissions.includes(permission);
+}
+
+export function hasEditPermission(user: Pick<CloudUser, "role" | "permissions">, page: EditablePageKey) {
+  return user.role === "admin" || user.permissions.includes(`${page}-edit` as PermissionKey);
 }
 
 type CloudUserRow = Omit<CloudUser, "permissions" | "mustChangePin"> & {

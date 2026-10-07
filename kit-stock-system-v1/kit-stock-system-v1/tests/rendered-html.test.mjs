@@ -182,16 +182,16 @@ test("places Job close and NG management on Print Tag with Stock authorization",
   assert.match(tagsSection, /current\.totalQty \+= Number\(tag\.qty/);
   assert.match(tagsSection, /current\.tagCount \+= 1/);
   assert.match(tagsSection, /ปิดรับเข้า Job \/ จัดการงาน NG/);
-  assert.match(tagsSection, /\{canPrintTags && <Card className="tag-create-card"/);
+  assert.match(tagsSection, /\{canEditPage\("tags"\) && <Card className="tag-create-card"/);
   assert.match(tagsSection, /\{canPrintTags && <Card className="tag-list-card"/);
-  assert.match(tagsSection, /allowedPages\.has\("stock"\) && <Card className="stock-job-close-card"/);
+  assert.match(tagsSection, /canEditPage\("stock"\) && <Card className="stock-job-close-card"/);
   assert.match(pageAccess, /const canPrintTags = user\.role === "admin" \|\| user\.permissions\?\.includes\("tags"\)/);
   assert.match(pageAccess, /new Set<PageKey>/);
   assert.doesNotMatch(pageAccess, /\.add\("tags"\)|\.add\("replacement"\)/);
   assert.doesNotMatch(stockSection, /ปิดรับเข้า Job \/ จัดการงาน NG/);
   assert.doesNotMatch(stockSection, /const jobGroupMap = new Map/);
 
-  assert.match(closeJobAction, /if \(!hasPermission\(user, "stock"\)\)/);
+  assert.match(closeJobAction, /!hasPermission\(user, "stock"\) \|\| !hasPermission\(user, "stock-edit"\)/);
   assert.doesNotMatch(closeJobAction, /requireStockRole|user\.role/);
   assertBefore(closeJobAction, /hasPermission\(user, "stock"\)/, /UPDATE stock_tags SET status = 'ng'/);
   assert.match(reopenJobAction, /user\.role !== "admin" \|\| !hasPermission\(user, "stock"\)/);
@@ -347,7 +347,9 @@ test("supports canonical user roles with explicit page permissions", async () =>
   assert.match(appSource, /const ROLE_LABELS/);
   assert.match(userEditor, /setUserForm\(\(current\) => \(\{ \.\.\.current, role \}\)\)/);
   assert.doesNotMatch(appSource, /ROLE_PERMISSIONS/);
-  assert.match(userEditor, /รวมถึงหน้าหลัก/);
+  assert.match(userEditor, /ดูข้อมูล/);
+  assert.match(userEditor, /เพิ่ม \/ แก้ไข/);
+  assert.match(userEditor, /ดูข้อมูลเท่านั้น/);
   assert.doesNotMatch(userEditor, /disabled=\{item\.key === "dashboard"\}/);
   assert.match(userEditor, /disabled=\{userSaving \|\| !userForm\.permissions\.length\}/);
   assert.match(usersApi, /กรุณาเลือกสิทธิ์เข้าใช้งานอย่างน้อย 1 หน้า/);
@@ -364,6 +366,10 @@ test("supports canonical user roles with explicit page permissions", async () =>
   assert.match(authSource, /dispatcher: \["dashboard", "stock", "manual-stock", "stock-count", "parts", "tags", "arrange", "replacement", "history"\]/);
   assert.match(authSource, /inspector: \["dashboard", "replacement", "dispatch", "history"\]/);
   assert.match(authSource, /ROLE_DEFAULTS\[role\] \|\| \[\]/);
+  assert.match(authSource, /permission-model-v2/);
+  assert.match(authSource, /stock-edit/);
+  assert.match(usersApi, /permission\.endsWith\("-edit"\)/);
+  assert.match(usersApi, /return selected\.has\(page\)/);
   assert.doesNotMatch(authSource, /normalized\.unshift\("dashboard"\)/);
 
   assert.match(schema, /appUserPermissions/);
@@ -395,9 +401,9 @@ test("uses page permissions for normal workflows while preserving Admin-only ope
   assert.match(stockGet, /const canReadPartsOnly = hasPermission\(user, "parts"\) \|\| hasPermission\(user, "replacement"\)/);
   assertBefore(stockGet, /if \(!canReadFullStock\)/, /const db = getDb\(\)/);
   assert.match(stockGet, /parts, tags: \[\], allocations: \[\], picks: \[\], dispatchLinks: \[\], jobClosures: \[\]/);
-  assert.match(closeJobAction, /if \(!hasPermission\(user, "stock"\)\)/);
+  assert.match(closeJobAction, /!hasPermission\(user, "stock"\) \|\| !hasPermission\(user, "stock-edit"\)/);
   assert.doesNotMatch(closeJobAction, /user\.role/);
-  assert.match(manualReceiveAction, /if \(!hasPermission\(user, "manual-stock"\)\)/);
+  assert.match(manualReceiveAction, /!hasPermission\(user, "manual-stock"\) \|\| !hasPermission\(user, "manual-stock-edit"\)/);
   assert.match(manualReceiveAction, /duplicate_job_confirmation_required/);
   assert.match(manualReceiveAction, /confirmDuplicateJob/);
   assert.match(manualReceiveAction, /stock_manual_receive_transactions/);
@@ -443,10 +449,12 @@ test("separates arranging and dispatching with guards before mutations", async (
   assert.match(authSource, /"dispatch"/);
 
   assertBefore(stageAction, /hasPermission\(user, "arrange"\)/, /INSERT INTO stock_picks/);
-  assert.match(stageAction, /stageWarning\("บัญชีนี้ไม่มีสิทธิ์จัดงาน", 403\)/);
+  assert.match(stageAction, /hasPermission\(user, "arrange-edit"\)/);
+  assert.match(stageAction, /stageWarning\("บัญชีนี้ดูรายการจัดงานได้ แต่ไม่มีสิทธิ์จัดงาน", 403\)/);
   assert.match(duePost, /if \(!user\).*status: 401/);
   assertBefore(duePost, /hasPermission\(user, "dispatch"\)/, /const payload = await request\.json/);
   assertBefore(duePost, /hasPermission\(user, "dispatch"\)/, /DB\.batch/);
+  assertBefore(duePost, /hasPermission\(user, "dispatch-edit"\)/, /DB\.batch/);
   assert.doesNotMatch(duePost, /user\.role !== "admin" && user\.role !== "inspector"/);
   assert.doesNotMatch(duePost, /inspector/);
   assert.match(duePost, /status: 403/);

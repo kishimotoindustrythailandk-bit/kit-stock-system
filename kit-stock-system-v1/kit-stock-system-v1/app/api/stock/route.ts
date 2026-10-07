@@ -278,8 +278,7 @@ export async function POST(request: Request) {
     if (!runtimeDb) throw new Error("ไม่พบการเชื่อมต่อ D1");
 
     if (action === "save_part") {
-      const admin = user.role === "admin";
-      if (!admin && (!hasPermission(user, "parts") || !hasPermission(user, "parts-add"))) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์เพิ่มข้อมูลทะเบียน Part" }, { status: 403 });
+      if (!hasPermission(user, "parts") || !hasPermission(user, "parts-edit")) return Response.json({ error: "บัญชีนี้ดูทะเบียน Part ได้ แต่ไม่มีสิทธิ์เพิ่มหรือแก้ไขข้อมูล" }, { status: 403 });
       const materialCode = clean(body.materialCode, 100).toUpperCase();
       const partName = clean(body.partName, 240);
       const customer = clean(body.customer, 160);
@@ -290,15 +289,13 @@ export async function POST(request: Request) {
       }
       const previousPart = await runtimeDb.prepare(`SELECT material_code AS materialCode, part_name AS partName, customer, location, standard_qty AS standardQty FROM stock_parts WHERE material_code = ?1 LIMIT 1`)
         .bind(materialCode).first();
-      if (!admin && previousPart) return Response.json({ error: "Part นี้มีอยู่แล้ว สิทธิ์นี้เพิ่ม Part ใหม่ได้เท่านั้น กรุณาติดต่อ Admin เพื่อแก้ไข" }, { status: 409 });
-      const saved = await runtimeDb.prepare(`
+      await runtimeDb.prepare(`
         INSERT INTO stock_parts (material_code, part_name, customer, location, standard_qty, active, created_at, updated_at)
         VALUES (?1, ?2, ?3, ?4, ?5, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        ON CONFLICT(material_code) ${admin ? `DO UPDATE SET
+        ON CONFLICT(material_code) DO UPDATE SET
           part_name = excluded.part_name, customer = excluded.customer, location = excluded.location,
-          standard_qty = excluded.standard_qty, active = 1, updated_at = CURRENT_TIMESTAMP` : "DO NOTHING"}
+          standard_qty = excluded.standard_qty, active = 1, updated_at = CURRENT_TIMESTAMP
       `).bind(materialCode, partName, customer, location, standardQty).run();
-      if (!admin && !saved.meta.changes) return Response.json({ error: "Part นี้ถูกเพิ่มแล้ว กรุณารีเฟรชข้อมูล" }, { status: 409 });
       await writeAuditLog(user, {
         module: "parts", moduleLabel: "ทะเบียน Part", action: previousPart ? "update_part" : "create_part",
         actionLabel: previousPart ? "แก้ไข Part" : "เพิ่ม Part", entityType: "stock_part", entityId: materialCode,
@@ -309,7 +306,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "import_parts") {
-      if (user.role !== "admin" || !hasPermission(user, "tags")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์นำเข้า Part" }, { status: 403 });
+      if (!hasPermission(user, "parts") || !hasPermission(user, "parts-edit")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์นำเข้า Part" }, { status: 403 });
       if (body.importContract !== "preserve_existing_v1") {
         return Response.json({ error: "หน้าจอนำเข้า Part เป็นเวอร์ชันเก่า กรุณารีเฟรชหน้าแล้วลองใหม่" }, { status: 409 });
       }
@@ -365,7 +362,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "sync_due_parts") {
-      if (user.role !== "admin" || !hasPermission(user, "tags")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์นำ Part จาก Due เข้าทะเบียน" }, { status: 403 });
+      if (!hasPermission(user, "parts") || !hasPermission(user, "parts-edit")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์นำ Part จาก Due เข้าทะเบียน" }, { status: 403 });
       const { DB } = getRuntimeEnv();
       if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
       const result = await DB.prepare(`
@@ -491,7 +488,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "create_tag") {
-      if (!hasPermission(user, "tags")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์สร้างและพิมพ์ Tag" }, { status: 403 });
+      if (!hasPermission(user, "tags") || !hasPermission(user, "tags-edit")) return Response.json({ error: "บัญชีนี้ดู Tag ได้ แต่ไม่มีสิทธิ์สร้าง Tag" }, { status: 403 });
       const materialCode = clean(body.materialCode, 100).toUpperCase();
       const jobNo = clean(body.jobNo, 120).toUpperCase();
       const issueDate = new Date(Date.now() + (7 * 60 * 60 * 1000)).toISOString().slice(0, 10);
@@ -589,7 +586,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "close_job") {
-      if (!hasPermission(user, "stock")) {
+      if (!hasPermission(user, "stock") || !hasPermission(user, "stock-edit")) {
         return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ปิดรับเข้า Job" }, { status: 403 });
       }
       const jobNo = clean(body.jobNo, 160);
@@ -655,7 +652,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "receive") {
-      if (!hasPermission(user, "stock")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์รับงานเข้า Stock" }, { status: 403 });
+      if (!hasPermission(user, "stock") || !hasPermission(user, "stock-edit")) return Response.json({ error: "บัญชีนี้ดู Stock ได้ แต่ไม่มีสิทธิ์รับงานเข้า" }, { status: 403 });
       const tagId = parseInternalTag(clean(body.rawPayload, 1000));
       const [tag] = await db.select().from(stockTags).where(eq(stockTags.tagId, tagId)).limit(1);
       if (!tag) return Response.json({ error: "ไม่พบ Tag Stock นี้ในระบบ" }, { status: 404 });
@@ -714,7 +711,7 @@ export async function POST(request: Request) {
 
 
     if (action === "manual_receive") {
-      if (!hasPermission(user, "manual-stock")) {
+      if (!hasPermission(user, "manual-stock") || !hasPermission(user, "manual-stock-edit")) {
         return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์คีย์รับงานเข้า Stock" }, { status: 403 });
       }
       const materialCode = clean(body.materialCode, 100).toUpperCase();
@@ -857,7 +854,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "preview_tag_count" || action === "confirm_tag_count") {
-      if (!hasPermission(user, "stock-count")) {
+      if (!hasPermission(user, "stock-count") || !hasPermission(user, "stock-count-edit")) {
         return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ตรวจนับและปรับยอด Stock" }, { status: 403 });
       }
       let tagId = "";
@@ -1113,7 +1110,7 @@ export async function POST(request: Request) {
         return Response.json({ error: message, warningLogged }, { status });
       };
       try {
-        if (!hasPermission(user, "arrange")) return await stageWarning("บัญชีนี้ไม่มีสิทธิ์จัดงาน", 403);
+        if (!hasPermission(user, "arrange") || !hasPermission(user, "arrange-edit")) return await stageWarning("บัญชีนี้ดูรายการจัดงานได้ แต่ไม่มีสิทธิ์จัดงาน", 403);
         const requestedDueLineId = Number(body.dueLineId || 0);
         const deliveryDate = clean(body.deliveryDate, 10);
         const deliveryTime = clean(body.deliveryTime, 5);

@@ -5,6 +5,7 @@ import {safeErrorMessage} from '../../api-error';
 import {AVAILABLE_STOCK_SQL} from '../../stock-quantities';
 import {createSplitLabels,type SplitLabelKind,type SplitTagSnapshot} from '../../split-tag-label';
 const allowed=(user:Parameters<typeof hasPermission>[0])=>['arrange','dispatch','tags','stock'].some(page=>hasPermission(user,page as Parameters<typeof hasPermission>[1]));
+const allowedToIssue=(user:Parameters<typeof hasPermission>[0])=>['arrange','dispatch','tags','stock'].some(page=>hasPermission(user,page as Parameters<typeof hasPermission>[1])&&hasPermission(user,`${page}-edit` as Parameters<typeof hasPermission>[1]));
 export async function readSplitSnapshot(DB:D1Database,pickId:number,stockTagCode:string):Promise<SplitTagSnapshot|null>{
  const row=await DB.prepare(`SELECT t.tag_id AS tagId,t.material_code AS materialCode,
   coalesce(m.part_name,'') AS partName,coalesce(m.customer,'') AS customer,coalesce(m.location,'') AS location,
@@ -45,7 +46,7 @@ export async function GET(request:Request){
 export async function POST(request:Request){
  try{
   const user=await getCurrentUser();if(!user)return Response.json({error:'กรุณาเข้าสู่ระบบ'},{status:401});
-  if(!allowed(user))return Response.json({error:'ไม่มีสิทธิ์ออก Tag แบ่งงาน'},{status:403});
+  if(!allowedToIssue(user))return Response.json({error:'บัญชีนี้ดูข้อมูลได้ แต่ไม่มีสิทธิ์ออก Tag แบ่งงาน'},{status:403});
   const body=await request.json() as {pickId?:number;stockTagCode?:string;expectedAvailableQty?:number;expectedWaitingQty?:number;kinds?:SplitLabelKind[]};
   const pickId=Number(body.pickId||0),tag=String(body.stockTagCode||'').trim().toUpperCase();
   if(!Number.isSafeInteger(pickId)||pickId<0||(!pickId&&!/^KITSTK-[A-Z0-9-]+$/.test(tag)))return Response.json({error:'รายการจัดงานหรือ Tag ไม่ถูกต้อง'},{status:400});

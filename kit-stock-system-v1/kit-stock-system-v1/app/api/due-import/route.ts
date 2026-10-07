@@ -67,7 +67,7 @@ export async function POST(request: Request) {
   try {
     const user = await getCurrentUser();
     if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
-    if (!hasPermission(user, "plan")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์นำเข้าแผน Due" }, { status: 403 });
+    if (!hasPermission(user, "plan") || !hasPermission(user, "plan-edit")) return Response.json({ error: "บัญชีนี้มีสิทธิ์ดูแผน Due เท่านั้น" }, { status: 403 });
     const payload = await request.json() as {
       importToken?: string;
       fileName?: string;
@@ -150,7 +150,7 @@ export async function DELETE(request: Request) {
   try {
     const user = await getCurrentUser();
     if (!user) return Response.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
-    if (!hasPermission(user, "plan")) return Response.json({ error: "บัญชีนี้ไม่มีสิทธิ์ลบข้อมูลนำเข้า" }, { status: 403 });
+    if (user.role !== "admin") return Response.json({ error: "เฉพาะ Admin เท่านั้นที่ลบข้อมูลนำเข้าได้" }, { status: 403 });
     const body = await request.json() as { id?: number; confirmActivity?: boolean };
     const importId = Number(body.id);
     if (!Number.isInteger(importId) || importId <= 0) return Response.json({ error: "ไม่พบชุดข้อมูลนำเข้า" }, { status: 400 });

@@ -18,7 +18,11 @@ import VoiceAlertControl from "./voice-alert-control";
 
 type PageKey = "stock-all" | "overdue" | "dashboard" | "stock" | "manual-stock" | "stock-count" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
 
-type AppPermission = PageKey | "stock-all-details" | "stock-all-export" | "parts-add";
+type EditablePageKey = "stock" | "manual-stock" | "stock-count" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "dispatch";
+type EditPermission = `${EditablePageKey}-edit`;
+type AppPermission = PageKey | EditPermission | "stock-all-details" | "stock-all-export" | "parts-add" | "permission-model-v2";
+
+const EDITABLE_PAGE_KEYS: EditablePageKey[] = ["stock", "manual-stock", "stock-count", "forecast", "parts", "tags", "plan", "arrange", "replacement", "dispatch"];
 
 const STOCK_ACCESS_LABELS: Record<string,string> = { "stock-all-details": "Stock ทั้งหมด: ดู Tag / Job / Movement", "stock-all-export": "Stock ทั้งหมด: ส่งออก Excel", "parts-add": "ทะเบียน Part: เพิ่มข้อมูล Part ใหม่" };
 
@@ -912,9 +916,10 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   const tagResultRef = useRef<HTMLElement>(null);
   const verifyInput = useRef<HTMLInputElement>(null);
   const verifyResultRef = useRef<HTMLElement>(null);
+  const canEditPage = (target: EditablePageKey) => user.role === "admin" || user.permissions.includes(`${target}-edit`);
   const canPrintTags = user.role === "admin" || user.permissions?.includes("tags");
-  const canCreateReplacement = user.role === "admin" || user.role === "qc" || user.role === "inspector";
-  const canIssueReplacement = user.role === "admin" || user.role === "delivery" || user.role === "dispatcher";
+  const canCreateReplacement = canEditPage("replacement") && (user.role === "admin" || user.role === "qc" || user.role === "inspector");
+  const canIssueReplacement = canEditPage("replacement") && (user.role === "admin" || user.role === "delivery" || user.role === "dispatcher");
   const allowedPages = useMemo(() => {
     const pages = new Set<PageKey>(NAV.filter((item) => user.role === "admin" || user.permissions.includes(item.key)).map((item) => item.key));
     return pages;
@@ -1322,7 +1327,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       const response = await fetch("/api/users", {
         method: userForm.id ? "PATCH" : "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(userForm),
+        body: JSON.stringify({ ...userForm, permissions: [...new Set([...userForm.permissions, "permission-model-v2" as const])] }),
       });
       const data = await response.json() as { error?: string };
       if (!response.ok) throw new Error(data.error || "บันทึกผู้ใช้งานไม่สำเร็จ");
@@ -3094,7 +3099,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         <article className="part-stat purple"><span>◇</span><div><small>มีรูปชิ้นงาน</small><b>{fmt(partImages.length)}</b><em>รายการ</em></div></article>
       </div>
 
-      {user.role === "admin" && <Card className="part-bundle-card" title={<span className="part-bundle-title"><i>⇧</i><span>นำเข้าทะเบียน Part จาก Excel<small>เลือก Excel อย่างเดียว หรือแนบรูป Master และรูปในกล่องหลายไฟล์พร้อมกัน</small></span></span>} action={partBundlePreview && <span className="part-bundle-ready">✓ ตรวจสอบแล้ว {fmt(partBundlePreview.rows.length)} Part</span>}>
+      {canEditPage("parts") && <Card className="part-bundle-card" title={<span className="part-bundle-title"><i>⇧</i><span>นำเข้าทะเบียน Part จาก Excel<small>เลือก Excel อย่างเดียว หรือแนบรูป Master และรูปในกล่องหลายไฟล์พร้อมกัน</small></span></span>} action={partBundlePreview && <span className="part-bundle-ready">✓ ตรวจสอบแล้ว {fmt(partBundlePreview.rows.length)} Part</span>}>
         <form className="part-bundle-form" onSubmit={previewPartBundle}>
           <label className={partBundleExcel ? "selected" : ""}>
             <span className="part-bundle-icon excel">X</span>
@@ -3141,21 +3146,21 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         </div>}
       </Card>}
 
-      {(user.role === "admin" || user.permissions.includes("parts-add")) && <Card className="part-editor-card" title={user.role !== "admin" ? "เพิ่ม Part ใหม่" : stockPartForm.materialCode ? "แก้ไข Part" : "เพิ่ม / แก้ไข Part"} action={<button className="button primary" form="part-editor-form" disabled={stockSaving}>▣ {stockSaving ? "กำลังบันทึก…" : "บันทึก Part"}</button>}>
+      {canEditPage("parts") && <Card className="part-editor-card" title={stockPartForm.materialCode ? "แก้ไข Part" : "เพิ่ม Part ใหม่"} action={<button className="button primary" form="part-editor-form" disabled={stockSaving}>▣ {stockSaving ? "กำลังบันทึก…" : "บันทึก Part"}</button>}>
         <form id="part-editor-form" className="part-editor-grid" onSubmit={saveStockPart}>
           <label><span>Part / Material No. *</span><input value={stockPartForm.materialCode} onChange={(e) => { const code=e.target.value.toUpperCase(); setStockPartForm((current) => ({ ...current, materialCode: code })); setPartImageCode(code); }} required /></label>
           <label><span>ชื่อชิ้นงาน *</span><input value={stockPartForm.partName} onChange={(e) => setStockPartForm((current) => ({ ...current, partName: e.target.value }))} required /></label>
           <label><span>ลูกค้า</span><input value={stockPartForm.customer} onChange={(e) => setStockPartForm((current) => ({ ...current, customer: e.target.value }))} /></label>
           <label><span>Location</span><input value={stockPartForm.location} onChange={(e) => setStockPartForm((current) => ({ ...current, location: e.target.value.toUpperCase() }))} placeholder="เช่น A-01 หรือ RACK-02" /></label>
           <label><span>จำนวนสูงสุดต่อกล่อง *</span><input type="number" min="1" value={stockPartForm.standardQty} onChange={(e) => setStockPartForm((current) => ({ ...current, standardQty: e.target.value }))} required /></label>
-          {user.role === "admin" && <div className="part-photo-editor">
+          <div className="part-photo-editor">
             <div className="part-current-photo">{stockPartForm.materialCode ? <PartImage materialCode={stockPartForm.materialCode} version={formImage?.updatedAt} /> : <span>▧</span>}</div>
             <label className="part-change-photo"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setPartImageFile(e.target.files?.[0] || null)} /><b>⇧ {formImage ? "เปลี่ยนรูปตัวอย่าง" : "เพิ่มรูปตัวอย่าง"}</b><small>{partImageFile?.name || "รูป Master · JPG, PNG, WebP (ไม่เกิน 5MB)"}</small></label>
-          </div>}
-          {user.role === "admin" && <div className="part-photo-editor">
+          </div>
+          <div className="part-photo-editor">
             <div className="part-current-photo">{stockPartForm.materialCode ? <PartImage materialCode={stockPartForm.materialCode} slot="actual" version={formActualImage?.updatedAt} /> : <span>▧</span>}</div>
             <label className="part-change-photo"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setPartActualImageFile(e.target.files?.[0] || null)} /><b>⇧ {formActualImage ? "เปลี่ยนรูปชิ้นงานในกล่อง" : "เพิ่มรูปชิ้นงานในกล่อง"}</b><small>{partActualImageFile?.name || "รูปชิ้นงานที่จัดวางในกล่อง · ใช้เทียบตอนขายออก"}</small></label>
-          </div>}
+          </div>
         </form>
         <div className="part-editor-foot"><span>Excel รองรับคอลัมน์: Part / Material No., Part Name, Customer, Location และ Max Qty per Box</span>{stockPartForm.materialCode && <button type="button" className="tiny-button" onClick={clearPartForm}>＋ เพิ่ม Part ใหม่</button>}</div>
       </Card>}
@@ -3171,7 +3176,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
               <span className="part-code-cell"><PartImagePair materialCode={part.materialCode} masterVersion={masterImage?.updatedAt} actualVersion={actualImage?.updatedAt} masterAvailable={Boolean(masterImage)} actualAvailable={Boolean(actualImage)} /><span><b>{part.materialCode}</b><small>ในกล่อง: {actualImage ? "มีรูป" : "ยังไม่มี"} · Master: {masterImage ? "มีรูป" : "ยังไม่มี"}</small></span></span>
               <span>{part.partName}</span><span>{part.customer || "—"}</span><span><b>{part.location || "—"}</b></span><span>{part.standardQty > 0 ? fmt(part.standardQty) + " ชิ้น" : "ยังไม่กำหนด"}</span>
               <span><em className={"part-active " + (part.active ? "on" : "off")}>{part.active ? "ใช้งาน" : "ยกเลิก"}</em></span>
-              <span className="part-row-actions">{user.role === "admin" ? <><button className="tiny-button" onClick={() => editPart(part)}>✎ แก้ไข</button>{hasTag ? <small>มีประวัติ Stock</small> : <button className="tiny-button danger-outline" disabled={Boolean(deletingPartCode)} onClick={() => void deleteStockPart(part)}>♲ {deletingPartCode === part.materialCode ? "กำลังลบ…" : "ลบ"}</button>}</> : <small>ดูข้อมูลเท่านั้น</small>}</span>
+              <span className="part-row-actions">{canEditPage("parts") ? <><button className="tiny-button" onClick={() => editPart(part)}>✎ แก้ไข</button>{user.role === "admin" && (hasTag ? <small>มีประวัติ Stock</small> : <button className="tiny-button danger-outline" disabled={Boolean(deletingPartCode)} onClick={() => void deleteStockPart(part)}>♲ {deletingPartCode === part.materialCode ? "กำลังลบ…" : "ลบ"}</button>)}</> : <small>ดูข้อมูลเท่านั้น</small>}</span>
             </div>;
           })}</div>
           <footer>
@@ -3186,7 +3191,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         </div> : <Empty title="ไม่พบ Part" text={partNeedle ? "ลองเปลี่ยนคำค้นหา" : "ยังไม่มี Part ในทะเบียน Stock"} />}
       </Card>
 
-      {user.role === "admin" && <details className="part-bulk-panel"><summary>อัปโหลดรูปหลาย Part พร้อมกัน — Master และรูปในกล่อง</summary>
+      {canEditPage("parts") && <details className="part-bulk-panel"><summary>อัปโหลดรูปหลาย Part พร้อมกัน — Master และรูปในกล่อง</summary>
         <form className="part-image-upload bulk" onSubmit={uploadPartImagesBulk}>
           <label className="part-file bulk-file"><span>รูปตัวอย่าง (Master) · ชื่อไฟล์ต้องตรงกับ Part No.</span><input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={bulkImageRunning} onChange={(e) => { setBulkMasterImageFiles([...(e.target.files || [])]); setBulkImageFailed([]); }} /><small>{bulkMasterImageFiles.length ? `เลือกแล้ว ${fmt(bulkMasterImageFiles.length)} รูป` : "เลือกได้หลายรูป"}</small></label>
           <label className="part-file bulk-file"><span>รูปชิ้นงานในกล่อง · ชื่อไฟล์ต้องตรงกับ Part No.</span><input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={bulkImageRunning} onChange={(e) => { setBulkActualImageFiles([...(e.target.files || [])]); setBulkImageFailed([]); }} /><small>{bulkActualImageFiles.length ? `เลือกแล้ว ${fmt(bulkActualImageFiles.length)} รูป` : "เลือกได้หลายรูป"}</small></label>
@@ -3260,7 +3265,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         <article className="tag-stat blue"><span>▣</span><div><small>Job ที่สร้าง Tag</small><b>{fmt(jobCount)}</b><em>Job</em></div></article>
       </div>
 
-      {canPrintTags && <Card className="tag-create-card" title="สร้างและพิมพ์ Tag ก่อนส่งเข้า Stock" action={<button className="button primary" form="tag-create-form" disabled={stockSaving || !selectedStockPart || selectedStockPart.standardQty <= 0}>▣ {stockSaving ? "กำลังสร้าง…" : "สร้าง Tag"}</button>}>
+      {canEditPage("tags") && <Card className="tag-create-card" title="สร้างและพิมพ์ Tag ก่อนส่งเข้า Stock" action={<button className="button primary" form="tag-create-form" disabled={stockSaving || !selectedStockPart || selectedStockPart.standardQty <= 0}>▣ {stockSaving ? "กำลังสร้าง…" : "สร้าง Tag"}</button>}>
         <form id="tag-create-form" className="tag-create-form" onSubmit={createStockTag}>
           <label className="tag-part-select"><span>เลือก Part *</span><input list="stock-part-codes" value={stockTagForm.materialCode} onChange={(event) => setStockTagForm((current) => ({ ...current, materialCode: event.target.value.toUpperCase(), qty: "" }))} placeholder="พิมพ์ Part No. หรือเลือกรายการ" autoComplete="off" spellCheck={false} required /></label>
           <datalist id="stock-part-codes">{activeStockParts.map((item) => <option key={item.materialCode} value={item.materialCode}>{item.partName}{item.customer ? ` · ${item.customer}` : ""}</option>)}</datalist>
@@ -3304,7 +3309,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
           </footer>
         </div> : <Empty title={tagNeedle ? "ไม่พบ Tag ที่ค้นหา" : "ยังไม่มี Tag"} text={tagNeedle ? "ลองเปลี่ยนคำค้นหา" : "เลือก Part และสร้าง Tag สำหรับนำงานเข้า Stock"} />}
       </Card>}
-      {allowedPages.has("stock") && <Card className="stock-job-close-card" title="ปิดรับเข้า Job / จัดการงาน NG">
+      {canEditPage("stock") && <Card className="stock-job-close-card" title="ปิดรับเข้า Job / จัดการงาน NG">
         <p className="stock-job-close-help">เมื่อรับงานเข้าไม่ครบตาม Tag ให้ตรวจยอดแล้วกดปิดรับเข้า ระบบจะเปลี่ยนเฉพาะ Tag ที่ยังไม่ถูกยิงเป็น NG และไม่นับรวมใน Stock</p>
         <div className="stock-job-close-search"><span>⌕</span><input value={jobCloseSearch} onChange={(event) => { setJobCloseSearch(event.target.value); setJobClosePage(1); }} placeholder="ค้นหา Job, Part No. หรือชื่อชิ้นงาน..." />{jobCloseSearch && <button type="button" onClick={() => { setJobCloseSearch(""); setJobClosePage(1); }}>×</button>}</div>
         {filteredStockJobGroups.length ? <><div className="stock-job-close-summary">{paginatedStockJobGroups.map((group) => {
@@ -3345,7 +3350,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
 
     return <div className="stock-home manual-stock-page">
       <Card className="stock-management-card manual-stock-card" title="รับเข้า Stock แบบคีย์เอง">
-        <form onSubmit={saveManualStockReceipt}>
+        {canEditPage("manual-stock") && <form onSubmit={saveManualStockReceipt}>
           <div className="manual-stock-workspace">
             <section className="manual-stock-entry">
               <header><span>1</span><div><b>คีย์รับเข้าและสร้าง KIT Tag</b><small>เลือก Part ระบุจำนวนรับเข้า และระบบจะแบ่ง Tag ตามจำนวนบรรจุต่อกล่อง</small></div></header>
@@ -3376,7 +3381,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
             </section>
           </div>
           <button className="button primary stock-management-submit manual-stock-submit" disabled={!canSubmit || stockManagementSaving}>{stockManagementSaving ? "กำลังบันทึก…" : canSubmit ? `✓ รับเข้า Stock ${fmt(totalQty)} ชิ้น และสร้าง ${fmt(tagCount)} Tag` : !selectedPart ? "กรุณาเลือก Part" : packQty <= 0 ? "Part ยังไม่มี Packing Qty" : totalQty <= 0 ? "กรุณากรอกจำนวนรับเข้า" : !manualStockForm.jobNo.trim() ? "กรุณากรอก Job" : "กรุณากรอกข้อมูลให้ครบ"}</button>
-        </form>
+        </form>}
 
         <section className="manual-receipt-history">
           <header><b>รับเข้าแบบคีย์ล่าสุด</b><small>แสดงล่าสุด {Math.min(transactions.length, 20)} รายการ</small></header>
@@ -3396,7 +3401,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     const preview = stockCountPreview;
     return <div className="stock-home">
       <Card className="stock-management-card" title="ตรวจนับและปรับยอดสิ้นเดือน">
-        <form className="stock-management-panel count" onSubmit={previewStockCount}>
+        {canEditPage("stock-count") && <form className="stock-management-panel count" onSubmit={previewStockCount}>
           <header><span>≋</span><div><b>สแกนตรวจนับทีละ KIT Stock Tag</b><small>ยอดของ Tag และยอด Stock รวมจะเพิ่มหรือลดพร้อมกัน พร้อมเก็บประวัติผู้แก้ไข</small></div></header>
           <button type="button" className="stock-camera-zone" onClick={() => { setCameraPurpose("stock-count"); setCameraOpen(true); }}><span>⌗</span><b>สแกน Tag ที่ต้องการตรวจนับ</b><small>สแกนและบันทึกให้เสร็จทีละ Tag</small></button>
           <div className="stock-management-fields">
@@ -3408,7 +3413,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
           </div>
           {preview && <div className="stock-count-safety"><b>Tag นี้นำออกไปจัดงาน/จองแล้ว {fmt(preview.reservedQty)} ชิ้น</b><span>กรอกเฉพาะยอดที่พบในพื้นที่ Stock ระบบจะนำยอดจัดงาน/จองมารวมให้อัตโนมัติ และไม่อนุญาตให้แก้ยอดจองจากหน้านี้</span></div>}
           <button className="button stock-count-preview-button" disabled={!preview || stockManagementSaving || stockCountForm.countedQty === ""}>{stockManagementSaving ? "กำลังตรวจสอบ…" : "ตรวจสอบยอดก่อนบันทึก →"}</button>
-        </form>
+        </form>}
         <div className="stock-management-history"><div><b>ประวัติปรับยอดทีละ Tag ล่าสุด</b>{stock.countAdjustments.slice(0, 10).map((item) => { const line = stock.countAdjustmentLines.find((entry) => entry.adjustmentId === item.id); return <article key={item.id}><span><b>{line?.stockTagCode || item.materialCode}</b><small>{item.adjustmentNo} · {item.reason}</small></span><em className={item.difference < 0 ? "minus" : item.difference > 0 ? "plus" : "equal"}>{item.difference > 0 ? "+" : ""}{fmt(item.difference)}</em><small>{item.adjustedByName} · {formatDateTime(item.adjustedAt)}</small></article>; })}{!stock.countAdjustments.length && <p>ยังไม่มีรายการ</p>}</div></div>
       </Card>
     </div>;
@@ -3512,13 +3517,13 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         <article className="stock-stat red"><span>!</span><div><small>Stock ผิดปกติ</small><b>{fmt(abnormalTags.length)}</b><em>รายการ</em></div><button onClick={() => { setTagSearch(""); setStockListExpanded(true); }}>ตรวจสอบ →</button></article>
       </div>
       <div className="stock-main-grid">
-        <Card className="stock-receive-card" title={<span className="stock-card-title"><i>⌗</i> รับเข้า Stock (สแกน Tag)</span>} action={<span className="stock-scanner-ready"><i /> พร้อมสแกน</span>}>
+        {canEditPage("stock") && <Card className="stock-receive-card" title={<span className="stock-card-title"><i>⌗</i> รับเข้า Stock (สแกน Tag)</span>} action={<span className="stock-scanner-ready"><i /> พร้อมสแกน</span>}>
           <button type="button" className="stock-camera-zone" onClick={() => { setCameraPurpose("stock"); setCameraOpen(true); }}><span>▥</span><b>{stockSaving ? "กำลังตรวจสอบ Tag…" : "พร้อมสแกน Tag"}</b><small>ยิง Barcode/QR Scanner หรือแตะเพื่อเปิดกล้อง</small></button>
           <div className="stock-scan-separator"><span>หรือ</span></div>
           <form className="stock-receive-form" onSubmit={receiveStockTag}><input ref={stockScanInputRef} value={stockScan} inputMode={stockManualEntry ? "text" : "none"} onFocus={() => { if (!stockManualEntry && window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) stockScanInputRef.current?.blur(); }} onChange={(e) => updateStockScannerValue(e.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void receiveStockTag(value); } }} placeholder="ใส่รหัส Tag ด้วยมือ" autoComplete="off" /><button className="button primary" disabled={!stockScan.trim() || stockSaving}>{stockSaving ? "กำลังตรวจสอบ…" : "ตรวจสอบและรับเข้า"}</button></form>
           <button type="button" className="stock-manual-toggle" onClick={() => { setStockManualEntry((current) => !current); window.setTimeout(() => stockScanInputRef.current?.focus(), 50); }}>{stockManualEntry ? "ปิดแป้นพิมพ์ / ใช้ Scanner" : "⌨ กรอก Tag ด้วยมือ"}</button>
           {lastStockReceipt ? <div className="stock-receive-success"><b>✓ รับเข้า Stock สำเร็จ</b><span>Tag: {lastStockReceipt.tagId}</span><span>Material: {lastStockReceipt.materialCode}</span><span>Job: {lastStockReceipt.jobNo}</span><strong>จำนวน: {fmt(lastStockReceipt.qty)} ชิ้น</strong></div> : <div className="stock-guide"><b>ℹ พร้อมรับ Tag ต่อเนื่อง</b><p>ระบบตรวจ Tag ซ้ำ สถานะ Job และสิทธิ์ก่อนบันทึกทุกครั้ง</p></div>}
-        </Card>
+        </Card>}
         <Card className="stock-latest-card" title="รายการ Stock ล่าสุด" action={<div className="stock-list-tools"><button type="button" className="button users-excel-button" onClick={() => void exportStockExcel()}>▦ Excel</button><input value={tagSearch} onChange={(e) => { setTagSearch(e.target.value); setStockListExpanded(Boolean(e.target.value)); }} placeholder="ค้นหา Tag / Part No. / Job..." /><button onClick={() => void loadStock()}>↻</button></div>}>
           {stockLoading ? <div className="inline-loading">กำลังโหลด Stock…</div> : recentStock.length ? <><div className="stock-latest-head"><span>Tag / QR</span><span>รายการสินค้า</span><span>Job</span><span>วันที่รับเข้า</span><span>สถานะ</span><span>คงเหลือ</span></div><div className="stock-latest-list">{recentStock.map((item) => {
             const itemAvailable = Math.max(Number(item.remainingQty) - Number(item.reservedQty), 0);
@@ -3587,7 +3592,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         <article className="plan-stat green"><span>✓</span><div><small>ครบตามแผน</small><b>{fmt(summary.completed)}</b><em>รายการ</em></div></article>
         <article className="plan-stat orange"><span>◷</span><div><small>คงเหลือ</small><b>{fmt(summary.partial + summary.pending)}</b><em>รายการ</em></div></article>
         <article className="plan-stat red"><span>!</span><div><small>เกินดิวจัดส่ง</small><b>{fmt(overdueDues.length)}</b><em>รายการทั้งหมด</em></div></article>
-        <button className="plan-import-button" onClick={() => fileInput.current?.click()}>⇧ นำเข้าแผนส่งงาน Excel</button>
+        {canEditPage("plan") && <button className="plan-import-button" onClick={() => fileInput.current?.click()}>⇧ นำเข้าแผนส่งงาน Excel</button>}
       </div>
 
       <Card className="plan-filter-card" title="ค้นหาแผนส่งงาน">
@@ -3600,7 +3605,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
           <button className="button primary" onClick={() => setPlanPage(1)}>⌕ ค้นหา</button>
           <button className="button secondary" onClick={resetPlanFilters}>↻ ล้างค่า</button>
         </div>
-        {(file || parsing) && <div className="import-preview plan-import-preview"><div><span>XL</span><p><b>{file?.name}</b><small>{parsing ? "กำลังอ่านไฟล์…" : `${fmt(previewRows.length)} รายการ · ${fmt(previewRows.reduce((sum, row) => sum + row.reqQty, 0))} ชิ้น`}</small></p></div><button className="button primary" disabled={!previewRows.length || importing} onClick={importExcel}>{importing ? "กำลังนำเข้า…" : "ยืนยันนำเข้า"}</button></div>}
+        {canEditPage("plan") && (file || parsing) && <div className="import-preview plan-import-preview"><div><span>XL</span><p><b>{file?.name}</b><small>{parsing ? "กำลังอ่านไฟล์…" : `${fmt(previewRows.length)} รายการ · ${fmt(previewRows.reduce((sum, row) => sum + row.reqQty, 0))} ชิ้น`}</small></p></div><button className="button primary" disabled={!previewRows.length || importing} onClick={importExcel}>{importing ? "กำลังนำเข้า…" : "ยืนยันนำเข้า"}</button></div>}
       </Card>
 
       <Card className="plan-list-card" title={<span className="plan-list-title">▦ รายการแผนส่งงาน <em>{fmt(filtered.length)} รายการ</em></span>} action={<span className="plan-last-import">{latestImport ? `อัปโหลดล่าสุด: ${formatDateTime(latestImport.createdAt)} โดย ${latestImport.importedByName}` : "ยังไม่มีประวัตินำเข้า"}</span>}>
@@ -3618,7 +3623,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
               <span><b>{due.doNo}</b><small>Seq {due.seq}</small></span>
               <span><b>{fmt(due.reqQty)} ชิ้น</b></span>
               <span><em className={`status ${Number(due.arrangedQty) > 0 && stateOf(due) === "pending" ? "partial" : stateOf(due)}`}>{stateLabel(due)}</em></span>
-              <span>{importRow ? <button className="plan-delete-button" title="ลบชุด Excel ที่มีรายการนี้" disabled={deletingImportId === importRow.id} onClick={() => void deleteImport(importRow)}>{deletingImportId === importRow.id ? "…" : "♲"}</button> : "—"}</span>
+              <span>{importRow && user.role === "admin" ? <button className="plan-delete-button" title="ลบชุด Excel ที่มีรายการนี้" disabled={deletingImportId === importRow.id} onClick={() => void deleteImport(importRow)}>{deletingImportId === importRow.id ? "…" : "♲"}</button> : "—"}</span>
             </div>;
           })}</div>
           <footer>
@@ -3665,7 +3670,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         </div>
 
         <div className="arrange-workspace">
-          <section className="arrange-scan-panel">
+          {canEditPage("arrange") && <section className="arrange-scan-panel">
             <header className="arrange-section-head"><span>⌗</span><div><h3>สแกน KIT Stock Tag</h3><p>เลือกวันที่ รอบ และ FAC แล้วสแกน KIT Tag ของ Part ใดก่อนก็ได้</p></div><button className="camera-button arrange-camera-button" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>▣ เปิดกล้อง</button></header>
             <div className="arrange-scan-body">
               <button type="button" className="arrange-camera-zone" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>
@@ -3689,7 +3694,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
               <button className="button primary" disabled={!effectiveArrangeDueDate || !arrangeTag.trim() || checkingTag}>{checkingTag ? "กำลังจัดงาน…" : "ตรวจสอบก่อนจัดงาน"}</button>
             </form>
             <div className="arrange-help">ⓘ ขั้นตอนนี้ย้ายยอดจาก Stock พร้อมใช้ไปจัดงานรอส่ง คงเหลือรวมไม่ลดจนกว่าจะขายออก</div>
-          </section>
+          </section>}
 
           <aside className="arrange-due-panel">
             <header><span>▤</span><div><h3>เลือก Due ที่จะจัด</h3><p>เลือกวันที่ รอบส่งงาน และ FAC ก่อนสแกน Tag</p></div></header>
@@ -3753,7 +3758,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
                 <td data-label="ขายแล้ว" className="num"><b className="sent">{fmt(item.dispatchedQty || 0)}</b></td>
                 <td data-label="รอขาย" className="num"><b className={waitingQty > 0 ? "warning" : ""}>{fmt(waitingQty)}</b></td>
                 <td data-label="ผู้จัด"><b>{item.pickedByName || "—"}</b><small>{item.pickedByCode || ""}</small></td>
-                <td data-label="สถานะ"><span className={`status ${dispatchState}`}>{waitingQty <= 0 ? "ขายออกแล้ว" : Number(item.dispatchedQty || 0) > 0 ? "ขายออกบางส่วน" : "รอขายออก"}</span>{waitingQty>0&&<button className="tiny-button" type="button" onClick={()=>setSplitTagRequest({pickId:item.id})}>▤ พิมพ์ Tag</button>}</td>
+                <td data-label="สถานะ"><span className={`status ${dispatchState}`}>{waitingQty <= 0 ? "ขายออกแล้ว" : Number(item.dispatchedQty || 0) > 0 ? "ขายออกบางส่วน" : "รอขายออก"}</span>{canEditPage("arrange")&&waitingQty>0&&<button className="tiny-button" type="button" onClick={()=>setSplitTagRequest({pickId:item.id})}>▤ พิมพ์ Tag</button>}</td>
               </tr>;
             })}
           </tbody></table></div> : <Empty title="ยังไม่มีรายการที่จัดงานแล้ว" text={arrangedSearch ? "ไม่พบรายการตามคำค้นหา" : "เมื่อยิง KIT Tag จัดงาน รายการจะแสดงที่นี่"} />}
@@ -3773,7 +3778,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         <article className="dispatch-stat orange"><span>◷</span><div><small>รอตัด</small><b>{fmt(dispatchPendingQty)}</b><em>ชิ้น · {fmt(dispatchPending.length)} รายการ</em></div></article>
         <article className="dispatch-stat red"><span>!</span><div><small>สแกนไม่พบ</small><b>{fmt(unmatchedCount)}</b><em>รายการล่าสุด</em></div></article>
       </div>
-      <div className="scan-layout">
+      {canEditPage("dispatch") && <div className="scan-layout">
         <section className="scanner-card">
           <div className="scanner-title"><div><h3>ผู้ตรวจ: ยิง Tag ลูกค้าเพื่อขายออก</h3><p>ระบบจับคู่กับ KIT Tag ที่จัดไว้ แล้วลด Stock และ Due พร้อมกัน</p></div><button className="camera-button" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>▣ เปิดกล้อง</button></div>
           <button type="button" className="scanner-visual" aria-label="เปิดกล้องสแกน QR Tag เพื่อขายออก" disabled={checkingTag} onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}><span className="scan-frame"><span className="qr-symbol">▦</span><b>{checkingTag ? "กำลังบันทึก…" : "พร้อมรับ QR Tag"}</b><small>วาง QR ให้อยู่ในกรอบ ยิง Tag หรือแตะเพื่อเปิดกล้อง</small><i /></span></button>
@@ -3789,7 +3794,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
             <div className="scan-saved">✓ ขายออกแล้ว ลด Stock และตัด Due พร้อมบันทึก Job ที่ใช้จริง</div>
           </> : <Empty title="รอผู้ตรวจยิง Tag ลูกค้า" text="สแกนแล้วระบบจะแสดงรูปชิ้นงาน ตรวจยอด และตัด Stock / Due ทันทีโดยไม่ต้องกดตรวจสอบ Tag" />}
         </section>
-      </div>
+      </div>}
       <Card title="รายการขายออกและตัดยอดล่าสุด" action={allowedPages.has("history") ? <button className="text-button" onClick={() => go("history")}>ดูประวัติทั้งหมด →</button> : undefined}>
         {payload.scans.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>วัน / เวลา</th><th>FAC</th><th>Part No.</th><th>Tag ลูกค้า</th><th className="num">จำนวนที่ตัด</th><th>ผู้ตรวจ</th></tr></thead><tbody>{payload.scans.slice(0, 8).map((scan) => <tr key={scan.id}><td data-label="วัน / เวลา">{formatDateTime(scan.createdAt)}</td><td data-label="FAC"><b>{scan.fact}</b></td><td data-label="Part No."><b>{scan.materialCode}</b></td><td data-label="Tag ลูกค้า">{scan.tagId}</td><td data-label="จำนวนที่ตัด" className="num sent"><b>{fmt(scan.qty)} {scan.unit}</b></td><td data-label="ผู้ตรวจ">{scan.scannedByName}</td></tr>)}</tbody></table></div> : <Empty text="เมื่อผู้ตรวจสแกน Tag ลูกค้า รายการจะแสดงที่นี่" />}
       </Card>
@@ -3941,7 +3946,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         {issueRows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table replacement-issue-table"><thead><tr><th>ใบแจ้งออก</th><th>ใบขอ QC</th><th>KIT Stock Tag / Job</th><th>Part / ลูกค้า</th><th className="num">จำนวน</th><th>ผู้จัดงาน</th><th>พิมพ์ใบ</th></tr></thead><tbody>
           {issueRows.map((issue) => {
             const item = replacement.requests.find((request) => request.id === issue.requestId);
-            return <tr key={issue.id}><td data-label="ใบแจ้งออก"><b>{issue.noticeNo}</b><small>{formatDateTime(issue.issuedAt)}</small></td><td data-label="ใบขอ QC">{item?.requestNo || "—"}</td><td data-label="KIT Tag / Job"><b>{issue.stockTagCode}</b><small>{issue.jobNo || "—"}</small></td><td data-label="Part / ลูกค้า"><b>{item?.materialCode || "—"}</b><small>{item?.customer || "—"}</small></td><td data-label="จำนวน" className="num"><b>{fmt(issue.qty)}</b></td><td data-label="ผู้จัดงาน"><b>{issue.issuedByName}</b><small>{issue.issuedByCode}</small></td><td data-label="พิมพ์ใบ"><button className="tiny-button print-replacement-button" onClick={() => void printReplacementIssue(issue)}>▤ พิมพ์ใบแจ้งออก</button>{issue.printedAt && <small>พิมพ์แล้ว {formatDateTime(issue.printedAt)}</small>}</td></tr>;
+            return <tr key={issue.id}><td data-label="ใบแจ้งออก"><b>{issue.noticeNo}</b><small>{formatDateTime(issue.issuedAt)}</small></td><td data-label="ใบขอ QC">{item?.requestNo || "—"}</td><td data-label="KIT Tag / Job"><b>{issue.stockTagCode}</b><small>{issue.jobNo || "—"}</small></td><td data-label="Part / ลูกค้า"><b>{item?.materialCode || "—"}</b><small>{item?.customer || "—"}</small></td><td data-label="จำนวน" className="num"><b>{fmt(issue.qty)}</b></td><td data-label="ผู้จัดงาน"><b>{issue.issuedByName}</b><small>{issue.issuedByCode}</small></td><td data-label="พิมพ์ใบ">{canEditPage("replacement") && <button className="tiny-button print-replacement-button" onClick={() => void printReplacementIssue(issue)}>▤ พิมพ์ใบแจ้งออก</button>}{issue.printedAt && <small>พิมพ์แล้ว {formatDateTime(issue.printedAt)}</small>}</td></tr>;
           })}
         </tbody></table></div> : <Empty title="ยังไม่มีประวัติการเบิก" text="ประวัติจะบันทึกเมื่อทีมจัดงานยืนยันเบิกจาก KIT Tag" />}
       </Card>
@@ -4026,7 +4031,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       </div>
 
       <div className="forecast-top-grid">
-      {user.role === "admin" && <Card className="forecast-import-card" title="▣ นำเข้า Forecast ใหม่">
+      {canEditPage("forecast") && <Card className="forecast-import-card" title="▣ นำเข้า Forecast ใหม่">
         <div className="forecast-import-layout">
           <label className={`forecast-file-picker ${forecastDragActive ? "drag-active" : ""}`}
             onDragOver={(event) => { event.preventDefault(); setForecastDragActive(true); }}
@@ -4061,7 +4066,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
             <div><small>ผู้นำเข้า</small><b>{forecast.activeImport.importedByName}</b></div>
             <div><small>นำเข้าเมื่อ</small><b>{formatDateTime(forecast.activeImport.createdAt)}</b></div>
             <span className="forecast-status covered">● ใช้งานอยู่</span>
-          </div> : <Empty title="ยังไม่มี Forecast ชุดปัจจุบัน" text={user.role === "admin" ? "เลือกไฟล์ CSV จากลูกค้าเพื่อนำเข้าข้อมูล" : "กรุณาให้ Admin นำเข้าไฟล์ Forecast"} />}
+          </div> : <Empty title="ยังไม่มี Forecast ชุดปัจจุบัน" text={canEditPage("forecast") ? "เลือกไฟล์ CSV จากลูกค้าเพื่อนำเข้าข้อมูล" : "บัญชีนี้มีสิทธิ์ดูข้อมูลเท่านั้น กรุณาให้ผู้มีสิทธิ์นำเข้า Forecast"} />}
       </Card>
       </div>
 
@@ -4410,6 +4415,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       </header>
       <div className="control-content">
         <VoiceAlertControl enabled={settings.sound} onEnabledChange={changeVoiceEnabled}/>
+        {EDITABLE_PAGE_KEYS.includes(page as EditablePageKey) && !canEditPage(page as EditablePageKey) && <div className="read-only-permission-banner"><span>◉</span><div><b>สิทธิ์ดูข้อมูลเท่านั้น</b> — บัญชีนี้ค้นหาและตรวจสอบข้อมูลได้ แต่ไม่สามารถเพิ่มหรือแก้ไขรายการในหน้านี้</div></div>}
         {notice && <div className={`toast ${notice.type} auto-dismiss`}><span>{notice.type === "success" ? "✓" : "!"}</span><p>{notice.text}</p><button onClick={() => setNotice(null)}>×</button></div>}
         {error && <div className="toast error"><span>!</span><p>{error}</p><button onClick={() => void loadDue()}>ลองใหม่</button></div>}
         {loading && page !== "overdue" ? <div className="loading-state"><span /><p>กำลังโหลดข้อมูล Due…</p></div> : pageContent[page]()}
@@ -4511,21 +4517,31 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         <label><span>{userForm.id ? "ตั้ง PIN ใหม่ (เว้นว่างหากไม่เปลี่ยน)" : "PIN 6 หลัก *"}</span><input type="password" inputMode="numeric" maxLength={6} pattern="[0-9]{6}" value={userForm.pin} onChange={(e) => setUserForm((current) => ({ ...current, pin: e.target.value.replace(/\D/g, "") }))} required={!userForm.id} placeholder="••••••" /></label>
         <label className="wide"><span>อีเมล (ไม่บังคับ)</span><input type="email" value={userForm.email} onChange={(e) => setUserForm((current) => ({ ...current, email: e.target.value }))} /></label>
       </div>
-      <section className="individual-permissions"><div className="permission-title"><div><b>สิทธิ์เข้าใช้งานรายบุคคล</b><p>Admin เลือกหน้าที่ผู้ใช้เปิดได้เองทุกหน้า รวมถึงหน้าหลัก และต้องเลือกอย่างน้อย 1 หน้า</p></div></div>
+      <section className="individual-permissions"><div className="permission-title"><div><b>สิทธิ์เข้าใช้งานรายบุคคล</b><p>เลือก “ดูข้อมูล” เพื่อเปิดหน้า และเลือก “เพิ่ม / แก้ไข” เฉพาะผู้ที่ทำรายการได้ การลบสงวนไว้สำหรับ Admin</p></div></div>
         <div className="permission-grid">{NAV.map((item) => {
           const checked = userForm.permissions.includes(item.key);
-          return <label key={item.key} className={`permission-option ${checked ? "checked" : ""}`}>
-            <input type="checkbox" checked={checked} onChange={(event) => setUserForm((current) => ({
-              ...current,
-              permissions: event.target.checked
-                ? [...new Set([...current.permissions, item.key])]
-                : current.permissions.filter((key) => key !== item.key && (item.key !== "stock-all" || !["stock-all-details", "stock-all-export"].includes(key)) && (item.key !== "parts" || key !== "parts-add")),
-            }))} />
-            <span>{item.icon}</span><div><b>{item.label}</b><small>{PERMISSION_HELP[item.key]}</small></div>
-          </label>;
+          const editable = EDITABLE_PAGE_KEYS.includes(item.key as EditablePageKey);
+          const editKey = `${item.key}-edit` as EditPermission;
+          const canEdit = editable && userForm.permissions.includes(editKey);
+          return <div key={item.key} className={`permission-option permission-option-levels ${checked ? "checked" : ""}`}>
+            <span>{item.icon}</span><div className="permission-option-copy"><b>{item.label}</b><small>{PERMISSION_HELP[item.key]}</small></div>
+            <div className="permission-levels">
+              <label><input type="checkbox" checked={checked} onChange={(event) => setUserForm((current) => ({
+                ...current,
+                permissions: event.target.checked
+                  ? [...new Set([...current.permissions, item.key])]
+                  : current.permissions.filter((key) => key !== item.key && key !== editKey && (item.key !== "stock-all" || !["stock-all-details", "stock-all-export"].includes(key)) && (item.key !== "parts" || key !== "parts-add")),
+              }))} /> ดูข้อมูล</label>
+              {editable ? <label><input type="checkbox" checked={canEdit} onChange={(event) => setUserForm((current) => ({
+                ...current,
+                permissions: event.target.checked
+                  ? [...new Set([...current.permissions, item.key, editKey])]
+                  : current.permissions.filter((key) => key !== editKey && (item.key !== "parts" || key !== "parts-add")),
+              }))} /> เพิ่ม / แก้ไข</label> : <em>ดูข้อมูลเท่านั้น</em>}
+            </div>
+          </div>;
         })}</div>
         <div className="permission-grid">{([{key:"stock-all-details",label:"Stock ทั้งหมด: ดู Tag / Job / Movement"},{key:"stock-all-export",label:"Stock ทั้งหมด: ส่งออก Excel"}] as const).map((item) => <label key={item.key} className="permission-option"><input type="checkbox" disabled={!userForm.permissions.includes("stock-all")} checked={userForm.permissions.includes(item.key)} onChange={(event) => setUserForm((current) => ({...current,permissions:event.target.checked ? [...new Set([...current.permissions,item.key])] : current.permissions.filter((key) => key !== item.key)}))}/><div><b>{item.label}</b><small>ต้องมีสิทธิ์ดูหน้า Stock ทั้งหมดด้วย</small></div></label>)}</div>
-        <div className="permission-grid"><label className="permission-option"><input type="checkbox" disabled={!userForm.permissions.includes("parts")} checked={userForm.permissions.includes("parts-add")} onChange={(event) => setUserForm((current) => ({...current,permissions:event.target.checked ? [...new Set([...current.permissions,"parts-add" as const])] : current.permissions.filter((key) => key !== "parts-add")}))}/><div><b>ทะเบียน Part: เพิ่มข้อมูล Part ใหม่</b><small>ต้องมีสิทธิ์หน้าทะเบียน Part · เพิ่มข้อมูลใหม่ได้ ส่วนแก้ไข ลบ นำเข้า Excel และรูปยังเป็นสิทธิ์ Admin</small></div></label></div>
       </section>
       <footer><button type="button" className="button secondary" onClick={() => setUserEditorOpen(false)}>ยกเลิก</button><button className="button primary" disabled={userSaving || !userForm.permissions.length}>{userSaving ? "กำลังบันทึก…" : "บันทึกผู้ใช้งานและสิทธิ์"}</button></footer>
     </form></div>}
