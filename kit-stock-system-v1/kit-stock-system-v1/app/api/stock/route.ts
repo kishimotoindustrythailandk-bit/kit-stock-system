@@ -80,8 +80,17 @@ async function previewJobQuantityAdjustment(DB: D1Database, jobNo: string, mater
       }
     }
   } else {
-    keptPendingTags.push(...pendingTags);
-    keptPendingQty = pendingQty;
+    // Tag เศษที่ยังไม่รับเข้าอาจพิมพ์ออกไปแล้ว แต่ยังไม่ผูกกับ Stock จริง
+    // จึงยกเลิกใบเดิมและนำจำนวนไปรวมกับยอดผลิตเพิ่ม เพื่อออกชุดใหม่ตาม Packing Qty
+    // ส่วน Tag เต็มและ Tag ที่รับเข้า/นำไปใช้แล้วจะคงเดิมเสมอ
+    for (const tag of pendingTags) {
+      if (Number(tag.qty) < packQty) {
+        cancelledTags.push(tag);
+      } else {
+        keptPendingTags.push(tag);
+        keptPendingQty += Number(tag.qty);
+      }
+    }
   }
   const qtyToCreate = desiredPendingQty - keptPendingQty;
   const newTagCount = qtyToCreate > 0 ? Math.ceil(qtyToCreate / packQty) : 0;

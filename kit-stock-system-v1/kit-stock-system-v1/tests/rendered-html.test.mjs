@@ -143,8 +143,11 @@ test("labels full and remainder boxes on every printed Tag", async () => {
   assert.match(appSource, /const tagPart = stock\.parts\.find/);
   assert.match(appSource, /const packQty = Number\(tagPart\?\.standardQty/);
   assert.match(appSource, /const isFullBox/);
-  assert.match(appSource, /FULL BOX \/ กล่องเต็ม/);
-  assert.match(appSource, /REMAINDER BOX \/ กล่องเศษ/);
+  assert.match(appSource, /TAG เต็ม/);
+  assert.match(appSource, /TAG เศษ/);
+  assert.match(appSource, /FULL TAG/);
+  assert.match(appSource, /REMAINDER TAG/);
+  assert.match(appSource, /\.box-type strong\{font-size:7\.2px/);
   assert.match(appSource, /\.box-type\.full/);
   assert.match(appSource, /\.box-type\.remainder/);
   assert.match(appSource, /const tagsPerPage = 8/);
