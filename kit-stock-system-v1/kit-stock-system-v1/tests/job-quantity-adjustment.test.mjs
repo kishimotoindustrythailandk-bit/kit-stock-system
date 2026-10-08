@@ -89,7 +89,7 @@ test("reducing actual output cancels only pending tail Tags and creates a replac
   } finally { sqlite.close(); }
 });
 
-test("increasing actual output keeps existing Tags and creates only the excess", async () => {
+test("increasing actual output creates only the excess when there is no pending remainder", async () => {
   const { sqlite, call } = fixture();
   try {
     const adjusted = await call({ action: "adjust_job_qty", jobNo: "JOB-A", materialCode: "PART-A", targetQty: 1050, expectedCurrentQty: 1000, reason: "ผลิตเกินแผน" });
@@ -97,6 +97,34 @@ test("increasing actual output keeps existing Tags and creates only the excess",
     assert.deepEqual(adjusted.data.preview.newTagQtys, [50]);
     assert.equal(adjusted.data.preview.cancelledTags.length, 0);
     assert.equal(sqlite.prepare("SELECT sum(qty) qty FROM stock_tags WHERE status <> 'cancelled'").get().qty, 1050);
+  } finally { sqlite.close(); }
+});
+
+test("increasing actual output cancels a pending remainder and re-packs it with the excess", async () => {
+  const { sqlite, call } = fixture();
+  try {
+    sqlite.prepare("UPDATE stock_tags SET qty=50,remaining_qty=50 WHERE id=10").run();
+    const preview = await call({ action: "preview_job_qty_adjustment", jobNo: "JOB-A", materialCode: "PART-A", targetQty: 1030 });
+    assert.equal(preview.status, 200);
+    assert.deepEqual(preview.data.preview.cancelledTags.map((tag) => tag.qty), [50]);
+    assert.deepEqual(preview.data.preview.newTagQtys, [100, 30]);
+    const adjusted = await call({ action: "adjust_job_qty", jobNo: "JOB-A", materialCode: "PART-A", targetQty: 1030, expectedCurrentQty: 950, reason: "ผลิตเพิ่ม 80 ชิ้น" });
+    assert.equal(adjusted.status, 200);
+    assert.deepEqual(adjusted.data.tags.map((tag) => tag.qty), [100, 30]);
+    assert.equal(sqlite.prepare("SELECT status FROM stock_tags WHERE id=10").get().status, "cancelled");
+    assert.equal(sqlite.prepare("SELECT sum(qty) qty FROM stock_tags WHERE status <> 'cancelled'").get().qty, 1030);
+  } finally { sqlite.close(); }
+});
+
+test("increasing actual output never changes a received remainder", async () => {
+  const { sqlite, call } = fixture();
+  try {
+    sqlite.prepare("UPDATE stock_tags SET qty=50,remaining_qty=50,status='in_stock',received_at='2026-10-08 01:00:00' WHERE id=10").run();
+    const adjusted = await call({ action: "adjust_job_qty", jobNo: "JOB-A", materialCode: "PART-A", targetQty: 1030, expectedCurrentQty: 950, reason: "ผลิตเพิ่ม 80 ชิ้น" });
+    assert.equal(adjusted.status, 200);
+    assert.deepEqual(adjusted.data.preview.newTagQtys, [80]);
+    assert.equal(adjusted.data.preview.cancelledTags.length, 0);
+    assert.equal(sqlite.prepare("SELECT status FROM stock_tags WHERE id=10").get().status, "in_stock");
   } finally { sqlite.close(); }
 });
 
@@ -130,4 +158,5 @@ test("the UI exposes preview, confirmation and printing only newly created Tags"
   assert.match(app, /พิมพ์ Tag ใหม่/);
   assert.match(app, /printStockTags\(jobQtyCreatedTags\)/);
   assert.match(app, /ห้ามใช้ Tag ใบนี้/);
+  assert.match(app, /นำ Tag เศษที่ยังไม่รับเข้ามารวมกับยอดเพิ่ม/);
 });
