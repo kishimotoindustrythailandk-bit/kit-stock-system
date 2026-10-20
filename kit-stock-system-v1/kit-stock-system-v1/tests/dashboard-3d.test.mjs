@@ -14,12 +14,12 @@ test("home dashboard keeps exactly four real-data KPI cards", async () => {
   assert.match(source, /data\.alerts\.shortagePartCount/);
 });
 
-test("3D floor exposes all seven stations and keeps Production display-only", async () => {
+test("3D floor exposes all seven stations and routes Tag work through Production", async () => {
   const source = await read("app/dashboard-operations-floor.tsx");
   const stations = [...source.matchAll(/number: (\d), label:/g)].map((match) => Number(match[1]));
   assert.deepEqual(stations, [1, 2, 3, 4, 5, 6, 7]);
-  assert.match(source, /number: 2, label: "Production", sub: "เตรียมพัฒนาในอนาคต", tone: "purple"/);
-  assert.doesNotMatch(source, /number: 2[^\n]+page:/);
+  assert.match(source, /number: 2, label: "Production \/ ออก Tag"[^\n]+page: "tags"/);
+  assert.match(source, /number: 3, label: "รับเข้า Stock"[^\n]+page: "stock"/);
   assert.match(source, /page: "stock-all"/);
 });
 

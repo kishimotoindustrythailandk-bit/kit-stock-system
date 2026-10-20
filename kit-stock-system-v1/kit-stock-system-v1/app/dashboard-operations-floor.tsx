@@ -27,8 +27,8 @@ export default function DashboardOperationsFloor({ data, canOpen, onOpen }: {
 }) {
   const stations: Station[] = [
     { number: 1, label: "Forecast", sub: "วางแผนความต้องการลูกค้า", page: "forecast", tone: "blue", value: `${fmt(data.alerts.shortagePartCount)} Part เสี่ยงขาด` },
-    { number: 2, label: "Production", sub: "เตรียมพัฒนาในอนาคต", tone: "purple" },
-    { number: 3, label: "รับเข้า Stock / Tag", sub: "รับเข้าและสร้าง Tag", page: "stock", tone: "green" },
+    { number: 2, label: "Production / ออก Tag", sub: "พิมพ์ Tag · ระบบผลิตเตรียมพัฒนา", page: "tags", tone: "purple" },
+    { number: 3, label: "รับเข้า Stock", sub: "สแกน Tag รับงานเข้า Stock", page: "stock", tone: "green" },
     { number: 4, label: "Stock", sub: "คลังสินค้าและยอดคงเหลือ", page: "stock-all", tone: "cyan", value: `${fmt(data.stock.totalQty)} ชิ้น` },
     { number: 5, label: "จัดงาน", sub: "ตาม Due / รอบ / FAC", page: "arrange", tone: "orange" },
     { number: 6, label: "ตรวจและขายออก", sub: "ตรวจสอบ Tag ก่อนตัด Stock", page: "dispatch", tone: "red" },
