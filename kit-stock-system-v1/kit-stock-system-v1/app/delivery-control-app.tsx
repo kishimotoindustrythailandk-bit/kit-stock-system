@@ -3169,6 +3169,9 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   function renderDashboard() {
     return <DashboardControlCenter
       userName={user.displayName}
+      userRole={ROLE_LABELS[user.role] || user.role}
+      signOutPath={signOutPath}
+      onSignOut={signOut}
       canOpen={(target) => allowedPages.has(target)}
       onNavigate={(target, detail) => {
         setFilterDate(detail?.date || "");

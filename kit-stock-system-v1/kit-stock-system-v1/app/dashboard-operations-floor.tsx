@@ -2,81 +2,74 @@
 
 import styles from "./dashboard-operations-floor.module.css";
 
-type TargetPage = "plan" | "tags" | "stock" | "arrange" | "dispatch" | "exports" | "forecast" | "history";
-type Tone = "good" | "warn" | "danger" | "idle";
+export type DashboardTargetPage = "plan" | "tags" | "stock" | "stock-all" | "arrange" | "dispatch" | "exports" | "forecast" | "history";
 
 type FloorData = {
-  kpis: { dueTotal: number; completed: number; pending: number; overdue: number; successRate: number };
-  stock: { availableQty: number; arrangedQty: number; replacementQty: number; anomalyCount: number };
-  process: { planQty: number; tagQty: number; receivedQty: number; arrangedQty: number; checkedQty: number; exportedQty: number };
-  forecast: Array<{ date: string; forecastQty: number; availableQty: number }>;
-  activities: Array<{ id: number; type: string; actor: string; detail: string; createdAt: string }>;
+  stock: { availableQty: number; arrangedQty: number; totalQty: number };
+  alerts: { shortagePartCount: number; dueSoonCount: number; overdueCount: number };
 };
 
 const fmt = (value: unknown) => new Intl.NumberFormat("th-TH").format(Number(value || 0));
-const thaiTime = (value: string) => new Intl.DateTimeFormat("th-TH", {
-  hour: "2-digit",
-  minute: "2-digit",
-  timeZone: "Asia/Bangkok",
-}).format(new Date(value));
 
-export default function DashboardOperationsFloor({ data, selectedDate, userName, canOpen, onOpen }: {
+type Station = {
+  number: number;
+  label: string;
+  sub: string;
+  page?: DashboardTargetPage;
+  tone: string;
+  value?: string;
+};
+
+export default function DashboardOperationsFloor({ data, canOpen, onOpen }: {
   data: FloorData;
-  selectedDate: string;
-  userName: string;
-  canOpen: (page: TargetPage) => boolean;
-  onOpen: (page: TargetPage) => void;
+  canOpen: (page: DashboardTargetPage) => boolean;
+  onOpen: (page: DashboardTargetPage) => void;
 }) {
-  const shortageDays = data.forecast.filter((row) => Number(row.availableQty) < Number(row.forecastQty)).length;
-  const stationData: Array<{ page: TargetPage; label: string; sub: string; value: number; unit: string; icon: string; tone: Tone }> = [
-    { page: "forecast", label: "FORECAST", sub: "วางแผนความต้องการ", value: shortageDays, unit: "วันเสี่ยงขาด", icon: "F", tone: shortageDays > 0 ? "warn" : "good" },
-    { page: "tags", label: "TAG CENTER", sub: "สร้างและพิมพ์ Tag", value: data.process.tagQty, unit: "ชิ้น", icon: "T", tone: data.process.tagQty < data.process.planQty ? "warn" : "good" },
-    { page: "stock", label: "STOCK", sub: "รับเข้าและพร้อมใช้", value: data.stock.availableQty, unit: "ชิ้น", icon: "S", tone: data.stock.anomalyCount > 0 ? "danger" : data.stock.availableQty > 0 ? "good" : "idle" },
-    { page: "arrange", label: "จัดงาน", sub: "เตรียมตามรอบ / FAC", value: data.process.arrangedQty, unit: "ชิ้น", icon: "A", tone: data.process.arrangedQty < data.process.receivedQty ? "warn" : "good" },
-    { page: "dispatch", label: "ตรวจและขายออก", sub: "ตรวจสอบก่อนส่ง", value: data.process.checkedQty, unit: "ชิ้น", icon: "Q", tone: data.kpis.overdue > 0 ? "danger" : data.kpis.pending > 0 ? "warn" : "good" },
-    { page: "exports", label: "ส่งออก", sub: "Delivery Complete", value: data.process.exportedQty, unit: "ชิ้น", icon: "D", tone: data.kpis.overdue > 0 ? "danger" : "good" },
+  const stations: Station[] = [
+    { number: 1, label: "Forecast", sub: "วางแผนความต้องการลูกค้า", page: "forecast", tone: "blue", value: `${fmt(data.alerts.shortagePartCount)} Part เสี่ยงขาด` },
+    { number: 2, label: "Production", sub: "เตรียมพัฒนาในอนาคต", tone: "purple" },
+    { number: 3, label: "รับเข้า Stock / Tag", sub: "รับเข้าและสร้าง Tag", page: "stock", tone: "green" },
+    { number: 4, label: "Stock", sub: "คลังสินค้าและยอดคงเหลือ", page: "stock-all", tone: "cyan", value: `${fmt(data.stock.totalQty)} ชิ้น` },
+    { number: 5, label: "จัดงาน", sub: "ตาม Due / รอบ / FAC", page: "arrange", tone: "orange" },
+    { number: 6, label: "ตรวจและขายออก", sub: "ตรวจสอบ Tag ก่อนตัด Stock", page: "dispatch", tone: "red" },
+    { number: 7, label: "Delivery", sub: "รายการส่งออก", page: "exports", tone: "violet" },
   ];
-  const online = new Set(data.activities.map((item) => item.actor).filter(Boolean)).size;
+  const alerts = [
+    { label: "Part ที่ Stock ไม่เพียงพอ", value: data.alerts.shortagePartCount, page: "forecast" as DashboardTargetPage, tone: "danger" },
+    { label: "งาน Due ภายใน 3 วัน", value: data.alerts.dueSoonCount, page: "plan" as DashboardTargetPage, tone: "warning" },
+    { label: "งานค้างส่งหรือส่งไม่ครบ", value: data.alerts.overdueCount, page: "plan" as DashboardTargetPage, tone: "info" },
+  ].filter((item) => item.value > 0).slice(0, 3);
 
-  return <section className={styles.shell} aria-label="KIT Operations Floor">
-    <header className={styles.header}>
-      <div><small>LIVE OPERATIONS · {selectedDate}</small><h3>KIT Operations Floor</h3><p>ภาพรวมการทำงานจริงตั้งแต่ Forecast ถึงส่งออก</p></div>
-      <div className={styles.live}><i /><span><b>{online || 1}</b> ผู้ปฏิบัติงานล่าสุด</span><em>LIVE</em></div>
+  return <section className={styles.shell} aria-labelledby="operations-floor-title">
+    <header className={styles.heading}>
+      <div><small>KIT 3D OPERATIONS FLOOR</small><h3 id="operations-floor-title">ภาพรวมกระบวนการทำงาน</h3><p>เลือกสถานีเพื่อเปิดหน้าการทำงานที่เกี่ยวข้อง</p></div>
+      <span><i /> ข้อมูลจริงจากระบบ</span>
     </header>
 
-    <div className={styles.desktopLayout}>
-      <div className={styles.room}>
-        <div className={styles.wallBrand}><b>KIT</b><span>DELIVERY CONTROL</span></div>
-        <div className={styles.floorGrid} />
-        {stationData.map((station, index) => <button
-          key={station.page}
-          className={`${styles.station} ${styles[`station${index + 1}`]} ${styles[station.tone]}`}
-          type="button"
-          disabled={!canOpen(station.page)}
-          onClick={() => onOpen(station.page)}
-          aria-label={`เปิด ${station.label}`}
-        >
-          <span className={styles.bot}><i>{station.icon}</i><b /><em /></span>
-          <span className={styles.desk}><i /><b /><em /></span>
-          <span className={styles.stationCard}><strong>{station.label}</strong><small>{station.sub}</small><b>{fmt(station.value)} <em>{station.unit}</em></b></span>
-        </button>)}
-        <div className={styles.conveyor}><i /><i /><i /><i /><i /></div>
-        <div className={styles.roomLegend}><span><i className={styles.goodDot}/>ปกติ</span><span><i className={styles.warnDot}/>ต้องติดตาม</span><span><i className={styles.dangerDot}/>เร่งดำเนินการ</span></div>
+    <div className={styles.viewport}>
+      <div className={styles.floor} role="img" aria-label="โรงงานสามมิติแสดงกระบวนการ Forecast ถึง Delivery จำนวน 7 สถานี">
+        {stations.map((station) => {
+          const enabled = Boolean(station.page && canOpen(station.page));
+          return <button
+            key={station.number}
+            type="button"
+            className={`${styles.hotspot} ${styles[`station${station.number}`]} ${styles[station.tone]}`}
+            disabled={!enabled}
+            onClick={() => station.page && onOpen(station.page)}
+            aria-label={station.page ? `เปิดหน้า ${station.label}` : `${station.label} เตรียมพัฒนาในอนาคต`}
+          >
+            <b>{station.number}</b>
+            <span><strong>{station.label}</strong><small>{station.sub}</small>{station.value && <em>{station.value}</em>}</span>
+          </button>;
+        })}
       </div>
-
-      <aside className={styles.feed}>
-        <header><span><i />กิจกรรมล่าสุด</span><button type="button" onClick={() => onOpen("history")} disabled={!canOpen("history")}>ดูทั้งหมด</button></header>
-        <div>{data.activities.slice(0, 7).map((item) => <article key={item.id}>
-          <i>{(item.actor || "S").slice(0, 1).toUpperCase()}</i><span><b>{item.actor || "System"}</b><small>{item.detail}</small></span><time>{thaiTime(item.createdAt)}</time>
-        </article>)}{!data.activities.length && <p>ยังไม่มีกิจกรรมล่าสุด</p>}</div>
-        <footer><span>ผู้ใช้งาน</span><b>{userName}</b></footer>
-      </aside>
     </div>
 
-    <div className={styles.mobileGrid}>
-      {stationData.map((station) => <button key={station.page} type="button" className={styles[station.tone]} disabled={!canOpen(station.page)} onClick={() => onOpen(station.page)}>
-        <i>{station.icon}</i><span><b>{station.label}</b><small>{station.sub}</small></span><strong>{fmt(station.value)}<small>{station.unit}</small></strong>
-      </button>)}
-    </div>
+    <aside className={styles.alerts} aria-label="รายการแจ้งเตือนล่าสุด">
+      <header><div><i>!</i><h4>รายการแจ้งเตือนล่าสุด</h4></div><button type="button" onClick={() => onOpen("forecast")} disabled={!canOpen("forecast")}>ดูทั้งหมด →</button></header>
+      <div>{alerts.length ? alerts.map((alert) => <button type="button" key={alert.label} onClick={() => onOpen(alert.page)} disabled={!canOpen(alert.page)}>
+        <i className={styles[alert.tone]}>!</i><span>{alert.label}</span><b>{fmt(alert.value)} รายการ</b><em>›</em>
+      </button>) : <p>✓ ไม่มีรายการแจ้งเตือน</p>}</div>
+    </aside>
   </section>;
 }

@@ -1,6 +1,7 @@
 import { getCurrentUser, hasPermission } from "../../cloudflare-auth";
 import { safeErrorMessage } from "../../api-error";
 import { getRuntimeEnv } from "../../../runtime/env";
+import { AVAILABLE_STOCK_SQL } from "../../stock-quantities";
 
 function bangkokDate() {
   return new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -24,7 +25,7 @@ export async function GET(request: Request) {
       id: number; materialCode: string; partName: string; fact: string;
       deliveryDate: string; deliveryTime: string; reqQty: number; sentQty: number; arrangedQty: number;
     };
-    const [dueResult, stockResult, processResult, facResult, forecastResult, activityResult] = await Promise.all([
+    const [dueResult, stockResult, processResult, facResult, forecastResult, activityResult, forecastRiskResult, dueSoonResult] = await Promise.all([
       DB.prepare(`
         SELECT d.id, d.material_code AS materialCode, d.material_description AS partName,
           d.fact, d.delivery_date AS deliveryDate, d.delivery_time AS deliveryTime,
@@ -98,6 +99,45 @@ export async function GET(request: Request) {
         WHERE module_key IN ('plan','due','tags','stock','arrange','replacement','dispatch','reports')
         ORDER BY id DESC LIMIT 8
       `).all(),
+      DB.prepare(`
+        WITH active AS (
+          SELECT id, source_calculated_at AS sourceCalculatedAt
+          FROM forecast_imports WHERE status = 'active'
+          ORDER BY activated_at DESC, id DESC LIMIT 1
+        ), demand AS (
+          SELECT f.material_code AS materialCode, sum(f.prod_qty) AS forecastQty
+          FROM forecast_lines f INNER JOIN active a ON a.id = f.import_id
+          GROUP BY f.material_code
+        ), dispatched AS (
+          SELECT d.material_code AS materialCode, sum(s.qty) AS dispatchedQty
+          FROM delivery_tag_scans s
+          INNER JOIN delivery_due_lines d ON d.id = s.due_line_id
+          CROSS JOIN active a
+          WHERE datetime(s.created_at) > datetime(a.sourceCalculatedAt)
+          GROUP BY d.material_code
+        ), stock AS (
+          SELECT tag.material_code AS materialCode, sum(${AVAILABLE_STOCK_SQL}) AS stockQty
+          FROM stock_tags tag
+          WHERE tag.status IN ('in_stock','depleted') AND tag.remaining_qty > 0
+          GROUP BY tag.material_code
+        )
+        SELECT count(*) AS shortagePartCount
+        FROM demand
+        LEFT JOIN dispatched USING(materialCode)
+        LEFT JOIN stock USING(materialCode)
+        WHERE max(demand.forecastQty - coalesce(dispatched.dispatchedQty, 0), 0) > coalesce(stock.stockQty, 0)
+      `).all(),
+      DB.prepare(`
+        WITH sent AS (
+          SELECT due_line_id, sum(qty) AS sentQty FROM delivery_tag_scans GROUP BY due_line_id
+        )
+        SELECT
+          sum(CASE WHEN d.delivery_date BETWEEN ?1 AND date(?1, '+3 day')
+            AND coalesce(sent.sentQty, 0) < d.req_qty THEN 1 ELSE 0 END) AS dueSoonCount,
+          sum(CASE WHEN (d.delivery_date || 'T' || substr(d.delivery_time || ':00',1,5)) < ?2
+            AND coalesce(sent.sentQty, 0) < d.req_qty THEN 1 ELSE 0 END) AS overdueCount
+        FROM delivery_due_lines d LEFT JOIN sent ON sent.due_line_id = d.id
+      `).bind(bangkokDate(), nowKey).all(),
     ]);
 
     const dues = (dueResult.results || []).map((row) => ({ ...row, reqQty: Number(row.reqQty || 0), sentQty: Number(row.sentQty || 0), arrangedQty: Number(row.arrangedQty || 0) }));
@@ -110,12 +150,20 @@ export async function GET(request: Request) {
       `${a.deliveryDate}T${a.deliveryTime}`.localeCompare(`${b.deliveryDate}T${b.deliveryTime}`),
     ).slice(0, 6).map((row) => ({ ...row, remainingQty: Math.max(row.reqQty - row.sentQty, 0) }));
 
+    const stock = stockResult.results?.[0] || { availableQty: 0, arrangedQty: 0, replacementQty: 0, anomalyCount: 0 };
+    const availableQty = Number(stock.availableQty || 0);
+    const arrangedQty = Number(stock.arrangedQty || 0);
+    const shortagePartCount = Number(forecastRiskResult.results?.[0]?.shortagePartCount || 0);
+    const dueSoonCount = Number(dueSoonResult.results?.[0]?.dueSoonCount || 0);
+    const overdueCount = Number(dueSoonResult.results?.[0]?.overdueCount || 0);
+
     return Response.json({
       selectedDate,
       kpis: { dueTotal, completed, pending, overdue, successRate: dueTotal ? Math.round(completed / dueTotal * 1000) / 10 : 0 },
       dueStatus: { completed, waiting, overdue, total: dueTotal },
       upcoming,
-      stock: stockResult.results?.[0] || { availableQty: 0, arrangedQty: 0, replacementQty: 0, anomalyCount: 0 },
+      stock: { ...stock, availableQty, arrangedQty, totalQty: availableQty + arrangedQty },
+      alerts: { shortagePartCount, dueSoonCount, overdueCount },
       process: processResult.results?.[0] || {},
       fac: facResult.results || [],
       forecast: forecastResult.results || [],
