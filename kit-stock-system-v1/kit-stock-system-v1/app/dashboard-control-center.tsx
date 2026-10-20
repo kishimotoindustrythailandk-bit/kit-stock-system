@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import styles from "./dashboard-control-center.module.css";
+import DashboardOperationsFloor from "./dashboard-operations-floor";
 
 type DashboardData = {
   selectedDate: string;
@@ -93,6 +94,14 @@ export default function DashboardControlCenter({ userName, canOpen, onNavigate }
         <i>{icon}</i><span><small>{label}</small><b>{typeof value === "number" ? fmt(value) : value}</b><em>{label === "อัตราส่งสำเร็จ" ? "จาก Due ทั้งหมด" : "รายการ"}</em></span><strong>›</strong>
       </button>)}
     </section>
+
+    <DashboardOperationsFloor
+      data={data}
+      selectedDate={selectedDate}
+      userName={userName}
+      canOpen={canOpen}
+      onOpen={(page) => open(page)}
+    />
 
     <section className={styles.primaryGrid}>
       <article className={styles.panel}><header><h3>สถานะส่งงานตาม Due</h3><small>{thaiDate(selectedDate)}</small></header>
