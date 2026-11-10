@@ -344,6 +344,16 @@ test("connects camera Stock receipt preview to explicit confirmation", async () 
   assert.match(receiveAction, /INSERT INTO stock_receipt_adjustments/);
 });
 
+test("uses a fast high-resolution camera profile for dense customer QR Tags", async () => {
+  const appSource = await source("../app/delivery-control-app.tsx");
+  assert.match(appSource, /const customerTagMode = page === "dispatch" && Boolean\(dispatchKitSelection\)/);
+  assert.match(appSource, /DecodeHintType\.POSSIBLE_FORMATS/);
+  assert.match(appSource, /DecodeHintType\.TRY_HARDER/);
+  assert.match(appSource, /delayBetweenScanAttempts: 80/);
+  assert.match(appSource, /width: \{ ideal: customerTagMode \? 1920 : 1280 \}/);
+  assert.match(appSource, /focusMode\?\.includes\("continuous"\)/);
+});
+
 test("supports canonical user roles with explicit page permissions", async () => {
   const [appSource, authSource, usersApi, schema, migration] = await Promise.all([
     source("../app/delivery-control-app.tsx"),

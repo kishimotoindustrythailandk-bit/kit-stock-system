@@ -1438,11 +1438,31 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       try {
         setCameraError("");
         if (!navigator.mediaDevices?.getUserMedia || !videoElement) throw new Error("อุปกรณ์นี้ไม่รองรับการเปิดกล้อง");
-        const { BrowserMultiFormatReader } = await import("@zxing/browser");
+        const [{ BrowserMultiFormatReader, BarcodeFormat }, { DecodeHintType }] = await Promise.all([
+          import("@zxing/browser"),
+          import("@zxing/library"),
+        ]);
         if (stopped) return;
-        const reader = new BrowserMultiFormatReader(undefined, { delayBetweenScanAttempts: 250, delayBetweenScanSuccess: 800 });
+        const customerTagMode = page === "dispatch" && Boolean(dispatchKitSelection);
+        const hints = new Map();
+        hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+          BarcodeFormat.QR_CODE,
+          BarcodeFormat.DATA_MATRIX,
+          BarcodeFormat.CODE_128,
+          BarcodeFormat.CODE_39,
+        ]);
+        hints.set(DecodeHintType.TRY_HARDER, true);
+        const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 80, delayBetweenScanSuccess: 250 });
         scannerControls = await reader.decodeFromConstraints(
-          { video: { facingMode: { ideal: "environment" } }, audio: false },
+          {
+            video: {
+              facingMode: { ideal: "environment" },
+              width: { ideal: customerTagMode ? 1920 : 1280 },
+              height: { ideal: customerTagMode ? 1080 : 720 },
+              frameRate: { ideal: 30 },
+            },
+            audio: false,
+          },
           videoElement,
           (result, _error, controls) => {
             if (!result || stopped) return;
@@ -1452,6 +1472,15 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
             handleCameraValue(scannedValue);
           },
         );
+        const stream = videoElement.srcObject;
+        const track = stream instanceof MediaStream ? stream.getVideoTracks()[0] : undefined;
+        if (track) {
+          const capabilities = track.getCapabilities() as MediaTrackCapabilities & { focusMode?: string[] };
+          if (capabilities.focusMode?.includes("continuous")) {
+            const focusConstraints = { advanced: [{ focusMode: "continuous" }] } as unknown as MediaTrackConstraints;
+            void track.applyConstraints(focusConstraints).catch(() => undefined);
+          }
+        }
       } catch (caught) {
         setCameraError(caught instanceof Error ? caught.message : "เปิดกล้องไม่สำเร็จ");
       }
