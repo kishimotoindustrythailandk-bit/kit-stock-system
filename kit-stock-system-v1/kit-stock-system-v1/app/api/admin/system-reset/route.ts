@@ -5,7 +5,16 @@ type TableRow = { name: string };
 type ForeignKeyRow = { table: string };
 
 const CONFIRMATION = "RESET KIT STOCK";
-const PRESERVED_TABLES = new Set(["app_users", "app_user_permissions", "d1_migrations"]);
+const PRESERVED_TABLES = new Set([
+  "app_users",
+  "app_user_permissions",
+  "stock_parts",
+  "parts",
+  "part_images",
+  "part_actual_images",
+  "part_master_images",
+  "d1_migrations",
+]);
 
 function quoteIdentifier(value: string) {
   return `"${value.replaceAll('"', '""')}"`;
@@ -70,8 +79,8 @@ function resetPage() {
   <title>ล้างข้อมูล KIT Stock</title><style>
   *{box-sizing:border-box}body{margin:0;background:#eef5ff;color:#13315d;font-family:Arial,"Noto Sans Thai",sans-serif}.wrap{max-width:720px;margin:48px auto;padding:20px}.card{padding:30px;border:1px solid #cfe0f5;border-radius:22px;background:#fff;box-shadow:0 16px 45px #174a8720}h1{margin:0 0 12px;color:#bb1832}.warning{padding:16px;border-radius:14px;background:#fff1f3;color:#8f1730;line-height:1.7}.keep{margin:18px 0;padding:15px;border-radius:14px;background:#eaf7ef;color:#17673b;line-height:1.7}label{display:block;margin:18px 0 7px;font-weight:800}input{width:100%;padding:13px;border:1px solid #b8cde7;border-radius:10px;font-size:16px}button{width:100%;margin-top:14px;padding:14px;border:0;border-radius:11px;background:#c92740;color:#fff;font-size:16px;font-weight:900;cursor:pointer}button:disabled{opacity:.55}#result{margin-top:17px;padding:14px;border-radius:12px;background:#f2f6fb;white-space:pre-wrap;line-height:1.6}.small{color:#6d8099;font-size:12px}</style></head>
   <body><main class="wrap"><section class="card"><h1>ล้างข้อมูล KIT Stock</h1>
-  <div class="warning"><b>ข้อมูลที่จะถูกล้าง:</b> Stock, Tag, Job, Due, Forecast, Part, การจัดงาน, การขายออก, งานทดแทน, ประวัติ และ Session ทั้งหมด</div>
-  <div class="keep"><b>ข้อมูลที่จะเก็บ:</b> ผู้ใช้งาน รหัสผ่าน บทบาท สิทธิ์ และโครงสร้างฐานข้อมูล</div>
+  <div class="warning"><b>ข้อมูลที่จะถูกล้าง:</b> ยอด Stock, Tag, Job, Due, Forecast, การจัดงาน, การขายออก, งานทดแทน, ประวัติ และ Session ทั้งหมด</div>
+  <div class="keep"><b>ข้อมูลที่จะเก็บ:</b> ผู้ใช้งาน รหัสผ่าน บทบาท สิทธิ์ ทะเบียน Part รูปภาพ Part และโครงสร้างฐานข้อมูล</div>
   <p class="small">D1 Time Travel เปิดใช้งานอัตโนมัติ ระบบจะแสดงเวลาสำหรับกู้คืนหลังดำเนินการ</p>
   <label for="confirm">พิมพ์ ${CONFIRMATION}</label><input id="confirm" autocomplete="off">
   <button id="reset">ยืนยันล้างข้อมูลทั้งหมด</button><div id="result">ยังไม่ได้ดำเนินการ</div>
@@ -107,7 +116,7 @@ export async function POST(request: Request) {
     const statements = [
       DB.prepare("PRAGMA defer_foreign_keys = ON"),
       ...ordered.map((table) => DB.prepare(`DELETE FROM ${quoteIdentifier(table)}`)),
-      DB.prepare(`DELETE FROM sqlite_sequence WHERE name NOT IN ('app_users','app_user_permissions')`),
+      DB.prepare(`DELETE FROM sqlite_sequence WHERE name NOT IN ('app_users','app_user_permissions','parts')`),
     ];
     await DB.batch(statements);
 
