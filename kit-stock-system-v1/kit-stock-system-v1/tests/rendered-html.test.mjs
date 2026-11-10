@@ -113,37 +113,37 @@ test("prints the Stock receiving Tag with the part image", async () => {
   assert.match(appSource, /KITSTOCK\|/);
 });
 
-test("prints up to eight unique Stock Tags per A4 page and safely deletes unused Tags", async () => {
+test("prints up to ten unique Stock Tags per A4 page and safely deletes unused Tags", async () => {
   const [appSource, stockApi] = await Promise.all([
     source("../app/delivery-control-app.tsx"),
     source("../app/api/stock/route.ts"),
   ]);
-  assert.match(appSource, /const tagsPerPage = 8/);
+  assert.match(appSource, /const tagsPerPage = 10/);
   assert.match(appSource, /Math\.ceil\(tagMarkups\.length \/ tagsPerPage\)/);
   assert.match(appSource, /grid-template-columns:repeat\(2,100mm\)/);
-  assert.match(appSource, /grid-template-rows:repeat\(4,60mm\)/);
-  assert.match(appSource, /Tag ขนาด 10 × 6 ซม. · A4 สูงสุด 8 Tag/);
+  assert.match(appSource, /grid-template-rows:repeat\(5,55mm\)/);
+  assert.match(appSource, /Tag ขนาด 10 × 5\.5 ซม. · A4 สูงสุด 10 Tag/);
   assert.match(appSource, /deleteStockTag/);
   assert.match(stockApi, /action === "delete_tag"/);
   assert.match(stockApi, /Tag นี้มีประวัติรับเข้า จัดงาน หรือขายออกแล้ว/);
 });
 
-test("prints eight high-contrast Tags with larger readable text", async () => {
+test("prints ten high-contrast Tags with larger readable text", async () => {
   const appSource = await source("../app/delivery-control-app.tsx");
-  assert.match(appSource, /grid-template-rows:repeat\(4,60mm\)/);
-  assert.match(appSource, /\.tag\{width:100mm;height:60mm/);
+  assert.match(appSource, /grid-template-rows:repeat\(5,55mm\)/);
+  assert.match(appSource, /\.tag\{width:100mm;height:55mm/);
   assert.match(appSource, /border:1\.6px solid #003f98/);
   assert.match(appSource, /\.main b\{[^}]*font-size:9px/);
-  assert.match(appSource, /\.grid b\{[^}]*font-size:6\.4px/);
-  assert.match(appSource, /\.qty,\.box-cell b\{font-size:11\.5px!important/);
+  assert.match(appSource, /\.grid b\{[^}]*font-size:6\.2px/);
+  assert.match(appSource, /\.qty,\.box-cell b\{font-size:10\.8px!important/);
   assert.match(appSource, /print-color-adjust:exact/);
 });
 
-test("prints replacement box labels at exactly 100 by 60 millimetres", async () => {
+test("prints replacement box labels at exactly 100 by 55 millimetres", async () => {
   const appSource = await source("../app/delivery-control-app.tsx");
   const replacementPrint = sourceSection(appSource, "async function printReplacementIssue", "function renderDashboard");
-  assert.match(replacementPrint, /@page\{size:100mm 60mm;margin:0\}/);
-  assert.match(replacementPrint, /\.sheet\{width:100mm;height:60mm/);
+  assert.match(replacementPrint, /@page\{size:100mm 55mm;margin:0\}/);
+  assert.match(replacementPrint, /\.sheet\{width:100mm;height:55mm/);
   assert.match(replacementPrint, /TAG งานทดแทน/);
   assert.match(replacementPrint, /KITREPL\|/);
 });
@@ -160,7 +160,7 @@ test("labels full and remainder boxes on every printed Tag", async () => {
   assert.match(appSource, /\.box-type strong\{font-size:7\.2px/);
   assert.match(appSource, /\.box-type\.full/);
   assert.match(appSource, /\.box-type\.remainder/);
-  assert.match(appSource, /const tagsPerPage = 8/);
+  assert.match(appSource, /const tagsPerPage = 10/);
 });
 
 test("searches created Tags and locks original printing after split labels are issued", async () => {
