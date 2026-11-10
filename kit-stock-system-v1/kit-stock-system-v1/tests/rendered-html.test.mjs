@@ -352,6 +352,11 @@ test("uses a fast high-resolution camera profile for dense customer QR Tags", as
   assert.match(appSource, /delayBetweenScanAttempts: 80/);
   assert.match(appSource, /width: \{ ideal: customerTagMode \? 1920 : 1280 \}/);
   assert.match(appSource, /focusMode\?\.includes\("continuous"\)/);
+  assert.match(appSource, /new BrowserQRCodeReader/);
+  assert.match(appSource, /const cropScale = scanFullFrame \? 1 : 0\.66/);
+  assert.match(appSource, /reader\.decodeFromCanvas\(canvas\)/);
+  assert.match(appSource, /scanAttempt % 4 === 3/);
+  assert.match(appSource, /นำเฉพาะช่อง QR เข้าในกรอบสีเขียว/);
 });
 
 test("supports canonical user roles with explicit page permissions", async () => {

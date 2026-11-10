@@ -1438,31 +1438,99 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       try {
         setCameraError("");
         if (!navigator.mediaDevices?.getUserMedia || !videoElement) throw new Error("อุปกรณ์นี้ไม่รองรับการเปิดกล้อง");
-        const [{ BrowserMultiFormatReader, BarcodeFormat }, { DecodeHintType }] = await Promise.all([
+        const [{ BrowserMultiFormatReader, BrowserQRCodeReader, BarcodeFormat }, { DecodeHintType }] = await Promise.all([
           import("@zxing/browser"),
           import("@zxing/library"),
         ]);
         if (stopped) return;
         const customerTagMode = page === "dispatch" && Boolean(dispatchKitSelection);
         const hints = new Map();
-        hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-          BarcodeFormat.QR_CODE,
-          BarcodeFormat.DATA_MATRIX,
-          BarcodeFormat.CODE_128,
-          BarcodeFormat.CODE_39,
+        hints.set(DecodeHintType.POSSIBLE_FORMATS, customerTagMode ? [BarcodeFormat.QR_CODE] : [
+          BarcodeFormat.QR_CODE, BarcodeFormat.DATA_MATRIX, BarcodeFormat.CODE_128, BarcodeFormat.CODE_39,
         ]);
         hints.set(DecodeHintType.TRY_HARDER, true);
+        const videoConstraints = {
+          facingMode: { ideal: "environment" },
+          width: { ideal: customerTagMode ? 1920 : 1280 },
+          height: { ideal: customerTagMode ? 1080 : 720 },
+          frameRate: { ideal: 30 },
+        };
+        const enhanceCameraTrack = async (track: MediaStreamTrack) => {
+          const capabilities = track.getCapabilities() as MediaTrackCapabilities & {
+            focusMode?: string[];
+            zoom?: { min:number; max:number };
+          };
+          const advanced: Record<string, unknown> = {};
+          if (capabilities.focusMode?.includes("continuous")) advanced.focusMode = "continuous";
+          if (customerTagMode && capabilities.zoom && capabilities.zoom.max > capabilities.zoom.min) {
+            advanced.zoom = Math.min(capabilities.zoom.max, Math.max(capabilities.zoom.min, 1.25));
+          }
+          if (Object.keys(advanced).length) {
+            const enhancedConstraints = { advanced: [advanced] } as unknown as MediaTrackConstraints;
+            await track.applyConstraints(enhancedConstraints).catch(() => undefined);
+          }
+        };
+        if (customerTagMode) {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
+          if (stopped) {
+            stream.getTracks().forEach((track) => track.stop());
+            return;
+          }
+          videoElement.srcObject = stream;
+          await videoElement.play();
+          const track = stream.getVideoTracks()[0];
+          if (track) await enhanceCameraTrack(track);
+          const reader = new BrowserQRCodeReader(hints, { delayBetweenScanAttempts: 60, delayBetweenScanSuccess: 200 });
+          const canvas = document.createElement("canvas");
+          const context = canvas.getContext("2d", { alpha: false });
+          if (!context) throw new Error("อุปกรณ์นี้ไม่รองรับการประมวลผล QR");
+          let scanTimer: number | null = null;
+          let scanAttempt = 0;
+          const scanCustomerQr = () => {
+            if (stopped) return;
+            if (videoElement.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && videoElement.videoWidth > 0) {
+              const scanFullFrame = scanAttempt % 4 === 3;
+              const cropScale = scanFullFrame ? 1 : 0.66;
+              const sourceWidth = Math.round(videoElement.videoWidth * cropScale);
+              const sourceHeight = Math.round(videoElement.videoHeight * cropScale);
+              const sourceX = Math.round((videoElement.videoWidth - sourceWidth) / 2);
+              const sourceY = Math.round((videoElement.videoHeight - sourceHeight) / 2);
+              const targetHeight = Math.max(540, Math.round(960 * sourceHeight / sourceWidth));
+              if (canvas.width !== 960 || canvas.height !== targetHeight) {
+                canvas.width = 960;
+                canvas.height = targetHeight;
+                context.imageSmoothingEnabled = true;
+                context.imageSmoothingQuality = "high";
+              }
+              context.drawImage(videoElement, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+              try {
+                const result = reader.decodeFromCanvas(canvas);
+                const scannedValue = result.getText().trim();
+                if (scannedValue) {
+                  stopped = true;
+                  stream.getTracks().forEach((mediaTrack) => mediaTrack.stop());
+                  handleCameraValue(scannedValue);
+                  return;
+                }
+              } catch {
+                // Keep scanning while the QR is moving, blurred or not yet inside the guide frame.
+              }
+              scanAttempt += 1;
+            }
+            scanTimer = window.setTimeout(scanCustomerQr, 60);
+          };
+          scannerControls = {
+            stop() {
+              if (scanTimer !== null) window.clearTimeout(scanTimer);
+              stream.getTracks().forEach((mediaTrack) => mediaTrack.stop());
+            },
+          };
+          scanCustomerQr();
+          return;
+        }
         const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 80, delayBetweenScanSuccess: 250 });
         scannerControls = await reader.decodeFromConstraints(
-          {
-            video: {
-              facingMode: { ideal: "environment" },
-              width: { ideal: customerTagMode ? 1920 : 1280 },
-              height: { ideal: customerTagMode ? 1080 : 720 },
-              frameRate: { ideal: 30 },
-            },
-            audio: false,
-          },
+          { video: videoConstraints, audio: false },
           videoElement,
           (result, _error, controls) => {
             if (!result || stopped) return;
@@ -1475,11 +1543,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         const stream = videoElement.srcObject;
         const track = stream instanceof MediaStream ? stream.getVideoTracks()[0] : undefined;
         if (track) {
-          const capabilities = track.getCapabilities() as MediaTrackCapabilities & { focusMode?: string[] };
-          if (capabilities.focusMode?.includes("continuous")) {
-            const focusConstraints = { advanced: [{ focusMode: "continuous" }] } as unknown as MediaTrackConstraints;
-            void track.applyConstraints(focusConstraints).catch(() => undefined);
-          }
+          void enhanceCameraTrack(track);
         }
       } catch (caught) {
         setCameraError(caught instanceof Error ? caught.message : "เปิดกล้องไม่สำเร็จ");
@@ -4815,7 +4879,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       </div>
       <footer>{!jobQtyPreview && !jobQtyAdjusted ? <><button type="button" className="button secondary" onClick={closeJobQuantityAdjustment}>ยกเลิก</button><button type="submit" form="job-qty-adjust-form" className="button primary" disabled={jobQtySaving}>{jobQtySaving ? "กำลังตรวจสอบ…" : "ตรวจสอบ Tag ที่จะเปลี่ยน"}</button></> : jobQtyAdjusted ? <><button type="button" className="button secondary" onClick={closeJobQuantityAdjustment}>ปิด</button>{jobQtyCreatedTags.length > 0 && <button type="button" className="button primary" onClick={() => void printStockTags(jobQtyCreatedTags)}>▤ พิมพ์ Tag ใหม่</button>}</> : <><button type="button" className="button secondary" disabled={jobQtySaving} onClick={() => setJobQtyPreview(null)}>กลับไปแก้ไข</button><button type="button" className="button primary" disabled={jobQtySaving} onClick={() => void confirmJobQuantityAdjustment()}>{jobQtySaving ? "กำลังบันทึก…" : "✓ ยืนยันปรับจำนวนผลิตจริง"}</button></>}</footer>
     </section></div>}
-    {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>{cameraPurpose === "stock" ? stockLocation ? `สแกน KIT Tag รับเข้าชั้น ${stockLocation.code}` : "สแกน QR หน้าชั้นจัดเก็บ" : cameraPurpose === "stock-count" ? "สแกน Tag ตรวจนับสิ้นเดือน" : "สแกน Tag ด้วยกล้อง"}</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className="camera-view"><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div><p className="camera-format-hint">รองรับ QR · Data Matrix · Code 128 · Code 39</p>{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
+    {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>{cameraPurpose === "stock" ? stockLocation ? `สแกน KIT Tag รับเข้าชั้น ${stockLocation.code}` : "สแกน QR หน้าชั้นจัดเก็บ" : cameraPurpose === "stock-count" ? "สแกน Tag ตรวจนับสิ้นเดือน" : page === "dispatch" && dispatchKitSelection ? "สแกน QR Tag ลูกค้า (โหมดละเอียด)" : "สแกน Tag ด้วยกล้อง"}</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className={`camera-view ${page === "dispatch" && dispatchKitSelection ? "customer-qr-camera" : ""}`}><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div>{page === "dispatch" && dispatchKitSelection ? <p className="camera-customer-hint"><b>นำเฉพาะช่อง QR เข้าในกรอบสีเขียว</b><span>ไม่ต้องให้ป้ายทั้งใบอยู่ในภาพ · ถือให้นิ่งประมาณ 1 วินาที</span></p> : <p className="camera-format-hint">รองรับ QR · Data Matrix · Code 128 · Code 39</p>}{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
     {splitTagRequest&&<SplitTagPopup {...splitTagRequest} page={page} onClose={closeSplitTag}/>}
     <OperationWarningPopup voiceEnabled={settings.sound}/>
     {userEditorOpen && <div className="modal-backdrop"><form className="user-modal permission-modal" onSubmit={saveUser}>
