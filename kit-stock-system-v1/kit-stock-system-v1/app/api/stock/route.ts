@@ -977,26 +977,34 @@ export async function POST(request: Request) {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(productionDate)) {
           return Response.json({ error: "กรุณาระบุวันที่ผลิตให้ถูกต้อง" }, { status: 400 });
         }
-        const operationAt = new Date().toISOString();
+        // ใช้รูปแบบเดียวกับ CURRENT_TIMESTAMP ของ SQLite (UTC, "YYYY-MM-DD HH:MM:SS")
+        // เพื่อให้ received_at เทียบ/เรียงเป็น string ได้ตรงกับการรับ Tag เดี่ยว
+        const operationAt = new Date().toISOString().slice(0, 19).replace("T", " ");
         const ids = palletTags.map((item) => Number(item.id));
-        const updatePlaceholders = ids.map((_, index) => `?${index + 5}`).join(",");
+        // ไม่ bind id ทีละตัว: D1 จำกัด bound parameter 100 ตัวต่อ query จึงล็อกด้วย Part + Job
+        // และยืนยันว่าชุด Tag ที่รอรับยังมีจำนวนและยอดรวมเท่าที่ผู้ใช้เห็นตอน preview
         const updateStatement = runtimeDb.prepare(`
           UPDATE stock_tags
           SET status = 'in_stock', remaining_qty = qty,
             received_by_name = ?1, received_by_code = ?2,
             production_date = ?3, received_at = ?4
-          WHERE id IN (${updatePlaceholders}) AND status = 'printed'
-            AND (SELECT count(*) FROM stock_tags WHERE id IN (${updatePlaceholders}) AND status = 'printed') = ?${ids.length + 5}
-        `).bind(user.displayName, user.employeeCode, productionDate, operationAt, ...ids, ids.length);
-        const insertPlaceholders = ids.map(() => "?").join(",");
+          WHERE material_code = ?5 AND job_no = ?6 AND status = 'printed'
+            AND (SELECT count(*) FROM stock_tags
+                 WHERE material_code = ?5 AND job_no = ?6 AND status = 'printed') = ?7
+            AND (SELECT coalesce(sum(qty), 0) FROM stock_tags
+                 WHERE material_code = ?5 AND job_no = ?6 AND status = 'printed') = ?8
+        `).bind(user.displayName, user.employeeCode, productionDate, operationAt,
+          tag.materialCode, tag.jobNo, ids.length, pallet.totalQty);
         const insertStatement = runtimeDb.prepare(`
           INSERT INTO stock_receipt_adjustments
             (stock_tag_id, tag_id, original_qty, received_qty, ng_qty,
              received_by_name, received_by_code, received_at)
-          SELECT id, tag_id, qty, qty, 0, ?, ?, ?
-          FROM stock_tags
-          WHERE id IN (${insertPlaceholders}) AND received_by_code = ? AND received_at = ?
-        `).bind(user.displayName, user.employeeCode, operationAt, ...ids, user.employeeCode, operationAt);
+          SELECT t.id, t.tag_id, t.qty, t.qty, 0, ?1, ?2, ?3
+          FROM stock_tags t
+          WHERE t.material_code = ?4 AND t.job_no = ?5 AND t.status = 'in_stock'
+            AND t.received_by_code = ?2 AND t.received_at = ?3
+            AND NOT EXISTS (SELECT 1 FROM stock_receipt_adjustments a WHERE a.stock_tag_id = t.id)
+        `).bind(user.displayName, user.employeeCode, operationAt, tag.materialCode, tag.jobNo);
         const [updated, inserted] = await runtimeDb.batch([updateStatement, insertStatement]);
         if (Number(updated.meta.changes || 0) !== ids.length || Number(inserted.meta.changes || 0) !== ids.length) {
           return Response.json({ error: "Tag บางใบในพาเลทเพิ่งถูกรับเข้าไปแล้ว กรุณารีเฟรชและสแกนใหม่" }, { status: 409 });
