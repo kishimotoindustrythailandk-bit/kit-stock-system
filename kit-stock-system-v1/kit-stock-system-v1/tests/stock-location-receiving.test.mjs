@@ -37,7 +37,9 @@ test("one scanned tag previews and atomically receives every pending tag in the 
   assert.match(api, /material_code = \?1 AND job_no = \?2 AND status = 'printed'/);
   assert.match(api, /palletTags\.reduce/);
   assert.match(api, /body\.mode, 30\) === "pallet_confirm"/);
-  assert.match(api, /AND \(SELECT count\(\*\) FROM stock_tags WHERE id IN/);
+  assert.match(api, /AND \(SELECT count\(\*\) FROM stock_tags\s+WHERE material_code = \?5 AND job_no = \?6/);
+  assert.doesNotMatch(api, /WHERE id IN \(\$\{updatePlaceholders\}\)/);
+  assert.match(api, /toISOString\(\)\.slice\(0, 19\)\.replace\("T", " "\)/);
   assert.match(api, /runtimeDb\.batch\(\[updateStatement, insertStatement\]\)/);
   assert.match(app, /mode: "pallet_preview"/);
   assert.match(app, /tagIds: stockReceivePreview\.pallet\?\.tagIds/);
