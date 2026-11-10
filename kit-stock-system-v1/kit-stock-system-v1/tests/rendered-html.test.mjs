@@ -33,7 +33,7 @@ test("renders the standalone employee login page", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
   assert.match(html, /รหัสพนักงาน/);
-  assert.match(html, /DELIVERY DUE CONTROL/);
+  assert.match(html, /CONTROL STOCK KIT/);
 });
 
 test("uses DeliveryControlApp as the production UI entry", async () => {

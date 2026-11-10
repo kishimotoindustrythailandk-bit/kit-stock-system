@@ -12,7 +12,7 @@ export default async function ChangePinPage() {
 
   return <main className="login-page">
     <section className="login-card">
-      <div className="login-brand"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
+      <div className="login-brand"><b>KiT</b><span>CONTROL STOCK KIT</span></div>
       <div className="login-copy">
         <span>ความปลอดภัยบัญชี</span>
         <h1>{user.mustChangePin ? "ตั้ง PIN ของคุณ" : "เปลี่ยน PIN"}</h1>

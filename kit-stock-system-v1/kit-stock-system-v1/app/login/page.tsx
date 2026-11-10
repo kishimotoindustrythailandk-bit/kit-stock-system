@@ -11,7 +11,7 @@ export default async function LoginPage() {
   if (user) redirect(user.mustChangePin ? "/change-pin" : "/");
   return <main className="login-page login-v2">
     <section className="login-card">
-      <div className="login-brand"><b>KiT</b><span>DELIVERY DUE CONTROL</span></div>
+      <div className="login-brand"><b>KiT</b><span>CONTROL STOCK KIT</span></div>
       <div className="login-copy">
         <span>ระบบควบคุมการส่งงาน</span>
         <div className="login-welcome-row"><h1>ยินดีต้อนรับ</h1><i>👋</i><em>📋</em></div>
@@ -25,7 +25,7 @@ export default async function LoginPage() {
       <div className="login-glow one" /><div className="login-glow two" />
       <div className="login-route"><span>✦</span><b>●</b><i>⌁</i></div>
       <div className="login-visual-copy">
-        <span>DELIVERY DUE CONTROL</span>
+        <span>CONTROL STOCK KIT</span>
         <h2>ส่งงาน<span>ตรงเวลา</span><br />ตรวจสอบได้ทุกขั้นตอน</h2>
         <ul>
           <li><i className="green">☁</i><p><b>ข้อมูล Due อัปเดตแบบเรียลไทม์</b><small>มั่นใจได้ว่างานไม่ตกหล่น</small></p></li>

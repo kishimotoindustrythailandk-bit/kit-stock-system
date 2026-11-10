@@ -2872,7 +2872,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       const deliveryQty = tag.deliveryQty || stock.tags
         .filter((item) => item.tagId.replace(/-B\d+OF\d+$/, "") === batchCode)
         .reduce((sum, item) => sum + Number(item.qty), 0) || tag.qty;
-      return `<section class="tag"><header><div class="brand">KiT<small>DELIVERY DUE CONTROL</small></div><div class="tag-title"><b>STOCK RECEIVING TAG</b><small>TAG รับงานเข้า STOCK</small></div></header>
+      return `<section class="tag"><header><div class="brand">KiT<small>CONTROL STOCK KIT</small></div><div class="tag-title"><b>STOCK RECEIVING TAG</b><small>TAG รับงานเข้า STOCK</small></div></header>
         <div class="product"><div class="photo-wrap">${imageUrl ? `<img class="photo" src="${imageUrl}" alt="รูปชิ้นงาน ${html(tag.materialCode)}" />` : `<div class="photo-fallback"><strong>◇</strong>ยังไม่มีรูปชิ้นงาน</div>`}</div><div class="qr-wrap"><img class="qr" src="${qr}" alt="QR"><small>QR / BARCODE</small></div><div class="main"><small>CUSTOMER</small><p class="customer">${html(tag.customer || "—")}</p><small>PART NO. / MATERIAL</small><b>${html(tag.materialCode)}</b><small>PART NAME</small><p>${html(tag.partName)}</p></div></div>
         <div class="grid"><div><small>DELIVERY QTY / จำนวนงานรวม</small><b class="qty">${fmt(deliveryQty)}</b> <span class="unit">PC</span></div><div><small>QTY IN BOX / จำนวนในกล่อง</small><b class="qty">${fmt(tag.qty)}</b> <span class="unit">PC</span></div><div class="box-cell"><small>BOX / กล่อง</small><b>${fmt(boxNo)} / ${fmt(boxCount)}</b><span class="box-type ${isFullBox ? "full" : "remainder"}"><strong>${boxTypeThai}</strong><small>${boxTypeEnglish}</small></span></div><div><small>JOB NO.</small><b>${html(tag.jobNo)}</b></div><div><small>TAG ISSUE DATE / วันที่ออก TAG</small><b>${html(formatDateOnly(tag.createdAt))}</b></div><div><small>LOCATION / ตำแหน่งจัดเก็บ</small><b>${html(location)}</b></div></div>
         <footer><b class="code">${html(tag.tagId)}</b><p class="payload">${html(payloadValue)}</p><div class="hint">ยิง QR เพื่อรับงานเข้า Stock</div></footer>
@@ -3143,7 +3143,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       const xlsx = await import("xlsx");
       const workbook = xlsx.utils.book_new();
       const summarySheet = xlsx.utils.aoa_to_sheet([
-        ["KIT Delivery Due Control — สรุปรายงาน"],
+        ["Control Stock KIT — สรุปรายงาน"],
         ["วันที่ส่งงาน", filterDate ? formatDate(filterDate) : "ทุกวันที่"],
         ["FAC", filterFact === "ALL" ? "ทั้งหมด" : filterFact],
         ["เวลา", filterTime === "ALL" ? "ทั้งหมด" : filterTime],
@@ -3177,7 +3177,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     if (!popup) return setNotice({ type: "error", text: "เบราว์เซอร์บล็อกหน้าต่างรายงาน กรุณาอนุญาต Pop-up แล้วลองใหม่" });
     const escape = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character] || character);
     const rows = filtered.map((due) => `<tr><td>${escape(formatDate(due.deliveryDate))}</td><td>${escape(due.deliveryTime)}</td><td>${escape(due.fact)} / ${escape(due.line || "—")}</td><td>${escape(due.materialCode)}<small>${escape(due.materialDescription)}</small></td><td>${fmt(due.reqQty)}</td><td>${fmt(due.scannedQty)}</td><td>${fmt(Math.max(due.reqQty - due.scannedQty, 0))}</td><td>${escape(stateLabel(due))}</td></tr>`).join("");
-    popup.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>KIT Delivery Report</title><style>@page{size:A4 landscape;margin:12mm}body{font:12px Arial,sans-serif;color:#132647}header{display:flex;justify-content:space-between;border-bottom:3px solid #075fd7;padding-bottom:12px}h1{margin:0;color:#075fd7}.scope{color:#64748b}.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:14px 0}.metrics div{padding:10px;border:1px solid #dbe5f2;border-radius:8px}.metrics b{display:block;font-size:20px}table{width:100%;border-collapse:collapse}th{background:#eaf3ff;color:#123765}th,td{padding:7px;border:1px solid #dbe3ed;text-align:left}td:nth-last-child(-n+4){text-align:right}small{display:block;color:#718096;margin-top:3px}footer{margin-top:10px;color:#718096;text-align:right}@media print{button{display:none}}</style></head><body><header><div><h1>KIT Delivery Due Control</h1><b>รายงานสถานะการส่งงาน</b></div><div class="scope">วันที่ ${escape(filterDate ? formatDate(filterDate) : "ทุกวันที่")} · FAC ${escape(filterFact === "ALL" ? "ทั้งหมด" : filterFact)} · เวลา ${escape(filterTime === "ALL" ? "ทั้งหมด" : filterTime)}</div></header><section class="metrics"><div>รายการทั้งหมด<b>${fmt(summary.items)}</b></div><div>แผนทั้งหมด<b>${fmt(summary.plan)}</b></div><div>ส่งแล้ว<b>${fmt(summary.sent)}</b></div><div>ครบตามแผน<b>${fmt(summary.completed)}</b></div><div>คงเหลือ<b>${fmt(summary.partial + summary.pending)}</b></div></section><table><thead><tr><th>วันที่</th><th>เวลา</th><th>FAC / Line</th><th>Material / Part No.</th><th>แผน</th><th>ส่งแล้ว</th><th>คงเหลือ</th><th>สถานะ</th></tr></thead><tbody>${rows || '<tr><td colspan="8">ไม่พบข้อมูลตามตัวกรอง</td></tr>'}</tbody></table><footer>สร้างรายงาน ${escape(new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date()))}</footer><script>window.onload=()=>setTimeout(()=>window.print(),300)<\/script></body></html>`);
+    popup.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>Control Stock KIT Report</title><style>@page{size:A4 landscape;margin:12mm}body{font:12px Arial,sans-serif;color:#132647}header{display:flex;justify-content:space-between;border-bottom:3px solid #075fd7;padding-bottom:12px}h1{margin:0;color:#075fd7}.scope{color:#64748b}.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:14px 0}.metrics div{padding:10px;border:1px solid #dbe5f2;border-radius:8px}.metrics b{display:block;font-size:20px}table{width:100%;border-collapse:collapse}th{background:#eaf3ff;color:#123765}th,td{padding:7px;border:1px solid #dbe3ed;text-align:left}td:nth-last-child(-n+4){text-align:right}small{display:block;color:#718096;margin-top:3px}footer{margin-top:10px;color:#718096;text-align:right}@media print{button{display:none}}</style></head><body><header><div><h1>Control Stock KIT</h1><b>รายงานสถานะการส่งงาน</b></div><div class="scope">วันที่ ${escape(filterDate ? formatDate(filterDate) : "ทุกวันที่")} · FAC ${escape(filterFact === "ALL" ? "ทั้งหมด" : filterFact)} · เวลา ${escape(filterTime === "ALL" ? "ทั้งหมด" : filterTime)}</div></header><section class="metrics"><div>รายการทั้งหมด<b>${fmt(summary.items)}</b></div><div>แผนทั้งหมด<b>${fmt(summary.plan)}</b></div><div>ส่งแล้ว<b>${fmt(summary.sent)}</b></div><div>ครบตามแผน<b>${fmt(summary.completed)}</b></div><div>คงเหลือ<b>${fmt(summary.partial + summary.pending)}</b></div></section><table><thead><tr><th>วันที่</th><th>เวลา</th><th>FAC / Line</th><th>Material / Part No.</th><th>แผน</th><th>ส่งแล้ว</th><th>คงเหลือ</th><th>สถานะ</th></tr></thead><tbody>${rows || '<tr><td colspan="8">ไม่พบข้อมูลตามตัวกรอง</td></tr>'}</tbody></table><footer>สร้างรายงาน ${escape(new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date()))}</footer><script>window.onload=()=>setTimeout(()=>window.print(),300)<\/script></body></html>`);
     popup.document.close();
     void recordClientAudit("export_report_pdf", `พิมพ์หรือส่งออกรายงาน PDF ${filtered.length} รายการ`, { itemCount: filtered.length, filterDate, filterFact, filterTime });
   }
@@ -3357,7 +3357,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     const replacementQr = await qrcode.toDataURL(replacementPayload, { width: 420, margin: 1, errorCorrectionLevel: "M" });
     popup.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${safe(issue.noticeNo)}</title><style>
       @page{size:100mm 55mm;margin:0}*{box-sizing:border-box}html,body{width:100mm;height:55mm;margin:0;font-family:Arial,"Noto Sans Thai",sans-serif;color:#10234a}.sheet{width:100mm;height:55mm;border:1.5px solid #1767df;border-radius:2mm;overflow:hidden;display:grid;grid-template-rows:8mm 1fr 6mm}.head{padding:.8mm 2mm;color:#fff;background:linear-gradient(135deg,#096fe8,#753fe0);display:flex;justify-content:space-between;align-items:center}.head h1{margin:0;font-size:12px}.head p,.head b{margin:0;font-size:5.8px}.body{min-height:0;display:grid;grid-template-columns:1fr 21mm;gap:1.2mm;padding:1.1mm 2mm}.part small,.cell small{display:block;color:#65789d;font-size:5.7px;font-weight:800}.part h2{font-size:15px;line-height:1.05;margin:.2mm 0;overflow-wrap:anywhere}.part p{margin:0;font-size:6.6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.55mm 2mm;margin-top:.7mm}.cell b{display:block;font-size:6.6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.qty{margin-top:.6mm;padding:.5mm;border:1px solid #1767df;border-radius:1mm}.qty small{font-size:5.6px}.qty b{font-size:17px;color:#0963da}.qr{display:grid;place-items:center;align-content:center;border:1px solid #b8cbea;border-radius:1mm}.qr img{width:17mm;height:17mm}.qr small{font-size:5px;font-weight:800;text-align:center}.foot{padding:.6mm 2mm;background:#f0f5fd;display:flex;justify-content:space-between;align-items:center;font-size:5.6px}.foot b{font-size:6.5px}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}</style></head><body>
-      <section class="sheet"><div class="head"><div><p>KiT DELIVERY DUE CONTROL</p><h1>TAG งานทดแทน</h1></div><div><b>${safe(issue.noticeNo)}</b><p>${safe(formatDateTime(issue.issuedAt))}</p></div></div>
+      <section class="sheet"><div class="head"><div><p>CONTROL STOCK KIT</p><h1>TAG งานทดแทน</h1></div><div><b>${safe(issue.noticeNo)}</b><p>${safe(formatDateTime(issue.issuedAt))}</p></div></div>
       <div class="body"><div><div class="part"><small>PART / MATERIAL</small><h2>${safe(item.materialCode)}</h2><p>${safe(item.partName || "—")}</p></div><div class="grid"><div class="cell"><small>JOB</small><b>${safe(issue.jobNo || "—")}</b></div><div class="cell"><small>ลูกค้า</small><b>${safe(item.customer || "—")}</b></div><div class="cell"><small>ใบขอ QC</small><b>${safe(item.requestNo)}</b></div><div class="cell"><small>สาเหตุ</small><b>${safe(reason)}</b></div><div class="cell"><small>KIT STOCK TAG</small><b>${safe(issue.stockTagCode)}</b></div><div class="qty"><small>จำนวนทดแทน</small><b>${safe(fmt(issue.qty))} PCS</b></div></div></div><div class="qr"><img src="${replacementQr}" alt="QR"><small>REPLACEMENT TAG</small></div></div>
       <div class="foot"><b>${safe(issue.issuedByName)} (${safe(issue.issuedByCode)})</b><span>ฉลาก 100 × 55 mm · ไม่มี Customer Tag</span></div></section>
       <script>window.onload=()=>{const image=document.querySelector('img');const print=()=>setTimeout(()=>window.print(),150);if(image&&!image.complete){image.onload=print;image.onerror=print}else print()}<\/script></body></html>`);
@@ -3785,7 +3785,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       }
       const generatedAt = new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date());
       const summaryRows = [
-        ["KIT Delivery Due Control — สรุปยอด Stock"],
+        ["Control Stock KIT — สรุปยอด Stock"],
         ["วันที่และเวลาส่งออก", generatedAt],
         ["จำนวน Part", summaryByPart.size],
         ["จำนวน Tag", stockTags.length],
@@ -4467,7 +4467,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         <DueTable rows={exported} />
         <footer className="exports-list-footer"><span>แสดง {fmt(exported.length)} รายการ</span><span>{filterDate ? formatDate(filterDate) : "ทุกวันที่"} · {filterFact === "ALL" ? "ทุก FAC" : filterFact} · {filterTime === "ALL" ? "ทุกเวลา" : filterTime}</span></footer>
       </Card>
-      <footer className="settings-footer"><span>© 2026 KIT Delivery Due Control. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
+      <footer className="settings-footer"><span>© 2026 Control Stock KIT. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
     </div>;
   }
 
@@ -4489,7 +4489,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         <Card className="reports-table-card" title="สรุปการส่งออกตามวัน" action={<span className="reports-current-filter">◉ {filterDate ? formatDate(filterDate) : "ดูทั้งหมด"}</span>}>{dailyStats.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>วันที่</th><th className="num">แผนทั้งหมด</th><th className="num">ส่งแล้ว</th><th className="num">คงเหลือ</th><th className="num">เกินคิว</th></tr></thead><tbody>{dailyStats.slice(0, 8).map((row) => <tr key={row.date}><td data-label="วันที่"><b>{formatDate(row.date)}</b></td><td data-label="แผนทั้งหมด" className="num">{row.items}</td><td data-label="ส่งแล้ว" className="num sent">{row.completed}</td><td data-label="คงเหลือ" className="num warning">{row.partial + row.pending}</td><td data-label="เกินคิว" className="num danger">{row.over}</td></tr>)}</tbody></table></div> : <Empty title="ยังไม่มีข้อมูล" text="ในช่วงวันที่ที่เลือก" />}</Card>
         <Card className="reports-table-card" title="รายการที่ยังไม่ครบ (สูงสุด)" action={<span className="reports-current-filter">◉ {filterFact === "ALL" ? "ดูทั้งหมด" : filterFact}</span>}><DueTable rows={filtered.filter((due) => ["pending", "partial", "over"].includes(stateOf(due))).sort((a, b) => (b.reqQty - b.scannedQty) - (a.reqQty - a.scannedQty))} limit={5} /></Card>
       </div>
-      <footer className="settings-footer"><span>© 2026 KIT Delivery Due Control. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
+      <footer className="settings-footer"><span>© 2026 Control Stock KIT. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
     </div>;
   }
 
@@ -4614,7 +4614,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         {shownActivities.length ? <div className="table-wrap mobile-table-wrap history-table-wrap"><table className="mobile-card-table history-modern-table"><thead><tr><th>วันที่ / เวลา</th><th>ประเภท</th><th>รายละเอียด</th><th>ผู้ดำเนินการ</th><th>สถานะ</th></tr></thead><tbody>{shownActivities.map((item) => <tr key={item.id}><td data-label="วันที่ / เวลา"><b>{formatDateTime(item.createdAt)}</b></td><td data-label="ประเภท"><b>{item.action}</b></td><td data-label="รายละเอียด">{item.detail}</td><td data-label="ผู้ดำเนินการ"><b>{item.actor}</b></td><td data-label="สถานะ"><em className={"status completed audit-" + item.tone}>บันทึกแล้ว</em></td></tr>)}</tbody></table></div> : <div className="history-empty"><span>◇</span><b>{(historyQuery || historyDate || historyDateTo) ? "ไม่พบรายการที่ค้นหา" : "ยังไม่มีประวัติในขณะนี้"}</b><small>{(historyQuery || historyDate || historyDateTo) ? "ลองเปลี่ยนคำค้นหาหรือช่วงวันที่" : "เลือกเมนูด้านบนหรือปรับช่วงวันที่เพื่อดูข้อมูล"}</small></div>}
         <footer><span>แสดง {fmt(Math.min(filteredActivities.length, 250))} จาก {fmt(filteredActivities.length)} รายการ</span></footer>
       </section>
-      <footer className="settings-footer"><span>© 2026 KIT Delivery Due Control. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
+      <footer className="settings-footer"><span>© 2026 Control Stock KIT. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
     </div>;
   }
 
@@ -4626,8 +4626,8 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       <section className="settings-block settings-system-block">
         <header><span>▤</span><h3>ข้อมูลระบบ</h3></header>
         <div className="system-card">
-          <div className="system-logo">KiT<small>DELIVERY DUE CONTROL</small></div>
-          <dl><div><dt>ชื่อระบบ</dt><dd>KIT Delivery Due Control</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.23.0</dd></div><div><dt>เขตเวลา</dt><dd>(GMT+07:00) Bangkok, Thailand</dd></div><div><dt>ที่ตั้ง</dt><dd>● Bangkok, Thailand</dd></div><div><dt>ผู้ดูแลระบบ</dt><dd>♟ {user.displayName}</dd></div></dl>
+          <div className="system-logo">KiT<small>CONTROL STOCK KIT</small></div>
+          <dl><div><dt>ชื่อระบบ</dt><dd>Control Stock KIT</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.23.0</dd></div><div><dt>เขตเวลา</dt><dd>(GMT+07:00) Bangkok, Thailand</dd></div><div><dt>ที่ตั้ง</dt><dd>● Bangkok, Thailand</dd></div><div><dt>ผู้ดูแลระบบ</dt><dd>♟ {user.displayName}</dd></div></dl>
           <div className="system-stats page-summary"><p className="blue"><span>▤</span><b>{fmt(payload.dues.length)}</b><strong>Due ทั้งหมด</strong><small>รายการ</small></p><p className="purple"><span>◇</span><b>{fmt(partImages.length)}</b><strong>รูปชิ้นงาน</strong><small>รายการ</small></p></div>
         </div>
       </section>
@@ -4655,7 +4655,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       </section>
 
       {user.role === "admin" && <section className="settings-danger-strip"><span>◆</span><div><b>ล้างข้อมูลทดลอง</b><p>ลบ Tag Stock และประวัติการเข้า/ออกที่ทดลอง โดยไม่กระทบข้อมูล Part รูปชิ้นงาน แผน Due และผู้ใช้งานจริง</p></div><button className="button danger" disabled={clearingTestStock || stock.tags.length === 0} onClick={() => void clearTestStock()}>{clearingTestStock ? "กำลังล้างข้อมูล…" : `▧ ล้าง Stock ทดลอง ${fmt(stock.tags.length)} Tag`}</button></section>}
-      <footer className="settings-footer"><span>© 2026 KIT Delivery Due Control. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
+      <footer className="settings-footer"><span>© 2026 Control Stock KIT. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
     </div>;
   }
 
@@ -4719,7 +4719,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         <section><header><span>◇</span><div><h3>สิทธิ์รายบุคคล</h3><p>กำหนดสิทธิ์การเข้าถึงของแต่ละผู้ใช้งาน</p></div></header><div><span>⚙</span><p><b>Admin กำหนดสิทธิ์ทุกหน้า</b><small>บทบาทใช้ระบุทีมงาน ส่วนสิทธิ์หน้าแต่ละหน้าต้องเลือกให้ผู้ใช้แต่ละคนอย่างน้อย 1 หน้า</small></p></div></section>
         <section><header><span>▣</span><div><h3>ความปลอดภัย</h3><p>ตั้งค่าความปลอดภัยของผู้ใช้งานและการเข้าถึงระบบ</p></div></header><div><span>◆</span><p><b>ป้องกันทั้งเมนูและ API</b><small>หน้าที่ไม่ได้รับสิทธิ์จะไม่แสดงในเมนู และระบบจะปฏิเสธการเปิดหรือเรียกใช้งานโดยตรง</small></p></div></section>
       </div>
-      <footer className="settings-footer"><span>© 2026 KIT Delivery Due Control. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
+      <footer className="settings-footer"><span>© 2026 Control Stock KIT. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
     </div>;
   }
 
@@ -4735,10 +4735,10 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   return <div onInvalidCapture={(event) => { event.preventDefault(); const field=event.target as HTMLInputElement; const label=field.closest("label")?.querySelector("span")?.textContent || field.getAttribute("aria-label") || "ข้อมูล"; reportOperationWarning({page,message:`${label}: ${field.validationMessage || "กรุณาตรวจสอบข้อมูล"}`}); }} className={`control-shell ${page === "stock-all" ? `stock-reference-shell ${stockMenuCollapsed ? "stock-sidebar-collapsed" : ""}` : ""}`}>
     <aside className={`control-sidebar ${menuOpen ? "open" : ""}`}>
       <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
-      <div className="kit-logo">{page === "stock-all" ? <OverviewLogo/> : <b>KiT</b>}<span>DELIVERY DUE CONTROL</span></div>
+      <div className="kit-logo">{page === "stock-all" ? <OverviewLogo/> : <b>KiT</b>}<span>CONTROL STOCK KIT</span></div>
       <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{page === "stock-all" ? <OverviewIcon name={OVERVIEW_NAV_ICONS[item.key]}/> : item.icon}</span>{item.label}</button>)}</nav>
       {page === "stock-all" && <OverviewFactory/>}
-      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Delivery Due Control<br />© 2026 · v2.23.0</span></div></div>
+      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Control Stock KIT<br />© 2026 · v2.23.0</span></div></div>
     </aside>
     {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
     <main className="control-main">
