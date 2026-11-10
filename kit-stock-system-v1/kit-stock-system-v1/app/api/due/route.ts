@@ -36,6 +36,14 @@ function parseCustomerTag(raw: string) {
   return parsed;
 }
 
+function parseInternalTag(raw: string) {
+  const value = raw.trim();
+  const fields = value.split("|");
+  if (fields[0] === "KITSTOCK" && fields[1]) return fields[1].trim().toUpperCase();
+  if (/^KITSTK-[A-Z0-9-]+$/i.test(value)) return value.toUpperCase();
+  throw new Error("Tag นี้ไม่ใช่ KIT Stock Tag");
+}
+
 type DispatchScope = { deliveryDate: string; deliveryTime: string; fact: string };
 
 function dispatchScopeFromPayload(payload: Record<string, unknown>): DispatchScope | null {
@@ -57,6 +65,50 @@ function inDispatchScope(row: { deliveryDate: string; deliveryTime: string; fact
 
 function dispatchScopeText(scope: DispatchScope) {
   return `${scope.deliveryDate} / รอบ ${scope.deliveryTime || "ทั้งหมด"} / ${scope.fact || "ทุก FAC"}`;
+}
+
+type SelectedKitTag = { pickId: number; stockTagCode: string };
+
+async function verifyKitTag(rawPayload: string, scope: DispatchScope) {
+  const { DB } = getRuntimeEnv();
+  if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
+  let stockTagCode = "";
+  try {
+    stockTagCode = parseInternalTag(rawPayload);
+  } catch (error) {
+    return Response.json({ action: "dispatch_kit_verify", verdict: "bad_tag", message: error instanceof Error ? error.message : "อ่าน KIT Tag ไม่ได้" });
+  }
+  const rows = await DB.prepare(`
+    SELECT p.id AS pickId, p.due_line_id AS dueLineId,
+      p.picked_qty - p.dispatched_qty AS waitingQty,
+      p.picked_by_name AS pickedByName, p.picked_at AS pickedAt,
+      t.id AS stockTagId, t.tag_id AS stockTagCode, t.material_code AS materialCode,
+      t.job_no AS jobNo, t.production_date AS productionDate,
+      d.do_no AS doNo, d.seq, d.fact, d.line, d.shop,
+      d.delivery_date AS deliveryDate, d.delivery_time AS deliveryTime
+    FROM stock_picks p
+    INNER JOIN stock_tags t ON t.id = p.stock_tag_id
+    INNER JOIN delivery_due_lines d ON d.id = p.due_line_id
+    WHERE t.tag_id = ?1
+      AND p.status IN ('staged', 'partial')
+      AND p.picked_qty > p.dispatched_qty
+      AND d.delivery_date = ?2
+      AND (?3 = '' OR d.delivery_time = ?3)
+      AND (?4 = '' OR d.fact = ?4)
+    ORDER BY p.id
+  `).bind(stockTagCode, scope.deliveryDate, scope.deliveryTime, scope.fact).all<{
+    pickId: number; dueLineId: number; waitingQty: number; pickedByName: string; pickedAt: string;
+    stockTagId: number; stockTagCode: string; materialCode: string; jobNo: string;
+    productionDate: string; doNo: string; seq: number; fact: string; line: string;
+    shop: string; deliveryDate: string; deliveryTime: string;
+  }>();
+  if (!rows.results.length) {
+    return Response.json({ action: "dispatch_kit_verify", verdict: "not_arranged", message: `ไม่พบ KIT Tag ${stockTagCode} ในงานที่จัดรอขายของ ${dispatchScopeText(scope)}` });
+  }
+  if (rows.results.length > 1) {
+    return Response.json({ action: "dispatch_kit_verify", verdict: "ambiguous", message: "KIT Tag นี้อยู่ในงานจัดมากกว่า 1 รายการ กรุณาเลือกรอบและ FAC ให้เฉพาะเจาะจง" });
+  }
+  return Response.json({ action: "dispatch_kit_verify", verdict: "ready", message: "พบ KIT Tag ที่จัดงานแล้ว กรุณาสแกน Tag ลูกค้า", kit: rows.results[0] });
 }
 
 async function resolveCustomerDue(tag: ReturnType<typeof parseCustomerTag>, scope?: DispatchScope | null) {
@@ -150,7 +202,7 @@ async function resolveCustomerDue(tag: ReturnType<typeof parseCustomerTag>, scop
 // แต่ "อ่านอย่างเดียว" ไม่แตะ Stock หรือ Due — ให้ผู้ตรวจเทียบรูป master กับของจริง
 // ในกล่องก่อน แล้วจึงไปกดขายออกจริง คืน verdict เสมอ (ไม่ throw) เพื่อบอกสาเหตุ
 // ที่หน้าจอได้ครบทุกกรณี
-async function verifyCustomerTag(rawPayload: string, scope?: DispatchScope | null) {
+async function verifyCustomerTag(rawPayload: string, scope?: DispatchScope | null, selectedKit?: SelectedKitTag | null) {
   const { DB } = getRuntimeEnv();
   if (!DB) throw new Error("ไม่พบการเชื่อมต่อ D1");
   const db = getDb();
@@ -208,7 +260,7 @@ async function verifyCustomerTag(rawPayload: string, scope?: DispatchScope | nul
       )
   `).bind(due.id, due.materialCode, due.doNo, due.deliveryDate, due.fact, due.line, due.shop)
     .first<{ avail: number }>();
-  const stagedAvail = Number(stagedRow?.avail ?? 0);
+  let stagedAvail = Number(stagedRow?.avail ?? 0);
 
   const dueInfo = {
     id: due.id, doNo: due.doNo, seq: due.seq, materialCode: due.materialCode,
@@ -219,6 +271,38 @@ async function verifyCustomerTag(rawPayload: string, scope?: DispatchScope | nul
     projectedQty: alreadyQty + tag.qty,
     remainingAfter: Math.max(due.reqQty - (alreadyQty + tag.qty), 0),
   };
+
+  let pairedKit: Record<string, unknown> | null = null;
+  if (selectedKit) {
+    const pair = await DB.prepare(`
+      SELECT p.id AS pickId, p.due_line_id AS dueLineId,
+        p.picked_qty - p.dispatched_qty AS waitingQty,
+        t.id AS stockTagId, t.tag_id AS stockTagCode, t.material_code AS materialCode,
+        t.job_no AS jobNo, t.production_date AS productionDate
+      FROM stock_picks p
+      INNER JOIN stock_tags t ON t.id = p.stock_tag_id
+      WHERE p.id = ?1 AND t.tag_id = ?2
+        AND p.status IN ('staged', 'partial') AND p.picked_qty > p.dispatched_qty
+      LIMIT 1
+    `).bind(selectedKit.pickId, selectedKit.stockTagCode).first<{
+      pickId: number; dueLineId: number; waitingQty: number; stockTagId: number;
+      stockTagCode: string; materialCode: string; jobNo: string; productionDate: string;
+    }>();
+    if (!pair) {
+      return Response.json({ action: "verify", verdict: "pair_mismatch", tag, master, due: dueInfo, message: "KIT Tag ที่เลือกไม่มีงานรอขายแล้ว กรุณาสแกน KIT Tag ใหม่" });
+    }
+    pairedKit = pair;
+    stagedAvail = Number(pair.waitingQty);
+    if (Number(pair.dueLineId) !== Number(due.id)) {
+      return Response.json({ action: "verify", verdict: "pair_mismatch", tag, master, due: dueInfo, stagedAvail, pairedKit, message: "KIT Tag และ Tag ลูกค้าอยู่คนละ Due / รอบ / FAC" });
+    }
+    if (pair.materialCode !== tag.materialCode) {
+      return Response.json({ action: "verify", verdict: "pair_mismatch", tag, master, due: dueInfo, stagedAvail, pairedKit, message: `Part ไม่ตรงกัน: KIT Tag เป็น ${pair.materialCode} แต่ Tag ลูกค้าเป็น ${tag.materialCode}` });
+    }
+    if (Number(pair.waitingQty) !== Number(tag.qty)) {
+      return Response.json({ action: "verify", verdict: "pair_mismatch", tag, master, due: dueInfo, stagedAvail, pairedKit, message: `จำนวนไม่ตรงกัน: KIT Tag รอขาย ${pair.waitingQty} ชิ้น แต่ Tag ลูกค้า ${tag.qty} ชิ้น` });
+    }
+  }
 
   let verdict = "ready";
   let message = "ตรงกับงานที่ต้องส่งออก — เทียบรูปกับของจริงแล้วขายออกได้เลย";
@@ -233,7 +317,7 @@ async function verifyCustomerTag(rawPayload: string, scope?: DispatchScope | nul
     message = "ตรงกับงานที่ต้องส่งออก แต่ยังไม่มีรูป master ให้เทียบ — เพิ่มรูปได้ที่หน้าทะเบียน Part";
   }
 
-  return Response.json({ action: "verify", verdict, message, tag, master, due: dueInfo, stagedAvail, matchMode });
+  return Response.json({ action: "verify", verdict, message, tag, master, due: dueInfo, stagedAvail, pairedKit, matchMode });
 }
 
 export async function GET() {
@@ -311,7 +395,15 @@ export async function POST(request: Request) {
     if (payload.mode === "verify") return await verifyCustomerTag(payload.rawPayload ?? "");
     const dispatchScope = dispatchScopeFromPayload(payload);
     if (!dispatchScope) return Response.json({ error: "กรุณาเลือกวันที่ส่งงานก่อนตรวจและขายออก" }, { status: 400 });
-    if (payload.mode === "dispatch_verify") return await verifyCustomerTag(payload.rawPayload ?? "", dispatchScope);
+    if (payload.mode === "dispatch_kit_verify") return await verifyKitTag(payload.rawPayload ?? "", dispatchScope);
+    const selectedKit: SelectedKitTag = {
+      pickId: Number(payload.pickId),
+      stockTagCode: String(payload.stockTagCode ?? "").trim().toUpperCase(),
+    };
+    if (!Number.isSafeInteger(selectedKit.pickId) || selectedKit.pickId <= 0 || !selectedKit.stockTagCode) {
+      return Response.json({ error: "กรุณาสแกน KIT Tag ที่จัดงานแล้วก่อนสแกน Tag ลูกค้า" }, { status: 400 });
+    }
+    if (payload.mode === "dispatch_verify") return await verifyCustomerTag(payload.rawPayload ?? "", dispatchScope, selectedKit);
     if (!hasPermission(user, "dispatch-edit")) return Response.json({ error: "บัญชีนี้ดูข้อมูลได้ แต่ไม่มีสิทธิ์ขายออกและตัดยอด" }, { status: 403 });
     const tag = parseCustomerTag(payload.rawPayload ?? "");
     const db = getDb();
@@ -364,21 +456,23 @@ export async function POST(request: Request) {
         t.production_date AS productionDate, t.received_at AS receivedAt
       FROM stock_picks p
       INNER JOIN stock_tags t ON t.id = p.stock_tag_id
-      INNER JOIN delivery_due_lines pd ON pd.id = p.due_line_id
-      WHERE p.status IN ('staged', 'partial') AND p.picked_qty > p.dispatched_qty
+      WHERE p.id = ?3 AND t.tag_id = ?4
+        AND p.due_line_id = ?1
+        AND p.status IN ('staged', 'partial') AND p.picked_qty > p.dispatched_qty
         AND t.material_code = ?2
-        AND (
-          p.due_line_id = ?1 OR (
-            pd.do_no = ?3 AND pd.material_code = ?2 AND pd.delivery_date = ?4
-            AND pd.fact = ?5 AND pd.line = ?6 AND pd.shop = ?7
-          )
-        )
-      ORDER BY CASE WHEN p.due_line_id = ?1 THEN 0 ELSE 1 END, p.picked_at ASC, p.id ASC
-    `).bind(due.id, due.materialCode, due.doNo, due.deliveryDate, due.fact, due.line, due.shop).all<{
+      LIMIT 1
+    `).bind(due.id, due.materialCode, selectedKit.pickId, selectedKit.stockTagCode).all<{
       id: number; stockTagId: number; pickedQty: number; dispatchedQty: number;
       pickedByName: string; pickedAt: string; stockTagCode: string; materialCode: string;
       jobNo: string; productionDate: string; receivedAt: string | null;
     }>();
+    if (staged.results.length !== 1) {
+      return Response.json({ error: "KIT Tag ที่สแกนไม่ตรงกับ Due นี้ หรือไม่มีงานรอขายแล้ว กรุณาสแกนใหม่" }, { status: 409 });
+    }
+    const selectedWaitingQty = Number(staged.results[0].pickedQty) - Number(staged.results[0].dispatchedQty);
+    if (selectedWaitingQty !== tag.qty) {
+      return Response.json({ error: `จำนวนไม่ตรงกัน: KIT Tag รอขาย ${selectedWaitingQty} ชิ้น แต่ Tag ลูกค้า ${tag.qty} ชิ้น` }, { status: 409 });
+    }
     let needed = tag.qty;
     const consumed: Array<(typeof staged.results)[number] & { qty: number }> = [];
     for (const pick of staged.results) {
