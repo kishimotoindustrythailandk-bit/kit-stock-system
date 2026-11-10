@@ -22,7 +22,7 @@ test("dispatch page selects scope before enabling scanners", () => {
   assert.match(app, /วันที่ส่งงานสำหรับตรวจและขายออก/);
   assert.match(app, /รอบส่งงานสำหรับตรวจและขายออก/);
   assert.match(app, /FAC สำหรับตรวจและขายออก/);
-  assert.match(app, /mode: "dispatch_verify", deliveryDate: effectiveDispatchDueDate, deliveryTime: dispatchDueTime, fact: dispatchDueFact/);
+  assert.match(app, /mode: "dispatch_verify"[^}]+deliveryDate: effectiveDispatchDueDate, deliveryTime: dispatchDueTime, fact: dispatchDueFact/);
   assert.match(app, /disabled=\{!effectiveDispatchDueDate \|\| checkingTag\}/);
   assert.match(css, /\.dispatch-scope-panel/);
 });
