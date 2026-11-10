@@ -1,5 +1,5 @@
-Warning: truncated output (original token count: 107436)
-Total output lines: 4718
+Warning: truncated output (original token count: 108818)
+Total output lines: 4775
 
 "use client";
 
@@ -348,7 +348,7 @@ const PAGE_SUBTITLE: Record<PageKey, string> = {
   arrange: "ผู้จัดงานเลือก Due แล้วยิง KIT Stock Tag เพื่อบันทึกงานรอขาย",
   replacement: "QC แจ้งขอเบิกงานทดแทน ทีมจัดงานยิง KIT Tag และพิมพ์ใบแจ้งออก",
   verify: "สแกนชิ้นงานในกล่องเพื่อเทียบรูป master และงานที่ต้องส่งออก ก่อนยืนยันขายออก",
-  dispatch: "ผู้ตรวจยิง Tag ลูกค้าเพื่อขายออก ตัด Stock และ Due",
+  dispatch: "ผู้ตรวจสแกน KIT Tag ที่จัดงานแล้วและ Tag ลูกค้าให้ตรงกันก่อนขายออก",
   exports: "รายการที่ตัดยอดและส่งออกแล้ว",
   reports: "สรุปผลการส่งงานตามวันและโรงงาน",
   history: "ตรวจสอบประวัติการสแกนและตัดยอด",
@@ -356,7 +356,13 @@ const PAGE_SUBTITLE: Record<PageKey, string> = {
   users: "ผู้ใช้งานที่มีสิทธิ์เข้าถึงระบบ",
 };
 
-type VerifyVerdict = "ready" | "ready_noimg" | "short" | "over" | "no_due" | "ambiguous" | "already" | "bad_tag";
+type VerifyVerdict = "ready" | "ready_noimg" | "short" | "over" | "no_due" | "ambiguous" | "already" | "bad_tag" | "pair_mismatch";
+type DispatchKitSelection = {
+  pickId: number; dueLineId: number; waitingQty: number; pickedByName: string; pickedAt: string;
+  stockTagId: number; stockTagCode: string; materialCode: string; jobNo: string;
+  productionDate: string; doNo: string; seq: number; fact: string; line: string;
+  shop: string; deliveryDate: string; deliveryTime: string;
+};
 type VerifyResult = {
   action: "verify";
   verdict: VerifyVerdict;
@@ -365,6 +371,7 @@ type VerifyResult = {
   master?: { materialCode: string; partName: string; customer: string; hasImage: boolean };
   due?: { id: number; doNo: string; seq: number; materialCode: string; materialDescription: string; fact: string; line: string; shop: string; site: string; reqQty: number; deliveryDate: string; deliveryTime: string; alreadyQty: number; remainingDue: number; projectedQty: number; remainingAfter: number };
   stagedAvail?: number;
+  pairedKit?: { pickId?: number; stockTagId?: number; stockTagCode?: string; materialCode?: string; jobNo?: string; productionDate?: string; waitingQty?: number };
 };
 
 function number(value: unknown) {
@@ -780,6 +787,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   const [rawTag, setRawTag] = useState("");
   const [tagPreview, setTagPreview] = useState<TagPreview | null>(null);
   const [dispatchConfirmation, setDispatchConfirmation] = useState<VerifyResult | null>(null);
+  const [dispatchKitSelection, setDispatchKitSelection] = useState<DispatchKitSelection | null>(null);
   const [dispatchDueDate, setDispatchDueDate] = useState("");
   const [dispatchDueTime, setDispatchDueTime] = useState("");
   const [dispatchDueFact, setDispatchDueFact] = useState("");
@@ -1021,7 +1029,571 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   async function loadForecast() {
     setForecastLoading(true);
     try {
-      const respon…77436 tokens truncated…etHistoryType(tab.key)}><span>{tab.label}</span><b>{fmt(tab.count)}</b></button>)}</div>
+      const response = await fetch("/api/forecast", { cache: "no-store" });
+      const data = await response.json() as ForecastPayload;
+      if (!response.ok) throw new Error(data.error || "โหลด Forecast Stock ไม่สำเร็จ");
+      setForecast({
+        activeImport: data.activeImport || null,
+        imports: data.imports || [],
+        coverage: data.coverage || [],
+        summary: data.summary || null,
+        trend: data.trend || [],
+        calculatedAt: data.calculatedAt,
+      });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "โหลด Forecast Stock ไม่สำเร็จ" });
+    } finally {
+      setForecastLoading(false);
+    }
+  }
+
+  async function loadAuditLogs() {
+    setAuditLogsLoading(true);
+    try {
+      const response = await fetch("/api/audit-logs?limit=2000", { cache: "no-store" });
+      const data = await response.json() as { logs?: AuditLog[]; error?: string };
+      if (!response.ok) throw new Error(data.error || "โหลดประวัติการดำเนินการไม่สำเร็จ");
+      setAuditLogs(data.logs || []);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "โหลดประวัติการดำเนินการไม่สำเร็จ" });
+    } finally {
+      setAuditLogsLoading(false);
+    }
+  }
+
+  async function prepareForecastFile(selected: File | null) {
+    setForecastFile(selected);
+    setForecastPreview(null);
+    if (!selected) return;
+    if (!selected.name.toLowerCase().endsWith(".csv")) {
+      setForecastFile(null);
+      setNotice({ type: "error", text: "รองรับเฉพาะไฟล์ Forecast .csv" });
+      return;
+    }
+    setForecastParsing(true);
+    try {
+      const parsed = await parseForecastFile(selected);
+      setForecastPreview(parsed);
+    } catch (caught) {
+      setForecastFile(null);
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "อ่านไฟล์ Forecast ไม่สำเร็จ" });
+    } finally {
+      setForecastParsing(false);
+    }
+  }
+
+  async function selectForecastFile(event: ChangeEvent<HTMLInputElement>) {
+    await prepareForecastFile(event.target.files?.[0] || null);
+    event.target.value = "";
+  }
+
+  async function importForecast() {
+    if (!forecastFile || !forecastPreview || forecastImporting) return;
+    setForecastImporting(true);
+    setForecastProgress(0);
+    let importId = 0;
+    try {
+      const importToken = [forecastFile.name, forecastFile.size, forecastFile.lastModified, forecastPreview.sourceCalculatedAt].join("|");
+      const beginResponse = await fetch("/api/forecast", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "begin_import", importToken, fileName: forecastFile.name,
+          sourceCalculatedAt: forecastPreview.sourceCalculatedAt,
+        }),
+      });
+      const begin = await beginResponse.json() as { importId?: number; error?: string };
+      if (!beginResponse.ok || !begin.importId) throw new Error(begin.error || "เริ่มนำเข้า Forecast ไม่สำเร็จ");
+      importId = begin.importId;
+      const chunkSize = 100;
+      for (let offset = 0; offset < forecastPreview.rows.length; offset += chunkSize) {
+        const rows = forecastPreview.rows.slice(offset, offset + chunkSize);
+        const response = await fetch("/api/forecast", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "append_rows", importId, rows }),
+        });
+        const data = await response.json() as { error?: string };
+        if (!response.ok) throw new Error(data.error || `นำเข้าข้อมูลชุดที่ ${Math.floor(offset / chunkSize) + 1} ไม่สำเร็จ`);
+        setForecastProgress(Math.min(99, Math.round(((offset + rows.length) / forecastPreview.rows.length) * 100)));
+      }
+      const finalizeResponse = await fetch("/api/forecast", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "finalize_import", importId }),
+      });
+      const finalized = await finalizeResponse.json() as { error?: string };
+      if (!finalizeResponse.ok) throw new Error(finalized.error || "ยืนยัน Forecast ชุดใหม่ไม่สำเร็จ");
+      setForecastProgress(100);
+      setForecastFile(null);
+      setForecastPreview(null);
+      setNotice({ type: "success", text: "นำเข้า Forecast ชุดใหม่และคำนวณระยะ Stock เรียบร้อย" });
+      await loadForecast();
+    } catch (caught) {
+      if (importId) {
+        await fetch("/api/forecast", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "cancel_import", importId }),
+        }).catch(() => undefined);
+      }
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "นำเข้า Forecast ไม่สำเร็จ" });
+    } finally {
+      setForecastImporting(false);
+    }
+  }
+
+  async function loadReplacements() {
+    setReplacementLoading(true);
+    try {
+      const response = await fetch("/api/replacements", { cache: "no-store" });
+      const data = await response.json() as ReplacementPayload & { error?: string };
+      if (!response.ok) throw new Error(data.error || "โหลดใบขอเบิกงานทดแทนไม่สำเร็จ");
+      setReplacement({ requests: data.requests || [], issues: data.issues || [] });
+      setReplacementSelectedId((current) => {
+        if (current && (data.requests || []).some((item) => String(item.id) === current && !["completed", "cancelled"].includes(item.status))) return current;
+        const firstOpen = (data.requests || []).find((item) => item.status === "pending" || item.status === "partial");
+        return firstOpen ? String(firstOpen.id) : "";
+      });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "โหลดใบขอเบิกงานทดแทนไม่สำเร็จ" });
+    } finally {
+      setReplacementLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!hasDueDataPermission) return;
+    const timer = window.setTimeout(() => void loadDue(), 0);
+    return () => window.clearTimeout(timer);
+  }, [hasDueDataPermission]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (page !== "overdue" || !allowedPages.has("overdue")) return;
+    const refresh = () => { if (document.visibilityState === "visible") void loadDue(); };
+    const timer = window.setInterval(refresh, 30_000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", refresh); };
+  }, [page, allowedPages]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!["stock", "manual-stock", "stock-count", "parts", "tags", "arrange", "replacement", "dispatch", "reports", "history"].includes(page)) return;
+    const timer = window.setTimeout(() => void loadStock(), 0);
+    return () => window.clearTimeout(timer);
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== "forecast") return;
+    const timer = window.setTimeout(() => void loadForecast(), 0);
+    return () => window.clearTimeout(timer);
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== "replacement") return;
+    const timer = window.setTimeout(() => void loadReplacements(), 0);
+    return () => window.clearTimeout(timer);
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== "history" || !allowedPages.has("history")) return;
+    const timer = window.setTimeout(() => void loadAuditLogs(), 0);
+    return () => window.clearTimeout(timer);
+  }, [page, allowedPages]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (page !== "users" || user.role !== "admin" || !allowedPages.has("users")) return;
+    const timer = window.setTimeout(() => void loadUsers(), 0);
+    return () => window.clearTimeout(timer);
+  }, [page, user.role, allowedPages]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const stored = window.localStorage.getItem("kit-due-settings");
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored) as Partial<typeof settings>;
+          setSettings((current) => ({ ...current, ...parsed, sound: parsed.sound !== false }));
+        } catch { /* use defaults */ }
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  async function loadUsers() {
+    if (user.role !== "admin" || !allowedPages.has("users")) return;
+    setUsersLoading(true);
+    try {
+      const response = await fetch("/api/users", { cache: "no-store" });
+      const data = await response.json() as { users?: SystemUser[]; error?: string };
+      if (!response.ok) throw new Error(data.error || "โหลดผู้ใช้งานไม่สำเร็จ");
+      setSystemUsers(data.users || []);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "โหลดผู้ใช้งานไม่สำเร็จ" });
+    } finally {
+      setUsersLoading(false);
+    }
+  }
+
+  async function loadPartImages() {
+    if (!allowedPages.has("parts") && !allowedPages.has("settings")) return;
+    setPartImagesLoading(true);
+    try {
+      const [masterRes, actualRes] = await Promise.all([
+        fetch("/api/part-images", { cache: "no-store" }),
+        fetch("/api/part-images?slot=actual", { cache: "no-store" }),
+      ]);
+      const data = await masterRes.json() as { images?: PartImageMapping[]; error?: string };
+      if (!masterRes.ok) throw new Error(data.error || "โหลดรายการรูปไม่สำเร็จ");
+      setPartImages(data.images || []);
+      const actualData = await actualRes.json() as { images?: PartImageMapping[]; error?: string };
+      if (actualRes.ok) setPartActualImages(actualData.images || []);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "โหลดรายการรูปไม่สำเร็จ" });
+    } finally {
+      setPartImagesLoading(false);
+    }
+  }
+
+  async function uploadPartImage(event: FormEvent) {
+    event.preventDefault();
+    if (!partImageCode.trim() || !partImageFile) return;
+    setPartImageSaving(true);
+    setNotice(null);
+    try {
+      const form = new FormData();
+      form.set("materialCode", partImageCode.trim().toUpperCase());
+      form.set("image", partImageFile);
+      const response = await fetch("/api/part-images", { method: "POST", body: form });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || "อัปโหลดรูปไม่สำเร็จ");
+      setNotice({ type: "success", text: `บันทึกรูป ${partImageCode.trim().toUpperCase()} แล้ว รูปจะแสดงทันทีเมื่อสแกน` });
+      setPartImageCode("");
+      setPartImageFile(null);
+      await loadPartImages();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "อัปโหลดรูปไม่สำเร็จ" });
+    } finally {
+      setPartImageSaving(false);
+    }
+  }
+
+  /**
+   * แปลงชื่อไฟล์เป็น Material Code
+   *
+   * ตัดนามสกุลออก ตัดเลขสำเนาแบบ " (1)" ที่ Windows เติมให้เวลาชื่อซ้ำ
+   * แล้วแปลงเป็นตัวพิมพ์ใหญ่ ให้ตรงกับที่ระบบเก็บ Part No.
+   */
+  function materialCodeFromFileName(name: string) {
+    return name
+      .replace(/\.[^.]+$/, "")
+      .replace(/\s*\(\d+\)\s*$/, "")
+      .trim()
+      .toUpperCase();
+  }
+
+  /**
+   * อัปโหลดรูป Master และรูปชิ้นงานในกล่องหลายไฟล์ในรอบเดียว
+   * โดยใช้ชื่อไฟล์ (ไม่รวมนามสกุล) เป็น Material Code
+   */
+  async function uploadPartImagesBulk(event: FormEvent) {
+    event.preventDefault();
+    const uploads = [
+      ...bulkMasterImageFiles.map((file) => ({ file, slot: "master" as const, label: "Master" })),
+      ...bulkActualImageFiles.map((file) => ({ file, slot: "actual" as const, label: "รูปในกล่อง" })),
+    ];
+    if (!uploads.length) return;
+    setBulkImageRunning(true);
+    setNotice(null);
+    setBulkImageFailed([]);
+    setBulkImageProgress({ done: 0, total: uploads.length });
+
+    const failed: Array<{ name: string; reason: string }> = [];
+    let saved = 0;
+
+    for (const [index, upload] of uploads.entries()) {
+      const materialCode = materialCodeFromFileName(upload.file.name);
+      try {
+        if (!materialCode) throw new Error("ชื่อไฟล์ว่าง ตั้งชื่อไฟล์ให้ตรงกับ Part No.");
+        if (!stock.parts.some((part) => part.materialCode === materialCode)) {
+          throw new Error(`ไม่พบ Part ${materialCode} ในทะเบียน`);
+        }
+        const form = new FormData();
+        form.set("materialCode", materialCode);
+        form.set("slot", upload.slot);
+        form.set("image", upload.file);
+        const response = await fetch("/api/part-images", { method: "POST", body: form });
+        const data = await response.json() as { error?: string };
+        if (!response.ok) throw new Error(data.error || "อัปโหลดไม่สำเร็จ");
+        saved += 1;
+      } catch (caught) {
+        failed.push({ name: `${upload.label} · ${upload.file.name}`, reason: caught instanceof Error ? caught.message : "อัปโหลดไม่สำเร็จ" });
+      }
+      setBulkImageProgress({ done: index + 1, total: uploads.length });
+    }
+
+    setBulkImageFailed(failed);
+    setNotice(failed.length
+      ? { type: "error", text: `อัปโหลดสำเร็จ ${fmt(saved)} รูป ไม่สำเร็จ ${fmt(failed.length)} รูป ดูรายการด้านล่าง` }
+      : { type: "success", text: `อัปโหลดรูป Master และรูปในกล่องสำเร็จทั้งหมด ${fmt(saved)} รูป` });
+    setBulkMasterImageFiles([]);
+    setBulkActualImageFiles([]);
+    setBulkImageRunning(false);
+    await loadPartImages();
+  }
+
+  async function deletePartImage(materialCode: string) {
+    if (!window.confirm(`ลบรูปของ ${materialCode} ใช่หรือไม่?`)) return;
+    const response = await fetch("/api/part-images", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ materialCode }) });
+    const data = await response.json() as { error?: string };
+    if (!response.ok) return setNotice({ type: "error", text: data.error || "ลบรูปไม่สำเร็จ" });
+    setNotice({ type: "success", text: `ลบรูป ${materialCode} แล้ว` });
+    await loadPartImages();
+  }
+
+  async function saveUser(event: FormEvent) {
+    event.preventDefault();
+    if (!userForm.permissions.length) {
+      setNotice({ type: "error", text: "กรุณาเลือกสิทธิ์เข้าใช้งานอย่างน้อย 1 หน้า" });
+      return;
+    }
+    setUserSaving(true);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/users", {
+        method: userForm.id ? "PATCH" : "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...userForm, permissions: [...new Set([...userForm.permissions, "permission-model-v2" as const])] }),
+      });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || "บันทึกผู้ใช้งานไม่สำเร็จ");
+      setNotice({ type: "success", text: userForm.id ? "แก้ไขผู้ใช้งานเรียบร้อย" : "เพิ่มผู้ใช้งานเรียบร้อย สามารถเข้าสู่ระบบได้ทันที" });
+      setUserForm(EMPTY_USER);
+      setUserEditorOpen(false);
+      await loadUsers();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "บันทึกผู้ใช้งานไม่สำเร็จ" });
+    } finally {
+      setUserSaving(false);
+    }
+  }
+
+  function editUser(target: SystemUser) {
+    setUserForm({
+      id: target.id, employeeCode: target.employeeCode, displayName: target.displayName,
+      email: target.email, role: target.role as UserRole, pin: "",
+      active: target.active, permissions: [...(target.permissions || [])],
+    });
+    setUserEditorOpen(true);
+  }
+
+  async function toggleUser(target: SystemUser) {
+    const response = await fetch("/api/users", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: target.id, active: !target.active }) });
+    const data = await response.json() as { error?: string };
+    if (!response.ok) return setNotice({ type: "error", text: data.error || "เปลี่ยนสถานะไม่สำเร็จ" });
+    setNotice({ type: "success", text: `${target.active ? "ระงับ" : "เปิดใช้"}บัญชี ${target.employeeCode} แล้ว` });
+    await loadUsers();
+  }
+
+  useEffect(() => {
+    if (!cameraOpen) return;
+    const videoElement = videoRef.current;
+    let stopped = false;
+    let scannerControls: { stop(): void } | null = null;
+    const handleCameraValue = (value: string) => {
+      setCameraOpen(false);
+      if (cameraPurpose === "stock") {
+        setStockScan(value);
+        void receiveStockTag(value);
+        return;
+      }
+      if (cameraPurpose === "stock-count") {
+        setStockCountForm((current) => ({ ...current, rawPayload: value }));
+        void loadStockCountTag(value);
+        return;
+      }
+      if (page === "verify") {
+        setVerifyRaw(value);
+        setVerifyResult(null);
+        void verifyTag(value);
+        return;
+      }
+      if (page === "replacement") {
+        setReplacementTag(value);
+        setReplacementPreview(null);
+        void previewReplacementIssue(value);
+        return;
+      }
+      if (page === "arrange") {
+        setArrangeTag(value);
+        setArrangementPreview(null);
+        void stageStockTag(value);
+      } else {
+        setRawTag(value);
+        setTagPreview(null);
+        void handleDispatchScan(value);
+      }
+    };
+    async function start() {
+      try {
+        setCameraError("");
+        if (!navigator.mediaDevices?.getUserMedia || !videoElement) …68818 tokens truncated…${item.totalShortage > 0 ? "danger" : ""}`}><b>{fmt(item.totalShortage)}</b></td>
+          <td data-label="สถานะ"><span className={`forecast-status ${item.status}`}>{statusLabel(item)}</span></td>
+        </tr>)}</tbody></table></div> : <Empty title="ไม่พบรายการตามตัวกรอง" text="ลองเปลี่ยนคำค้นหาหรือสถานะ" />}
+      </Card>}
+
+      {forecast.imports.length > 0 && <Card className="forecast-history-card" title="ประวัติไฟล์ Forecast">
+        <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>ชื่อไฟล์</th><th>วันที่นำเข้า</th><th>ผู้นำเข้า</th><th>Last Calculate DO</th><th className="num">จำนวน Part</th><th>สถานะ</th></tr></thead><tbody>{forecast.imports.map((item) => <tr key={item.id}><td data-label="ชื่อไฟล์"><b>{item.fileName}</b></td><td data-label="วันที่นำเข้า">{formatDateTime(item.createdAt)}</td><td data-label="ผู้นำเข้า">{item.importedByName}</td><td data-label="Last Calculate DO">{formatDateTime(item.sourceCalculatedAt)}</td><td data-label="จำนวน Part" className="num">{fmt(item.materialCount)}</td><td data-label="สถานะ"><span className={`forecast-status ${item.status === "active" ? "covered" : "archived"}`}>{item.status === "active" ? "ใช้งานอยู่" : "ประวัติ"}</span></td></tr>)}</tbody></table></div>
+      </Card>}
+    </div>;
+  }
+
+  function renderExports() {
+    const exported = filtered.filter((due) => Number(due.scannedQty) > 0);
+    const full = exported.filter((due) => stateOf(due) === "completed").length;
+    const part = exported.filter((due) => stateOf(due) === "partial").length;
+    const over = exported.filter((due) => stateOf(due) === "over").length;
+    return <div className="exports-page-redesign">
+      <Card className="exports-filter-card"><Filters /></Card>
+      <div className="metrics five reports-metrics exports-metrics page-summary"><MetricCard tone="blue" icon="▤" label="ส่งออกทั้งหมด" value={fmt(exported.length)} suffix="รายการ" /><MetricCard tone="green" icon="✓" label="ส่งออกครบ" value={fmt(full)} suffix="รายการ" /><MetricCard tone="orange" icon="◷" label="บางส่วน" value={fmt(part)} suffix="รายการ" /><MetricCard tone="red" icon="×" label="เกินดิวจัดส่ง" value={fmt(over)} suffix="รายการ" /><MetricCard tone="purple" icon="◇" label="รวมจำนวน" value={fmt(exported.reduce((sum, due) => sum + Number(due.scannedQty), 0))} suffix="ชิ้น" /></div>
+      <Card className="exports-list-card" title={<span className="exports-list-title"><i>≡</i><span>รายการส่งออก<small>รายการสินค้าที่ส่งออกจากคลังไปยังลูกค้าหรือสายการผลิต</small></span></span>} action={<div className="exports-list-actions"><button className="button success" onClick={() => void exportDeliveryExcel()}>▦ ส่งออก Excel</button><button className="button primary" onClick={exportCsv}>▤ ส่งออก CSV</button></div>}>
+        <DueTable rows={exported} />
+        <footer className="exports-list-footer"><span>แสดง {fmt(exported.length)} รายการ</span><span>{filterDate ? formatDate(filterDate) : "ทุกวันที่"} · {filterFact === "ALL" ? "ทุก FAC" : filterFact} · {filterTime === "ALL" ? "ทุกเวลา" : filterTime}</span></footer>
+      </Card>
+      <footer className="settings-footer"><span>© 2026 KIT Delivery Due Control. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
+    </div>;
+  }
+
+  function renderReports() {
+    const maxFac = Math.max(...facStats.map((item) => item.items), 1);
+    const recentDays = dailyStats.slice(-7);
+    const maxDaily = Math.max(...recentDays.map((item) => item.items), 1);
+    return <div className="reports-page-redesign">
+      <Card className="reports-filter-card" action={<button className="button primary reports-refresh-button" onClick={() => void loadDue()}>↻ รีเฟรช</button>}><Filters /></Card>
+      <div className="metrics five reports-metrics page-summary"><MetricCard tone="blue" icon="▤" label="แผนทั้งหมด" value={fmt(summary.items)} suffix="รายการ" /><MetricCard tone="green" icon="✓" label="ครบตามแผน" value={fmt(summary.completed)} suffix="รายการ" /><MetricCard tone="orange" icon="◷" label="คงเหลือ" value={fmt(summary.partial + summary.pending)} suffix="รายการ" /><MetricCard tone="red" icon="!" label="เกินดิวจัดส่ง" value={fmt(summary.over)} suffix="รายการ" /><MetricCard tone="purple" icon="◇" label="ส่งแล้วรวม" value={fmt(summary.sent)} suffix="ชิ้น" /></div>
+      <div className="reports-dashboard-grid">
+        <Card className="reports-chart-card" title="สัดส่วนสถานะการส่งงาน"><div className="donut-layout"><div className="donut" style={{ "--complete": `${completePct * 3.6}deg` } as React.CSSProperties}><span><b>{summary.items}</b>รายการ</span></div><div className="legend"><p><i className="green" />ครบตามแผน <b>{summary.completed}</b></p><p><i className="orange" />คงเหลือ <b>{summary.partial + summary.pending}</b></p><p><i className="red" />เกินดิวจัดส่ง <b>{summary.over}</b></p><p><i className="purple" />ส่งแล้วรวม <b>{fmt(summary.sent)}</b></p></div></div></Card>
+        <Card className="reports-chart-card" title="ส่งออกตาม FAC / Line"><div className="bar-chart reports-fac-chart">{facStats.length ? facStats.slice(0, 7).map((item) => <div key={item.fact}><b>{item.fact}</b><span><i style={{ width: `${Math.max(4, item.items / maxFac * 100)}%` }} /></span><strong>{item.items}</strong></div>) : <Empty title="ยังไม่มีข้อมูล" text="ลองปรับช่วงวันที่หรือโรงงาน" />}</div></Card>
+        <Card className="reports-chart-card reports-trend-card" title="แนวโน้มการส่งงาน" action={<div className="reports-export-tools"><button className="export-button excel" onClick={() => void exportReportExcel()}><span>▦</span><b>Excel</b><small>.xlsx</small></button><button className="export-button pdf" onClick={exportReportPdf}><span>▤</span><b>PDF</b><small>พิมพ์ / บันทึก</small></button><button className="export-button csv" onClick={exportReportCsv}><span>≡</span><b>CSV</b><small>.csv</small></button></div>}>
+          {recentDays.length ? <><div className="reports-trend-chart">{recentDays.map((row) => <div key={row.date}><span><i className="planned" style={{ height: `${Math.max(5, row.items / maxDaily * 100)}%` }} /><i className="finished" style={{ height: `${Math.max(row.completed ? 5 : 0, row.completed / maxDaily * 100)}%` }} /></span><small>{formatDate(row.date).slice(0, 5)}</small></div>)}</div><div className="reports-chart-legend"><span><i className="planned" />ตามแผน</span><span><i className="finished" />ส่งแล้ว</span></div></> : <Empty title="ยังไม่มีข้อมูล" text="เลือกช่วงวันที่เพื่อแสดงแนวโน้ม" />}
+        </Card>
+      </div>
+      <div className="reports-tables-grid">
+        <Card className="reports-table-card" title="สรุปการส่งออกตามวัน" action={<span className="reports-current-filter">◉ {filterDate ? formatDate(filterDate) : "ดูทั้งหมด"}</span>}>{dailyStats.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>วันที่</th><th className="num">แผนทั้งหมด</th><th className="num">ส่งแล้ว</th><th className="num">คงเหลือ</th><th className="num">เกินคิว</th></tr></thead><tbody>{dailyStats.slice(0, 8).map((row) => <tr key={row.date}><td data-label="วันที่"><b>{formatDate(row.date)}</b></td><td data-label="แผนทั้งหมด" className="num">{row.items}</td><td data-label="ส่งแล้ว" className="num sent">{row.completed}</td><td data-label="คงเหลือ" className="num warning">{row.partial + row.pending}</td><td data-label="เกินคิว" className="num danger">{row.over}</td></tr>)}</tbody></table></div> : <Empty title="ยังไม่มีข้อมูล" text="ในช่วงวันที่ที่เลือก" />}</Card>
+        <Card className="reports-table-card" title="รายการที่ยังไม่ครบ (สูงสุด)" action={<span className="reports-current-filter">◉ {filterFact === "ALL" ? "ดูทั้งหมด" : filterFact}</span>}><DueTable rows={filtered.filter((due) => ["pending", "partial", "over"].includes(stateOf(due))).sort((a, b) => (b.reqQty - b.scannedQty) - (a.reqQty - a.scannedQty))} limit={5} /></Card>
+      </div>
+      <footer className="settings-footer"><span>© 2026 KIT Delivery Due Control. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
+    </div>;
+  }
+
+  function renderHistory() {
+    const activities: Array<{ id: string; createdAt: string; action: string; detail: string; actor: string; tone: string; kind: string }> = [];
+    payload.imports.forEach((item) => activities.push({
+      id: "import-" + item.id, createdAt: item.createdAt, action: "นำเข้าแผนส่งงาน",
+      detail: item.fileName + " · " + fmt(item.rowCount) + " รายการ", actor: item.importedByName || "—", tone: "purple", kind: "import",
+    }));
+    stock.tags.forEach((item) => {
+      activities.push({
+        id: "tag-" + item.id, createdAt: item.createdAt, action: "ออกและพิมพ์ Tag",
+        detail: item.tagId + " · " + item.materialCode + " · Job " + item.jobNo + " · " + fmt(item.qty) + " ชิ้น",
+        actor: item.printedByName || "—", tone: "blue", kind: "tag",
+      });
+      if (item.receivedAt) activities.push({
+        id: "receive-" + item.id, createdAt: item.receivedAt, action: "รับงานเข้า Stock",
+        detail: item.tagId + " · " + item.materialCode + " · " + fmt(item.qty) + " ชิ้น",
+        actor: item.receivedByName || "—", tone: "green", kind: "receive",
+      });
+    });
+    stock.picks.forEach((item) => activities.push({
+      id: "pick-" + item.id, createdAt: item.pickedAt, action: "จัดงาน",
+      detail: item.stockTagCode + " · " + item.materialCode + " · Job " + item.jobNo + " · " + fmt(item.pickedQty) + " ชิ้น",
+      actor: item.pickedByName || "—", tone: "orange", kind: "arrange",
+    }));
+    payload.scans.forEach((item) => activities.push({
+      id: "dispatch-" + item.id, createdAt: item.createdAt, action: "ตรวจและขายออก",
+      detail: item.tagId + " · " + item.materialCode + " · " + fmt(item.qty) + " " + item.unit,
+      actor: item.scannedByName || "—", tone: "red", kind: "dispatch",
+    }));
+    const auditKind = (action: string) => {
+      if (/warning/.test(action)) return "warning";
+      if (/delete|remove|clear|cancel/.test(action)) return "delete";
+      if (/permission|role|user_access/.test(action)) return "permission";
+      if (/import/.test(action)) return "import";
+      if (/login|logout|pin/.test(action)) return "security";
+      if (/create|add|print|receive|stage|dispatch|issue/.test(action)) return "create";
+      return "update";
+    };
+    const auditTone = (kind: string) => kind === "warning" ? "orange" : kind === "delete" ? "red" : kind === "permission" ? "purple" : kind === "import" ? "blue" : kind === "security" ? "orange" : kind === "create" ? "green" : "blue";
+    const auditActivities = auditLogs.map((item) => {
+      const kind = auditKind(item.actionKey);
+      const identity = item.entityId ? ` · ${item.entityId}` : "";
+      return {
+        id: `audit-${item.id}`, createdAt: item.createdAt, action: item.actionLabel,
+        detail: `${item.moduleLabel}${identity} · ${item.summary}`,
+        actor: item.actorName ? `${item.actorName}${item.actorCode ? ` (${item.actorCode})` : ""}` : "ระบบ",
+        tone: auditTone(kind), kind,
+      };
+    });
+    if (auditActivities.length) {
+      const oldestAudit = auditActivities.reduce((oldest, item) => item.createdAt < oldest ? item.createdAt : oldest, auditActivities[0].createdAt);
+      const legacyActivities = activities.filter((item) => item.createdAt < oldestAudit);
+      legacyActivities.forEach((item) => { if (item.kind !== "import") item.kind = "create"; });
+      activities.length = 0;
+      activities.push(...auditActivities, ...legacyActivities);
+    } else activities.forEach((item) => { if (item.kind !== "import") item.kind = "create"; });
+    activities.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    const historyNeedle = historyQuery.trim().toLowerCase();
+    const activityLocalDate = (value: string) => {
+      const date = toLocalDate(value);
+      if (!date) return "";
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
+    const filteredActivities = activities.filter((item) =>
+      (historyType === "all" || item.kind === historyType)
+      && (!historyDate || activityLocalDate(item.createdAt) >= historyDate)
+      && (!historyDateTo || activityLocalDate(item.createdAt) <= historyDateTo)
+      && (!historyNeedle || [item.action, item.detail, item.actor, item.createdAt].some((value) => String(value || "").toLowerCase().includes(historyNeedle)))
+    );
+    const historyTabs = [
+      { key: "all", label: "ทั้งหมด", count: activities.length },
+      { key: "warning", label: "แจ้งเตือน", count: activities.filter((item) => item.kind === "warning").length },
+      { key: "create", label: "เพิ่ม / ทำรายการ", count: activities.filter((item) => item.kind === "create").length },
+      { key: "import", label: "นำเข้าไฟล์", count: activities.filter((item) => item.kind === "import").length },
+      { key: "update", label: "แก้ไขข้อมูล", count: activities.filter((item) => item.kind === "update").length },
+      { key: "delete", label: "ลบข้อมูล", count: activities.filter((item) => item.kind === "delete").length },
+      { key: "permission", label: "สิทธิ์ผู้ใช้", count: activities.filter((item) => item.kind === "permission").length },
+      { key: "security", label: "เข้าสู่ระบบ / PIN", count: activities.filter((item) => item.kind === "security").length },
+    ];
+    const shownActivities = filteredActivities.slice(0, 250);
+    async function exportHistoryExcel() {
+      try {
+        const xlsx = await import("xlsx");
+        const rows = [
+          ["วันและเวลา", "ประเภท", "รายละเอียด", "ผู้ดำเนินการ", "สถานะ"],
+          ...filteredActivities.map((item) => [formatDateTime(item.createdAt), item.action, item.detail, item.actor, "บันทึกแล้ว"]),
+        ];
+        const sheet = xlsx.utils.aoa_to_sheet(rows);
+        sheet["!cols"] = [22, 24, 70, 24, 16].map((wch) => ({ wch }));
+        const workbook = xlsx.utils.book_new();
+        xlsx.utils.book_append_sheet(workbook, sheet, "ประวัติการดำเนินการ");
+        xlsx.writeFile(workbook, `KIT-history-${new Date().toISOString().slice(0, 10)}.xlsx`);
+        void recordClientAudit("export_history", `ส่งออกประวัติ Excel ${filteredActivities.length} รายการ`, { itemCount: filteredActivities.length, historyType, historyDate, historyDateTo });
+        setNotice({ type: "success", text: `ส่งออกประวัติแล้ว ${fmt(filteredActivities.length)} รายการ` });
+      } catch (caught) {
+        setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ส่งออกประวัติไม่สำเร็จ" });
+      }
+    }
+    const summaryCards = [
+      { tone: "purple", icon: "◎", label: "ประวัติทั้งหมด", value: activities.length, suffix: "รายการ", art: "▤" },
+      { tone: "blue", icon: "⇧", label: "นำเข้าไฟล์", value: activities.filter((item) => item.kind === "import").length, suffix: "ครั้ง", art: "▥" },
+      { tone: "green", icon: "+", label: "เพิ่ม / ทำรายการ", value: activities.filter((item) => item.kind === "create").length, suffix: "รายการ", art: "□" },
+      { tone: "orange", icon: "✎", label: "แก้ไข / สิทธิ์", value: activities.filter((item) => item.kind === "update" || item.kind === "permission").length, suffix: "รายการ", art: "▣" },
+      { tone: "red", icon: "×", label: "ลบข้อมูล", value: activities.filter((item) => item.kind === "delete").length, suffix: "รายการ", art: "▰" },
+    ];
+    return <div className="history-page-redesign">
+      <div className="history-summary-grid page-summary">{summaryCards.map((item) => <article className={`history-summary-card ${item.tone}`} key={item.label}><span>{item.icon}</span><div><small>{item.label}</small><b>{fmt(item.value)}</b><em>{item.suffix}</em></div><i>{item.art}</i></article>)}</div>
+      <section className="history-log-card">
+        <header><div><span>▤</span><div><h3>ประวัติการดำเนินการ</h3><p>บันทึกการเพิ่ม แก้ไข ลบ นำเข้าไฟล์ เปลี่ยนสิทธิ์ และกิจกรรมสำคัญจากทุกหน้า</p></div></div><div><button className="button secondary" disabled={auditLogsLoading} onClick={() => void Promise.all([loadDue(), loadStock(), loadAuditLogs()])}>↻ {auditLogsLoading ? "กำลังโหลด" : "รีเฟรช"}</button><button className="button history-excel-button" onClick={() => void exportHistoryExcel()}>▦ ส่งออก Excel</button></div></header>
+        <div className="audit-history-controls history-redesign-controls">
+          <div className="audit-history-tabs">{historyTabs.map((tab) => <button type="button" key={tab.key} className={historyType === tab.key ? "active" : ""} onClick={() => setHistoryType(tab.key)}><span>{tab.label}</span><b>{fmt(tab.count)}</b></button>)}</div>
           <div className="history-filter-line">
             <div className="audit-history-search"><span>⌕</span><input value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder="ค้นหาชื่อผู้ทำรายการ, Tag ID, Part No., Job หรือชื่อไฟล์..." />{historyQuery && <button type="button" onClick={() => setHistoryQuery("")}>×</button>}</div>
             <div className="history-date-range"><b>วันที่ทำรายการ</b><label><span>▦</span><input aria-label="วันที่เริ่มต้น" type="date" value={historyDate} onChange={(event) => setHistoryDate(event.target.value)} /><i>–</i><input aria-label="วันที่สิ้นสุด" type="date" value={historyDateTo} onChange={(event) => setHistoryDateTo(event.target.value)} />{(historyDate || historyDateTo) && <button type="button" onClick={() => { setHistoryDate(""); setHistoryDateTo(""); }} aria-label="ล้างช่วงวันที่">×</button>}</label></div>
@@ -1268,12 +1840,12 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         <section className="dispatch-confirm-images"><PartImagePair materialCode={dispatchConfirmation.tag?.materialCode || dispatchConfirmation.master?.materialCode || ""} masterVersion={partImages.find((item) => item.materialCode === (dispatchConfirmation.tag?.materialCode || dispatchConfirmation.master?.materialCode))?.updatedAt} actualVersion={partActualImages.find((item) => item.materialCode === (dispatchConfirmation.tag?.materialCode || dispatchConfirmation.master?.materialCode))?.updatedAt} /></section>
         <section className="dispatch-confirm-info">
           <div className="dispatch-confirm-part"><small>PART / MATERIAL</small><b>{dispatchConfirmation.tag?.materialCode || dispatchConfirmation.master?.materialCode || "—"}</b><p>{dispatchConfirmation.master?.partName || dispatchConfirmation.due?.materialDescription || "ไม่ระบุชื่อชิ้นงาน"}</p></div>
-          <div className="dispatch-confirm-details"><div><small>Tag ลูกค้า</small><b>{dispatchConfirmation.tag?.tagId || "—"}</b></div><div><small>FAC / Line</small><b>{dispatchConfirmation.due ? dispatchConfirmation.due.fact + " / " + (dispatchConfirmation.due.line || "—") : "—"}</b></div><div><small>DO / Seq</small><b>{dispatchConfirmation.due ? dispatchConfirmation.due.doNo + " / " + dispatchConfirmation.due.seq : "—"}</b></div><div><small>กำหนดส่ง</small><b>{dispatchConfirmation.due ? formatDate(dispatchConfirmation.due.deliveryDate) + " " + dispatchConfirmation.due.deliveryTime : "—"}</b></div></div>
+          <div className="dispatch-confirm-details"><div><small>KIT Tag</small><b>{dispatchKitSelection?.stockTagCode || "—"}</b></div><div><small>Tag ลูกค้า</small><b>{dispatchConfirmation.tag?.tagId || "—"}</b></div><div><small>FAC / Line</small><b>{dispatchConfirmation.due ? dispatchConfirmation.due.fact + " / " + (dispatchConfirmation.due.line || "—") : "—"}</b></div><div><small>DO / Seq</small><b>{dispatchConfirmation.due ? dispatchConfirmation.due.doNo + " / " + dispatchConfirmation.due.seq : "—"}</b></div><div><small>กำหนดส่ง</small><b>{dispatchConfirmation.due ? formatDate(dispatchConfirmation.due.deliveryDate) + " " + dispatchConfirmation.due.deliveryTime : "—"}</b></div><div><small>Job / จำนวน KIT</small><b>{dispatchKitSelection ? `${dispatchKitSelection.jobNo || "—"} / ${fmt(dispatchKitSelection.waitingQty)} ชิ้น` : "—"}</b></div></div>
           <div className="dispatch-confirm-qty"><div><small>Due ทั้งหมด</small><b>{fmt(dispatchConfirmation.due?.reqQty || 0)}</b><em>ชิ้น</em></div><div><small>ขายออกแล้ว</small><b>{fmt(dispatchConfirmation.due?.alreadyQty || 0)}</b><em>ชิ้น</em></div><div className="current"><small>ขายครั้งนี้</small><b>{fmt(dispatchConfirmation.tag?.qty || 0)}</b><em>{dispatchConfirmation.tag?.unit || "ชิ้น"}</em></div><div><small>คงเหลือหลังขาย</small><b>{fmt(dispatchConfirmation.due?.remainingAfter || 0)}</b><em>ชิ้น</em></div></div>
           {dispatchConfirmation.stagedAvail !== undefined && <p className="dispatch-staged-note">งานที่จัดรอขายไว้ {fmt(dispatchConfirmation.stagedAvail)} ชิ้น</p>}
         </section>
       </div>
-      {(dispatchConfirmation.verdict === "ready" || dispatchConfirmation.verdict === "ready_noimg") ? <footer><button type="button" className="button secondary" onClick={() => setDispatchConfirmation(null)}>ยกเลิก / ตรวจใหม่</button><button type="button" className="button confirm-dispatch-button" disabled={checkingTag} onClick={() => void confirmDispatch()}>{checkingTag ? "กำลังขายออก…" : "✓ ยืนยันขายออกและตัดยอด"}</button></footer> : <footer className="dispatch-confirm-blocked"><p>ไม่สามารถขายออกได้: {dispatchConfirmation.message || "ข้อมูลไม่พร้อมขายออก"}</p><button type="button" className="button secondary" onClick={() => setDispatchConfirmation(null)}>ปิดและตรวจใหม่</button></footer>}
+      {(dispatchConfirmation.verdict === "ready" || dispatchConfirmation.verdict === "ready_noimg") ? <footer><button type="button" className="button secondary" onClick={() => { setDispatchConfirmation(null); setRawTag(""); }}>ยกเลิก / สแกน Tag ลูกค้าใหม่</button><button type="button" className="button confirm-dispatch-button" disabled={checkingTag} onClick={() => void confirmDispatch()}>{checkingTag ? "กำลังขายออก…" : "✓ ยืนยันขายออกและตัดยอด"}</button></footer> : <footer className="dispatch-confirm-blocked"><p>ไม่สามารถขายออกได้: {dispatchConfirmation.message || "ข้อมูลไม่พร้อมขายออก"}</p><button type="button" className="button secondary" onClick={() => { setDispatchConfirmation(null); setRawTag(""); window.setTimeout(() => tagInput.current?.focus(), 50); }}>เก็บ KIT Tag / สแกนลูกค้าใหม่</button><button type="button" className="button secondary" onClick={() => { setDispatchConfirmation(null); setDispatchKitSelection(null); setRawTag(""); window.setTimeout(() => tagInput.current?.focus(), 50); }}>ล้างทั้งคู่ / เริ่มใหม่</button></footer>}
     </div></div>}
     {jobQtyAdjustment && <div className="modal-backdrop job-qty-adjust-backdrop" role="dialog" aria-modal="true" aria-labelledby="job-qty-adjust-title"><section className="job-qty-adjust-modal">
       <header><div><span>±</span><div><small>ก่อนปิดรับเข้า Job</small><h3 id="job-qty-adjust-title">ปรับจำนวนผลิตจริง</h3></div></div><button type="button" disabled={jobQtySaving} onClick={closeJobQuantityAdjustment} aria-label="ปิด">×</button></header>
