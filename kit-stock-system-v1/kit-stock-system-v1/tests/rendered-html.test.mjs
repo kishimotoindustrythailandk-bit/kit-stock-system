@@ -285,8 +285,8 @@ test("separates Stock receiving from Tag printing and Job management", async () 
   assert.match(appSource, /key: "tags", label: "พิมพ์ Tag"/);
   assert.match(tagsSection, /Tag ที่สร้างแล้ว/);
   assert.match(tagsSection, /ปิดรับเข้า Job \/ จัดการงาน NG/);
-  assert.doesNotMatch(tagsSection, /รับเข้า Stock \(สแกน Tag\)/);
-  assert.match(stockSection, /รับเข้า Stock \(สแกน Tag\)/);
+  assert.doesNotMatch(tagsSection, /รับเข้า Stock \(ชั้นวาง \+ Tag\)/);
+  assert.match(stockSection, /รับเข้า Stock \(ชั้นวาง \+ Tag\)/);
   assert.doesNotMatch(stockSection, /ปิดรับเข้า Job \/ จัดการงาน NG/);
 });
 
@@ -322,9 +322,9 @@ test("connects camera Stock receipt preview to explicit confirmation", async () 
   );
 
   assert.match(scannerFlow, /receiveStockTag\(value\)/);
-  assert.match(previewFlow, /JSON\.stringify\(\{ action: "receive", mode: "preview", rawPayload \}\)/);
+  assert.match(previewFlow, /JSON\.stringify\(\{ action: "receive", mode: "preview", rawPayload, locationCode: stockLocation\.code \}\)/);
   assert.match(previewFlow, /setStockReceivePreview\(data\)/);
-  assert.match(confirmFlow, /JSON\.stringify\(\{ action: "receive", rawPayload: stockReceivePreview\.rawPayload, receivedQty, productionDate \}\)/);
+  assert.match(confirmFlow, /locationCode: stockReceivePreview\.selectedLocation/);
   assert.doesNotMatch(confirmFlow, /mode: "preview"/);
   assert.match(receiveModal, /onClick=\{\(\) => void confirmReceiveStockTag\(\)\}/);
 

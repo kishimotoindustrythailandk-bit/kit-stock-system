@@ -19,6 +19,15 @@ function parseInternalTag(raw: string) {
   throw new Error("Tag นี้ไม่ใช่ Tag Stock ของ KIT");
 }
 
+function parseLocationTag(raw: string) {
+  const value = raw.trim();
+  const fields = value.split("|");
+  if (fields[0]?.trim().toUpperCase() !== "KITLOC" || !fields[1]?.trim()) {
+    throw new Error("QR นี้ไม่ใช่ QR ชั้นจัดเก็บของ KIT");
+  }
+  return fields[1].trim().toUpperCase().slice(0, 160);
+}
+
 function createTagBatchCode() {
   const now = new Date();
   const stamp = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, "0")}${String(now.getUTCDate()).padStart(2, "0")}`;
@@ -889,8 +898,28 @@ export async function POST(request: Request) {
       return Response.json({ success: true, reopenedTags: result.meta.changes });
     }
 
+    if (action === "validate_location") {
+      if (!hasPermission(user, "stock") || !hasPermission(user, "stock-edit")) return Response.json({ error: "บัญชีนี้ดู Stock ได้ แต่ไม่มีสิทธิ์รับงานเข้า" }, { status: 403 });
+      let locationCode = "";
+      try {
+        locationCode = parseLocationTag(clean(body.rawPayload, 500));
+      } catch (error) {
+        return Response.json({ error: error instanceof Error ? error.message : "อ่าน QR ชั้นจัดเก็บไม่สำเร็จ" }, { status: 400 });
+      }
+      const location = await runtimeDb.prepare(`
+        SELECT upper(trim(location)) AS locationCode, count(*) AS partCount
+        FROM stock_parts
+        WHERE active = 1 AND upper(trim(location)) = ?1
+        GROUP BY upper(trim(location))
+      `).bind(locationCode).first<{ locationCode: string; partCount: number }>();
+      if (!location) return Response.json({ error: `ไม่พบชั้นจัดเก็บ ${locationCode} ในทะเบียน Part` }, { status: 404 });
+      return Response.json({ action: "location_ready", locationCode: location.locationCode, partCount: Number(location.partCount || 0) });
+    }
+
     if (action === "receive") {
       if (!hasPermission(user, "stock") || !hasPermission(user, "stock-edit")) return Response.json({ error: "บัญชีนี้ดู Stock ได้ แต่ไม่มีสิทธิ์รับงานเข้า" }, { status: 403 });
+      const selectedLocation = clean(body.locationCode, 160).toUpperCase();
+      if (!selectedLocation) return Response.json({ error: "กรุณาสแกน QR ชั้นจัดเก็บก่อนสแกน KIT Tag" }, { status: 400 });
       const tagId = parseInternalTag(clean(body.rawPayload, 1000));
       const [tag] = await db.select().from(stockTags).where(eq(stockTags.tagId, tagId)).limit(1);
       if (!tag) return Response.json({ error: "ไม่พบ Tag Stock นี้ในระบบ" }, { status: 404 });
@@ -900,6 +929,11 @@ export async function POST(request: Request) {
         SELECT part_name AS partName, customer, location
         FROM stock_parts WHERE material_code = ?1 LIMIT 1
       `).bind(tag.materialCode).first<{ partName: string; customer: string; location: string }>();
+      const partLocation = clean(part?.location, 160).toUpperCase();
+      if (!partLocation) return Response.json({ error: `Part ${tag.materialCode} ยังไม่ได้กำหนด Location ในทะเบียน Part` }, { status: 409 });
+      if (partLocation !== selectedLocation) {
+        return Response.json({ error: `ผิดตำแหน่งจัดเก็บ: Part ${tag.materialCode} ต้องอยู่ชั้น ${partLocation} แต่กำลังสแกนที่ชั้น ${selectedLocation}` }, { status: 409 });
+      }
       const image = await runtimeDb.prepare("SELECT 1 AS ok FROM part_master_images WHERE material_code = ?1 LIMIT 1")
         .bind(tag.materialCode).first<{ ok: number }>();
 
@@ -909,6 +943,7 @@ export async function POST(request: Request) {
           rawPayload: clean(body.rawPayload, 1000),
           tag: { ...tag, partName: part?.partName || "", customer: part?.customer || "", location: part?.location || "" },
           master: { materialCode: tag.materialCode, partName: part?.partName || "", customer: part?.customer || "", hasImage: !!image },
+          selectedLocation,
         });
       }
 
@@ -942,9 +977,9 @@ export async function POST(request: Request) {
         module: "stock", moduleLabel: "Stock", action: "receive_stock", actionLabel: "รับงานเข้า Stock",
         entityType: "stock_tag", entityId: tag.tagId,
         summary: `รับ Tag ${tag.tagId} · ${tag.materialCode} จำนวน ${receivedQty} ชิ้น${ngQty ? ` · NG ${ngQty} ชิ้น` : ""}`,
-        details: { tagId: tag.tagId, materialCode: tag.materialCode, jobNo: tag.jobNo, productionDate, originalQty: tag.qty, receivedQty, ngQty },
+        details: { tagId: tag.tagId, materialCode: tag.materialCode, jobNo: tag.jobNo, locationCode: selectedLocation, productionDate, originalQty: tag.qty, receivedQty, ngQty },
       }, request);
-      return Response.json({ action: "received", tag: { ...updated, partName: part?.partName || "", customer: part?.customer || "", receivedQty, ngQty }, receivedQty, ngQty }, { status: 201 });
+      return Response.json({ action: "received", tag: { ...updated, partName: part?.partName || "", customer: part?.customer || "", location: selectedLocation, receivedQty, ngQty }, locationCode: selectedLocation, receivedQty, ngQty }, { status: 201 });
     }
 
 
