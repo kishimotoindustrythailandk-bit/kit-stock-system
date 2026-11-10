@@ -1,0 +1,4923 @@
+"use client";
+
+/* eslint-disable @next/next/no-img-element */
+
+import { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { validArrangementQuantity } from "./arrangement-quantity";
+import SplitTagPopup from "./split-tag-popup";
+import OperationWarningPopup from "./operation-warning-popup";
+import { reportOperationWarning } from "./operation-warning";
+import DashboardControlCenter from "./dashboard-control-center";
+import OverdueWorkPage from "./overdue-work-page";
+import StockAllPage from "./stock-all-page";
+import { OverviewIcon, OverviewLogo, OverviewFactory, OVERVIEW_NAV_ICONS } from "./stock-overview-icons";
+import { createForecastExportWorkbook, createForecastExportBinary } from "./forecast-export";
+import { normalizeDueExcelDate } from "./due-excel-date";
+import { speakThaiAlert } from "./voice-alert";
+import VoiceAlertControl from "./voice-alert-control";
+
+type PageKey = "stock-all" | "overdue" | "dashboard" | "stock" | "manual-stock" | "stock-count" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
+
+type EditablePageKey = "stock" | "manual-stock" | "stock-count" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "dispatch";
+type EditPermission = `${EditablePageKey}-edit`;
+type AppPermission = PageKey | EditPermission | "stock-all-details" | "stock-all-export" | "parts-add" | "permission-model-v2";
+
+const EDITABLE_PAGE_KEYS: EditablePageKey[] = ["stock", "manual-stock", "stock-count", "forecast", "parts", "tags", "plan", "arrange", "replacement", "dispatch"];
+
+const STOCK_ACCESS_LABELS: Record<string,string> = { "stock-all-details": "Stock ทั้งหมด: ดู Tag / Job / Movement", "stock-all-export": "Stock ทั้งหมด: ส่งออก Excel", "parts-add": "ทะเบียน Part: เพิ่มข้อมูล Part ใหม่" };
+
+type DueLine = {
+  id: number;
+  importId: number;
+  doNo: string;
+  seq: number;
+  materialCode: string;
+  materialDescription: string;
+  site: string;
+  fact: string;
+  line: string;
+  shop: string;
+  reqQty: number;
+  deliveryDate: string;
+  deliveryTime: string;
+  status: string;
+  scannedQty: number;
+  arrangedQty: number;
+  tagCount: number;
+};
+
+type DueScan = {
+  id: number;
+  dueLineId: number;
+  tagId: string;
+  qty: number;
+  unit: string;
+  location: string;
+  scannedByName: string;
+  createdAt: string;
+  materialCode: string;
+  fact: string;
+  deliveryDate: string;
+  deliveryTime: string;
+};
+
+type DueImport = {
+  id: number;
+  fileName: string;
+  rowCount: number;
+  totalQty: number;
+  importedByName: string;
+  createdAt: string;
+};
+type DueReceipt = { id: number; dueLineId: number; tagId: string; qty: number; unit: string; location: string; receivedByName: string; createdAt: string; materialCode: string; fact: string };
+
+type TagPreview = {
+  tag: {
+    tagId: string;
+    qty: number;
+    unit: string;
+    materialCode: string;
+    location: string;
+    doNo: string;
+    deliveryDate: string;
+    line: string;
+    shop: string;
+    seq: number;
+  };
+  due: DueLine & {
+    remainingQty: number;
+    projectedQty: number;
+    remainingAfter: number;
+    projectedStatus: string;
+  };
+  stockAllocations?: Array<{
+    stockTagId: number; stockTagCode?: string; qty: number; jobNo?: string;
+    productionDate?: string; receivedAt?: string; pickedByName?: string; pickedAt?: string;
+  }>;
+};
+
+type ImportRow = Omit<DueLine, "id" | "importId" | "status" | "scannedQty" | "arrangedQty" | "tagCount"> & { sourceKey: string };
+type DuePayload = { dues: DueLine[]; imports: DueImport[]; scans: DueScan[]; receipts: DueReceipt[]; error?: string };
+type SystemUser = { id: number; employeeCode: string; displayName: string; email: string; role: string; active: boolean; permissions: AppPermission[]; createdAt?: string };
+type PartImageMapping = { materialCode: string; originalName: string; contentType: string; updatedByName: string; updatedAt: string; materialDescription?: string };
+type StockPart = { materialCode: string; partName: string; customer: string; location: string; standardQty: number; active: boolean };
+type PartImportItem = Pick<StockPart, "materialCode" | "partName" | "customer" | "location" | "standardQty">;
+type PartBundleRow = { part: PartImportItem; masterFile?: File; actualFile?: File };
+type PartBundlePreview = {
+  fileName: string;
+  rows: PartBundleRow[];
+  unmatchedMaster: string[];
+  unmatchedActual: string[];
+  duplicateImages: string[];
+};
+type StockTag = { id: number; tagId: string; materialCode: string; partName: string; customer: string; qty: number; remainingQty: number; reservedQty: number; receivedQty?: number; ngQty?: number; jobNo: string; productionDate: string; status: string; printedByName: string; receivedByName: string; receivedAt?: string; createdAt: string; payload?: string; boxNo?: number; boxCount?: number; deliveryQty?: number; location?: string; splitLabelId?: string; splitIssuedAt?: string };
+type StockReceivePreview = { action: "receive_preview" | "pallet_receive_preview"; rawPayload: string; tag: StockTag; master: { materialCode: string; partName: string; customer: string; hasImage: boolean }; selectedLocation: string; pallet?: { tagCount: number; totalQty: number; tagIds: string[]; jobNo: string; materialCode: string } };
+type StockLocationSelection = { code: string; partCount: number };
+type StockAllocation = { id: number; customerTagId: string; stockTagCode: string; materialCode: string; qty: number; status: string; reservedByName: string; reservedAt: string; dispatchedByName: string; dispatchedAt?: string };
+type StockPick = {
+  id: number; dueLineId: number; pickedQty: number; dispatchedQty: number; status: string;
+  pickedByName: string; pickedByCode: string; pickedAt: string; stockTagCode: string;
+  materialCode: string; jobNo: string; productionDate: string; receivedAt?: string;
+  doNo: string; seq: number; fact: string; line: string; shop: string;
+  deliveryDate: string; deliveryTime: string;
+};
+type StockDispatchLink = {
+  id: number; customerTagId: string; qty: number; dispatchedByName: string;
+  dispatchedByCode: string; dispatchedAt: string; pickedByName: string; pickedAt: string;
+  stockTagCode: string; materialCode: string; jobNo: string; productionDate: string;
+  receivedAt?: string; doNo: string; fact: string; line: string;
+};
+type StockJobClosure = {
+  id: number; jobNo: string; materialCode: string; totalQty: number; receivedQty: number;
+  ngQty: number; ngTagCount: number; reason: string; closedByName: string;
+  closedByCode: string; closedAt: string;
+};
+type JobQuantityAdjustmentPreview = {
+  jobNo: string; materialCode: string; partName: string; customer: string; packQty: number;
+  currentQty: number; targetQty: number; difference: number; lockedQty: number; pendingQty: number;
+  productionDate: string; keptTagCount: number;
+  cancelledTags: Array<{ id: number; tagId: string; qty: number }>;
+  newTagQtys: number[];
+};
+type JobQuantityAdjustment = {
+  jobNo: string; materialCode: string; partName: string; currentQty: number;
+};
+type StockManualReceipt = {
+  id: number; stockTagId: number; tagId: string; materialCode: string; partName: string;
+  qty: number; jobNo: string; productionDate: string; referenceNo: string; note: string;
+  receivedByName: string; receivedByCode: string; receivedAt: string;
+  transactionNo: string; transactionTotalQty: number; packQty: number; tagCount: number;
+  duplicateConfirmed: number;
+};
+type ManualDuplicateJob = {
+  materialCode: string; partName: string; jobNo: string; previousQty: number;
+  previousTagCount: number; incomingQty: number; incomingTagCount: number;
+  totalAfter: number; lastReceivedAt: string;
+};
+type ManualReceiptSuccess = {
+  transactionNo: string; tags: StockTag[]; totalQty: number; packQty: number;
+  boxCount: number; duplicateConfirmed: boolean;
+};
+type StockCountAdjustment = {
+  id: number; adjustmentNo: string; countDate: string; materialCode: string; partName: string;
+  systemQty: number; countedQty: number; difference: number; reason: string;
+  adjustedByName: string; adjustedByCode: string; adjustedAt: string; affectedTagCount: number;
+};
+type StockCountAdjustmentLine = {
+  id: number; adjustmentId: number; stockTagId: number; stockTagCode: string;
+  qtyChange: number; beforeQty: number; afterQty: number; createdAt: string;
+};
+type StockMovementDay = { date: string; receivedQty: number; arrangedQty: number; adjustedQty: number };
+type StockCountPreview = {
+  action: "preview_tag_count"; tagId: string; materialCode: string; partName: string;
+  customer: string; jobNo: string; productionDate: string; status: string;
+  systemQty: number; countedQty: number; difference: number; reservedQty: number;
+  stockAreaSystemQty: number; stockAreaCountedQty: number; newTotalQty: number;
+  availableQty: number; materialTotalQty: number; materialTotalAfter: number; countDate: string;
+};
+type StockPayload = {
+  parts: StockPart[]; tags: StockTag[]; allocations: StockAllocation[];
+  picks: StockPick[]; dispatchLinks: StockDispatchLink[]; jobClosures: StockJobClosure[];
+  manualReceipts: StockManualReceipt[]; countAdjustments: StockCountAdjustment[];
+  countAdjustmentLines: StockCountAdjustmentLine[];
+  movementDays: StockMovementDay[];
+};
+type ArrangementPreview = {
+  action: "staged";
+  pick: StockPick;
+  tag: StockTag;
+  due: DueLine & { remainingToArrange: number; remainingQty: number };
+};
+type ArrangeConfirmation = {
+  action: "preview_stage"; tag: StockTag; due: DueLine;
+  pickedQty: number; tagAvailableQty: number; dueOpenQty: number; remainingAfter: number;
+  rawPayload: string; deliveryDate: string; deliveryTime: string; fact: string;
+};
+type ReplacementRequest = {
+  id: number; requestNo: string; materialCode: string; partName: string; customer: string;
+  requestedQty: number; issuedQty: number; remainingQty: number; reasonType: "defect" | "shortage" | "other";
+  reasonDetail: string; neededDate: string; status: "pending" | "partial" | "completed" | "cancelled";
+  requestedByName: string; requestedByCode: string; requestedAt: string; completedAt?: string;
+};
+type ReplacementIssue = {
+  id: number; requestId: number; stockTagId: number; stockTagCode: string; qty: number;
+  noticeNo: string; issuedByName: string; issuedByCode: string; issuedAt: string;
+  printedByName?: string; printedByCode?: string; printedAt?: string; jobNo?: string; productionDate?: string;
+};
+type ReplacementPayload = { requests: ReplacementRequest[]; issues: ReplacementIssue[] };
+type ReplacementIssuePreview = {
+  action: "preview"; request: ReplacementRequest;
+  tag: StockTag & { availableQty: number; stagedQty?: number; legacyReservedQty?: number; location?: string };
+  suggestedQty: number;
+};
+type ForecastImport = {
+  id: number; importToken: string; fileName: string; sourceCalculatedAt: string;
+  rowCount: number; materialCount: number; totalQty: number; status: string;
+  importedByName: string; importedByCode: string; createdAt: string; activatedAt?: string | null;
+};
+type ForecastCoverage = {
+  materialCode: string; description: string; stockQty: number; forecastQty: number;
+  dispatchedAfterImport: number; outstandingQty: number; overdueQty: number;
+  coveredThroughDate: string; coveredThroughTime: string; shortageDate: string;
+  shortageTime: string; firstShortageQty: number; totalShortage: number;
+  remainingStockAfterForecast: number; status: "covered" | "shortage" | "no_stock";
+  factories: string[]; daysToShortage: number | null;
+  timeline?: Array<{ deliveryDate: string; deliveryTime: string; demandQty: number; projectedBalance: number }>;
+  riskGroup: "overdue" | "within3" | "within7" | "within14" | "over14";
+};
+type ForecastSummary = {
+  materialCount: number; stockQty: number; outstandingQty: number; overdueQty: number;
+  totalShortage: number; coveredMaterials: number; shortageMaterials: number;
+  riskGroups: Record<"overdue" | "within3" | "within7" | "within14" | "over14", number>;
+};
+type ForecastTrend = { date: string; demandQty: number; cumulativeDemand: number; projectedStock: number; shortageParts: number };
+type ForecastPayload = {
+  activeImport: ForecastImport | null; imports: ForecastImport[];
+  coverage: ForecastCoverage[]; summary: ForecastSummary | null; trend?: ForecastTrend[]; calculatedAt?: string; error?: string;
+};
+type ForecastUploadRow = {
+  sourceKey: string; materialCode: string; description: string; deliveryDate: string;
+  deliveryTime: string; prodQty: number; deliverySpot: string; factory: string; shop: string; line: string;
+};
+type ForecastPreview = {
+  fileName: string; sourceCalculatedAt: string; sourceLabel: string; sourceRowCount: number;
+  materialCount: number; totalQty: number; duplicateRowCount: number; rows: ForecastUploadRow[];
+};
+type UserRole = "production" | "stock" | "qc" | "delivery" | "dispatcher" | "inspector";
+type UserForm = { id?: number; employeeCode: string; displayName: string; email: string; role: UserRole; pin: string; active: boolean; permissions: AppPermission[] };
+type AuditLog = {
+  id: number; moduleKey: string; moduleLabel: string; actionKey: string; actionLabel: string;
+  entityType: string; entityId: string; summary: string; detailJson: string;
+  beforeJson: string; afterJson: string; actorCode: string; actorName: string;
+  actorEmail: string; actorRole: string; ipAddress: string; createdAt: string;
+};
+
+const ROLE_LABELS: Record<string, string> = {
+  admin: "ผู้ดูแลระบบ",
+  production: "Production",
+  stock: "Stock",
+  qc: "QC",
+  delivery: "Delivery",
+  dispatcher: "ผู้จัดงาน (Legacy)",
+  inspector: "ผู้ตรวจงาน (Legacy)",
+};
+const EMPTY_USER: UserForm = { employeeCode: "", displayName: "", email: "", role: "production", pin: "", active: true, permissions: [] };
+
+const NAV: Array<{ key: PageKey; label: string; icon: string }> = [
+  { key: "dashboard", label: "หน้าหลัก", icon: "⌂" },
+  { key: "stock", label: "Stock", icon: "▦" },
+  { key: "stock-all", label: "Stock ทั้งหมด", icon: "▦" },
+  { key: "manual-stock", label: "รับเข้า Stock แบบคีย์เอง", icon: "＋" },
+  { key: "stock-count", label: "ตรวจนับ/ปรับยอดสิ้นเดือน", icon: "≋" },
+  { key: "forecast", label: "Forecast Stock", icon: "▧" },
+  { key: "parts", label: "ทะเบียน Part", icon: "▦" },
+  { key: "tags", label: "พิมพ์ Tag", icon: "▤" },
+  { key: "plan", label: "แผนส่งงาน (Due)", icon: "▤" },
+  { key: "overdue", label: "งานติดลบ / ค้างส่ง", icon: "!" },
+  { key: "arrange", label: "จัดงาน", icon: "⇥" },
+  { key: "replacement", label: "เบิกงานทดแทน", icon: "↺" },
+  { key: "dispatch", label: "ตรวจและขายออก", icon: "⌗" },
+  { key: "exports", label: "รายการส่งออก", icon: "▱" },
+  { key: "reports", label: "รายงาน", icon: "▥" },
+  { key: "history", label: "ประวัติ", icon: "◷" },
+  { key: "settings", label: "ตั้งค่า", icon: "⚙" },
+  { key: "users", label: "ผู้ใช้งาน", icon: "♙" },
+];
+
+const DUE_DATA_PAGES: PageKey[] = ["dashboard", "plan", "overdue", "arrange", "dispatch", "exports", "reports", "history"];
+
+const PAGE_KEYS = new Set<PageKey>([...NAV.map((item) => item.key), "verify", "overdue"]);
+
+function pageFromUrl(): PageKey | null {
+  if (typeof window === "undefined") return null;
+  const candidate = new URLSearchParams(window.location.search).get("page");
+  return candidate && PAGE_KEYS.has(candidate as PageKey) ? candidate as PageKey : null;
+}
+
+function pageFromLocation(): PageKey | null {
+  if (typeof window === "undefined") return null;
+  const candidate = pageFromUrl() || window.localStorage.getItem("kit-current-page");
+  return candidate && PAGE_KEYS.has(candidate as PageKey) ? candidate as PageKey : null;
+}
+
+function updatePageLocation(next: PageKey, mode: "push" | "replace" = "push") {
+  const url = new URL(window.location.href);
+  if (next === "dashboard") url.searchParams.delete("page");
+  else url.searchParams.set("page", next);
+  window.localStorage.setItem("kit-current-page", next);
+  const target = `${url.pathname}${url.search}${url.hash}`;
+  if (mode === "replace") window.history.replaceState({ kitPage: next }, "", target);
+  else window.history.pushState({ kitPage: next }, "", target);
+}
+
+const PERMISSION_HELP: Record<PageKey, string> = {
+  dashboard: "ภาพรวม Due และสถานะงาน",
+  stock: "รับ Tag เข้า Stock และดูยอดคงเหลือ",
+  "stock-all": "ดูภาพรวม Stock ทุก Part รวมยอด 0 (สิทธิ์รายละเอียดและ Excel เลือกแยกด้านล่าง)",
+  "manual-stock": "คีย์รับงานเข้าและสร้าง Tag ตามจำนวนบรรจุต่อกล่อง",
+  "stock-count": "สแกนตรวจนับและปรับยอดทีละ KIT Stock Tag",
+  forecast: "นำเข้า Forecast ลูกค้าและตรวจว่ายอด Stock ส่งได้ถึงวันไหน",
+  parts: "ทะเบียน Part และรูปชิ้นงาน",
+  tags: "ทะเบียน Part สร้างและพิมพ์ Tag",
+  overdue: "ดูงานติดลบ / ค้างส่งทุก Part ทุกรอบ ทุก FAC และเปิดจอแสดงงานค้าง",
+  plan: "นำเข้า ตรวจสอบ และลบแผน Due",
+  arrange: "เลือก Due และยิง KIT Tag เพื่อจัดงานรอขาย",
+  replacement: "QC ขอเบิกงานเสีย/งานขาด และทีมจัดงานยิง KIT Tag เพื่อตัด Stock",
+  verify: "สแกนเทียบรูป master ก่อนขายออก (ไม่ตัด Stock/Due)",
+  dispatch: "ยิง Tag ลูกค้าเพื่อตัด Stock และ Due",
+  exports: "ดูรายการที่ส่งออกแล้ว",
+  reports: "ดูและส่งออกรายงาน",
+  history: "ตรวจสอบประวัติรายการ",
+  settings: "ตั้งค่าระบบและรูปชิ้นงาน",
+  users: "เพิ่มผู้ใช้และกำหนดสิทธิ์",
+};
+
+const PAGE_SUBTITLE: Record<PageKey, string> = {
+  dashboard: "ภาพรวมการส่งงานและสถานะล่าสุด",
+  "stock-all": "ดู Stock ทุก Part รวมยอด 0 ดู Tag / Job และส่งออก Excel โดยแยกจากหน้ารับเข้า",
+  stock: "สแกนรับเข้า ตรวจสอบยอดคงเหลือ และประวัติ Stock",
+  "manual-stock": "คีย์รับเข้า แบ่งจำนวนตามบรรจุต่อกล่อง และสร้าง Tag อัตโนมัติ",
+  "stock-count": "สแกนและบันทึกยอดจริงทีละ Tag พร้อมปรับยอด Stock รวม",
+  forecast: "นำเข้า Forecast รายวันและตรวจสอบว่ายอด Stock ส่งได้ถึงวันไหน",
+  parts: "เพิ่ม นำเข้า และจัดการรูปชิ้นงานของแต่ละ Part",
+  tags: "ทะเบียน Part สร้าง Tag และพิมพ์ Tag รับงานเข้า Stock",
+  overdue: "งานค้างส่งทุก Part ทุกวันที่ ทุกรอบ และทุก FAC",
+  plan: "ตรวจสอบแผนส่งงานจากไฟล์ Excel",
+  arrange: "ผู้จัดงานเลือก Due แล้วยิง KIT Stock Tag เพื่อบันทึกงานรอขาย",
+  replacement: "QC แจ้งขอเบิกงานทดแทน ทีมจัดงานยิง KIT Tag และพิมพ์ใบแจ้งออก",
+  verify: "สแกนชิ้นงานในกล่องเพื่อเทียบรูป master และงานที่ต้องส่งออก ก่อนยืนยันขายออก",
+  dispatch: "ผู้ตรวจสแกน KIT Tag ที่จัดงานแล้วและ Tag ลูกค้าให้ตรงกันก่อนขายออก",
+  exports: "รายการที่ตัดยอดและส่งออกแล้ว",
+  reports: "สรุปผลการส่งงานตามวันและโรงงาน",
+  history: "ตรวจสอบประวัติการสแกนและตัดยอด",
+  settings: "กำหนดค่าการทำงานของระบบ",
+  users: "ผู้ใช้งานที่มีสิทธิ์เข้าถึงระบบ",
+};
+
+type VerifyVerdict = "ready" | "ready_noimg" | "short" | "over" | "no_due" | "ambiguous" | "already" | "bad_tag" | "pair_mismatch";
+type DispatchKitSelection = {
+  pickId: number; dueLineId: number; waitingQty: number; pickedByName: string; pickedAt: string;
+  stockTagId: number; stockTagCode: string; materialCode: string; jobNo: string;
+  productionDate: string; doNo: string; seq: number; fact: string; line: string;
+  shop: string; deliveryDate: string; deliveryTime: string;
+};
+type VerifyResult = {
+  action: "verify";
+  verdict: VerifyVerdict;
+  message?: string;
+  tag?: { rawPayload: string; tagId: string; materialCode: string; qty: number; unit: string; doNo: string; seq: number; deliveryDate: string; line: string; shop: string; location: string };
+  master?: { materialCode: string; partName: string; customer: string; hasImage: boolean };
+  due?: { id: number; doNo: string; seq: number; materialCode: string; materialDescription: string; fact: string; line: string; shop: string; site: string; reqQty: number; deliveryDate: string; deliveryTime: string; alreadyQty: number; remainingDue: number; projectedQty: number; remainingAfter: number };
+  stagedAvail?: number;
+  pairedKit?: { pickId?: number; stockTagId?: number; stockTagCode?: string; materialCode?: string; jobNo?: string; productionDate?: string; waitingQty?: number };
+};
+
+function number(value: unknown) {
+  const parsed = Number(String(value ?? "").replace(/,/g, ""));
+  return Number.isFinite(parsed) ? Math.round(parsed) : 0;
+}
+
+function text(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+function normalizeDate(value: unknown, xlsx: typeof import("xlsx")) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+  }
+  if (typeof value === "number") {
+    const parsed = xlsx.SSF.parse_date_code(value);
+    if (parsed) return `${parsed.y}-${String(parsed.m).padStart(2, "0")}-${String(parsed.d).padStart(2, "0")}`;
+  }
+  const raw = text(value).split(" ")[0];
+  const thai = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (thai) return `${thai[3]}-${thai[2].padStart(2, "0")}-${thai[1].padStart(2, "0")}`;
+  const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (iso) return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
+  return "";
+}
+
+function normalizeTime(value: unknown) {
+  if (value instanceof Date) return `${String(value.getHours()).padStart(2, "0")}:${String(value.getMinutes()).padStart(2, "0")}`;
+  if (typeof value === "number" && value >= 0 && value < 1) {
+    const minutes = Math.round(value * 24 * 60);
+    return `${String(Math.floor(minutes / 60) % 24).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+  }
+  return text(value).slice(0, 5);
+}
+
+function fmt(value: number) {
+  return Number(value || 0).toLocaleString("th-TH");
+}
+
+function formatDate(value: string) {
+  if (!value) return "—";
+  const [year, month, day] = value.split("-");
+  return `${day}/${month}/${year}`;
+}
+
+function formatDateTime(value: string) {
+  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("th-TH", { dateStyle: "short", timeStyle: "short" }).format(date);
+}
+
+function formatDateOnly(value: string) {
+  if (!value) return "—";
+  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return formatDate(value.slice(0, 10));
+  return `${String(date.getDate()).padStart(2, "0")}/${String(date.getMonth() + 1).padStart(2, "0")}/${date.getFullYear()}`;
+}
+
+/** แปลงเวลาจากฐานข้อมูล (UTC ไม่มีโซนต่อท้าย) เป็น Date ตามเวลาเครื่องผู้ใช้ */
+function toLocalDate(value: string) {
+  if (!value) return null;
+  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatTime(value: string) {
+  const date = toLocalDate(value);
+  if (!date) return "—";
+  return new Intl.DateTimeFormat("th-TH", { hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
+/** วันนี้ตามเวลาเครื่องผู้ใช้ ไม่ใช่ UTC มิฉะนั้นยอดตอนเย็นจะข้ามวันผิด */
+function isToday(value: string) {
+  const date = toLocalDate(value);
+  if (!date) return false;
+  const now = new Date();
+  return date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate();
+}
+
+function html(value: unknown) {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character] || character);
+}
+
+const BANGKOK_DATE_TIME_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Bangkok",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+function bangkokDateTimeKey(value = new Date()) {
+  const parts = Object.fromEntries(
+    BANGKOK_DATE_TIME_FORMATTER.formatToParts(value)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+}
+
+function parseCsv(textValue: string) {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+  const source = textValue.replace(/^\uFEFF/, "");
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === '"') {
+      if (quoted && source[index + 1] === '"') {
+        cell += '"';
+        index += 1;
+      } else quoted = !quoted;
+    } else if (character === "," && !quoted) {
+      row.push(cell);
+      cell = "";
+    } else if ((character === "\n" || character === "\r") && !quoted) {
+      if (character === "\r" && source[index + 1] === "\n") index += 1;
+      row.push(cell);
+      if (row.some((value) => value.trim())) rows.push(row);
+      row = [];
+      cell = "";
+    } else cell += character;
+  }
+  row.push(cell);
+  if (row.some((value) => value.trim())) rows.push(row);
+  return rows;
+}
+
+function normalizeForecastDate(value: string) {
+  const match = value.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!match) return "";
+  return `${match[3]}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}`;
+}
+
+function normalizeForecastTime(value: string) {
+  const match = value.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!match) return "";
+  return `${match[1].padStart(2, "0")}:${match[2]}:${match[3] || "00"}`;
+}
+
+async function parseForecastFile(file: File): Promise<ForecastPreview> {
+  const rows = parseCsv(await file.text());
+  if (rows.length < 3) throw new Error("ไฟล์ Forecast ไม่มีข้อมูล");
+  const sourceMatch = (rows[0][0] || "").match(/\((\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}:\d{2}:\d{2})\)/);
+  if (!sourceMatch) throw new Error("ไม่พบเวลา Last Calculate DO ในไฟล์");
+  const sourceDate = `${sourceMatch[3]}-${sourceMatch[2].padStart(2, "0")}-${sourceMatch[1].padStart(2, "0")}`;
+  const sourceTime = normalizeForecastTime(sourceMatch[4]);
+  const sourceCalculatedAt = new Date(`${sourceDate}T${sourceTime}+07:00`).toISOString();
+  const headers = rows[1].map((value) => value.trim());
+  const column = (name: string) => headers.indexOf(name);
+  for (const required of ["Material", "Description", "Prod.Qty.", "Delivery Date", "Delivery Time"]) {
+    if (column(required) < 0) throw new Error(`ไฟล์ไม่มีคอลัมน์ ${required}`);
+  }
+  const grouped = new Map<string, ForecastUploadRow>();
+  let sourceRowCount = 0;
+  let invalidRowCount = 0;
+  let duplicateRowCount = 0;
+  for (const cells of rows.slice(2)) {
+    const materialCode = String(cells[column("Material")] || "").trim().toUpperCase();
+    const deliveryDate = normalizeForecastDate(String(cells[column("Delivery Date")] || ""));
+    const deliveryTime = normalizeForecastTime(String(cells[column("Delivery Time")] || ""));
+    const prodQty = number(cells[column("Prod.Qty.")]);
+    if (!cells.some((cell) => String(cell || "").trim())) continue;
+    if (!materialCode || !deliveryDate || !deliveryTime || prodQty <= 0) {
+      invalidRowCount += 1;
+      continue;
+    }
+    sourceRowCount += 1;
+    const sourceKey = `${materialCode}|${deliveryDate}|${deliveryTime}`;
+    const existing = grouped.get(sourceKey);
+    if (existing) { existing.prodQty += prodQty; duplicateRowCount += 1; }
+    else grouped.set(sourceKey, {
+      sourceKey, materialCode, deliveryDate, deliveryTime, prodQty,
+      description: String(cells[column("Description")] || "").trim(),
+      deliverySpot: String(cells[column("Delivery Spot")] || "").trim(),
+      factory: String(cells[column("Factory")] || "").trim(),
+      shop: String(cells[column("Shop")] || "").trim(),
+      line: String(cells[column("Line")] || "").trim(),
+    });
+  }
+  const uploadRows = [...grouped.values()].sort((left, right) =>
+    left.materialCode.localeCompare(right.materialCode)
+    || left.deliveryDate.localeCompare(right.deliveryDate)
+    || left.deliveryTime.localeCompare(right.deliveryTime)
+  );
+  if (invalidRowCount > 0) throw new Error(`พบข้อมูลผิดรูปแบบ ${invalidRowCount} แถว กรุณาตรวจ Part No., วันที่, เวลา และ Quantity`);
+  if (!uploadRows.length) throw new Error("ไม่พบรายการ Forecast ที่มียอดมากกว่า 0");
+  return {
+    fileName: file.name,
+    sourceCalculatedAt,
+    sourceLabel: `${sourceMatch[1].padStart(2, "0")}/${sourceMatch[2].padStart(2, "0")}/${sourceMatch[3]} ${sourceTime}`,
+    sourceRowCount,
+    materialCount: new Set(uploadRows.map((row) => row.materialCode)).size,
+    totalQty: uploadRows.reduce((sum, row) => sum + row.prodQty, 0),
+    duplicateRowCount,
+    rows: uploadRows,
+  };
+}
+
+function isDeliveryOverdue(due: DueLine, now = new Date()) {
+  const status = String(due.status || "").trim().toLowerCase();
+  if (["completed", "cancelled", "canceled"].includes(status)) return false;
+  const required = Number(due.reqQty);
+  const dispatched = Number(due.scannedQty);
+  if (!Number.isFinite(required) || required <= 0 || !Number.isFinite(dispatched) || dispatched >= required) return false;
+
+  const dateMatch = due.deliveryDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const timeMatch = due.deliveryTime.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  if (!dateMatch || !timeMatch) return false;
+  const year = Number(dateMatch[1]);
+  const month = Number(dateMatch[2]);
+  const day = Number(dateMatch[3]);
+  const validDate = new Date(Date.UTC(year, month - 1, day));
+  if (validDate.getUTCFullYear() !== year || validDate.getUTCMonth() !== month - 1 || validDate.getUTCDate() !== day) return false;
+
+  return `${due.deliveryDate}T${due.deliveryTime}` < bangkokDateTimeKey(now);
+}
+
+function stateOf(due: DueLine, now = new Date()) {
+  const scanned = Number(due.scannedQty);
+  if (scanned >= Number(due.reqQty)) return "completed";
+  if (isDeliveryOverdue(due, now)) return "over";
+  if (scanned > 0) return "partial";
+  return "pending";
+}
+
+function stateLabel(due: DueLine, now = new Date()) {
+  const state = stateOf(due, now);
+  if (state === "over") return "เกินดิวจัดส่งงาน";
+  if (state === "completed") return "ครบตามแผน";
+  if (Number(due.arrangedQty) > 0 && Number(due.scannedQty) > 0) return "ส่งบางส่วน / มีงานรอ";
+  if (Number(due.arrangedQty) > 0) return "จัดแล้ว รอขายออก";
+  if (state === "partial") return "ส่งบางส่วน";
+  return "ยังไม่ส่ง";
+}
+
+async function playOverdueAlertTone(audioContextRef: { current: AudioContext | null }) {
+  try {
+    const audioWindow = window as typeof window & { webkitAudioContext?: typeof AudioContext };
+    const AudioContextClass = audioWindow.AudioContext || audioWindow.webkitAudioContext;
+    if (!AudioContextClass) return false;
+    const existingContext = audioContextRef.current;
+    const context = existingContext && existingContext.state !== "closed" ? existingContext : new AudioContextClass();
+    audioContextRef.current = context;
+    if (context.state !== "running") await context.resume();
+
+    const startAt = context.currentTime + 0.02;
+    [{ frequency: 880, offset: 0 }, { frequency: 660, offset: 0.2 }].forEach(({ frequency, offset }) => {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      const toneStart = startAt + offset;
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(frequency, toneStart);
+      gain.gain.setValueAtTime(0.0001, toneStart);
+      gain.gain.exponentialRampToValueAtTime(0.12, toneStart + 0.025);
+      gain.gain.exponentialRampToValueAtTime(0.0001, toneStart + 0.16);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(toneStart);
+      oscillator.stop(toneStart + 0.18);
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function MetricCard({ tone, icon, label, value, suffix, note }: { tone: string; icon: string; label: string; value: string; suffix?: string; note?: string }) {
+  return (
+    <article className={`metric-card tone-${tone}`}>
+      <span className="metric-icon">{icon}</span>
+      <div><span className="metric-label">{label}</span><strong>{value}</strong><small>{suffix}{note ? ` · ${note}` : ""}</small></div>
+    </article>
+  );
+}
+
+function Card({ title, action, children, className = "" }: { title?: ReactNode; action?: ReactNode; children: ReactNode; className?: string }) {
+  return (
+    <section className={`panel ${className}`}>
+      {(title || action) && <header className="panel-head">{title && <h3>{title}</h3>}{action}</header>}
+      {children}
+    </section>
+  );
+}
+
+function Empty({ title = "ยังไม่มีข้อมูล", text = "นำเข้าแผนส่งงานเพื่อเริ่มใช้งานระบบ" }: { title?: string; text?: string }) {
+  return <div className="empty"><span>▦</span><strong>{title}</strong><p>{text}</p></div>;
+}
+
+/**
+ * รูปชิ้นงาน
+ *
+ * version คือเวลาที่รูปถูกแก้ไขล่าสุด ใส่ต่อท้าย URL เพื่อให้เบราว์เซอร์รู้ว่า
+ * เป็นคนละรูปกับที่เคยแคชไว้ มิฉะนั้นอัปโหลดรูปใหม่ทับแล้วจะยังเห็นรูปเก่า
+ * เพราะ URL เดิมอ้างด้วย materialCode อย่างเดียว
+ */
+function PartImage({ materialCode, compact = false, version, slot = "master", strict = false }: { materialCode: string; compact?: boolean; version?: string; slot?: "master" | "actual"; strict?: boolean }) {
+  const key = `${slot}:${materialCode}:${version || "unversioned"}:${strict ? "strict" : "compatible"}`;
+  const [failedKey, setFailedKey] = useState("");
+  if (failedKey === key) return <div className={`part-photo-fallback ${compact ? "compact" : ""}`}><span>◈</span><small>ยังไม่มีรูป</small></div>;
+  const source = `/api/part-images?materialCode=${encodeURIComponent(materialCode)}${slot === "actual" ? "&slot=actual" : ""}${strict ? "&strict=1" : ""}${version ? `&v=${encodeURIComponent(version)}` : ""}`;
+  const imageLabel = slot === "actual" ? "รูปชิ้นงานในกล่อง" : "รูปตัวอย่าง Master";
+  return <div className={`part-photo ${compact ? "compact" : ""}`}><img src={source} alt={`${imageLabel} ${materialCode}`} loading="lazy" decoding="async" onError={() => setFailedKey(key)} /></div>;
+}
+
+const EFFECTIVE_IMAGE_PROJECTION_VERSION = "separate-image-slots-v4";
+
+/**
+ * โชว์รูปคู่กันตามตำแหน่งที่ผู้ใช้งานคุ้นเคย: รูปชิ้นงานอยู่ซ้าย และรูปตัวอย่างอยู่ขวา
+ * ใช้ตอนสแกนเพื่อให้ผู้ตรวจเทียบว่าชิ้นงานในกล่องตรงกับตัวอย่างจริง
+ *
+ * ผู้ใช้ Stock/Delivery ไม่มีสิทธิ์โหลด metadata รูป จึงไม่มี updatedAt สำหรับ cache busting
+ * projectionVersion ทำให้ popup ไม่ใช้ URL unversioned ที่อาจค้างจาก semantics ก่อน legacy fallback
+ */
+function PartImagePair({ materialCode, masterVersion, actualVersion, masterAvailable = true, actualAvailable = true, projectionVersion = EFFECTIVE_IMAGE_PROJECTION_VERSION, strictSlots = false }: { materialCode: string; masterVersion?: string; actualVersion?: string; masterAvailable?: boolean; actualAvailable?: boolean; projectionVersion?: string; strictSlots?: boolean }) {
+  const capStyle: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: "#6b7787", marginBottom: 5, textAlign: "center", letterSpacing: "0.02em" };
+  const figStyle: React.CSSProperties = { margin: 0, flex: "1 1 130px", minWidth: 0 };
+  const fallback = <div className="part-photo-fallback"><span>◈</span><small>ยังไม่มีรูป</small></div>;
+  return <div className="part-image-pair" style={{ display: "flex", gap: 12, flexWrap: "wrap", width: "100%" }}>
+    <figure style={figStyle}><figcaption style={capStyle}>รูปชิ้นงานในกล่อง</figcaption>{actualAvailable ? <PartImage materialCode={materialCode} slot="actual" version={actualVersion || projectionVersion} strict={strictSlots} /> : fallback}</figure>
+    <figure style={figStyle}><figcaption style={capStyle}>รูปตัวอย่าง (Master)</figcaption>{masterAvailable ? <PartImage materialCode={materialCode} slot="master" version={masterVersion || projectionVersion} strict={strictSlots} /> : fallback}</figure>
+  </div>;
+}
+
+export default function DeliveryControlApp({ user, signOutPath, monitorMode = false }: { user: { id: number; employeeCode: string; displayName: string; email: string; role: string; permissions: AppPermission[] }; signOutPath: string; monitorMode?: boolean }) {
+  // ออกจากระบบด้วย POST เท่านั้น ปุ่มยังเป็น <a> เพื่อให้สไตล์เดิม (.top-user a,
+  // .mobile-logout) ใช้ได้ต่อโดยไม่ต้องแก้ CSS แต่ตัวคำขอจริงเป็น POST
+  async function signOut(event: ReactMouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    await fetch(signOutPath, { method: "POST" }).catch(() => undefined);
+    window.location.href = "/login";
+  }
+
+  const initialPage = monitorMode ? "overdue" : user.role === "admin"
+    ? "dashboard"
+    : NAV.find((item) => user.permissions.includes(item.key))?.key || "dashboard";
+  const hasDueDataPermission = user.role === "admin" || DUE_DATA_PAGES.some((key) => user.permissions.includes(key));
+  const [page, setPage] = useState<PageKey>(initialPage);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [stockMenuCollapsed, setStockMenuCollapsed] = useState(false);
+  const [stockOverviewSearch,setStockOverviewSearch]=useState("");
+  useEffect(()=>{const sync=(event:Event)=>setStockOverviewSearch(String((event as CustomEvent).detail||""));window.addEventListener("stock-overview-search-value",sync);return()=>window.removeEventListener("stock-overview-search-value",sync);},[]);
+  const [payload, setPayload] = useState<DuePayload>({ dues: [], imports: [], scans: [], receipts: [] });
+  const [loading, setLoading] = useState(hasDueDataPermission);
+  const [error, setErrorState] = useState("");
+  const setError = (value: string) => { setErrorState(value); if(value) reportOperationWarning({page,message:value}); };
+  const [notice, setNoticeState] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const setNotice = (value: { type: "success" | "error"; text: string; warningHandled?: boolean } | null) => {
+    setNoticeState(value);
+    if(value?.type === "error" && !value.warningHandled) reportOperationWarning({page,message:value.text});
+  };
+  const [dueLoadedAt, setDueLoadedAt] = useState<string | null>(null);
+  const [deadlineClock, setDeadlineClock] = useState(() => Date.now());
+  const [overdueSoundEnabled, setOverdueSoundEnabled] = useState(false);
+  const overdueAudioContextRef = useRef<AudioContext | null>(null);
+  const previousOverdueIdsRef = useRef<Set<number> | null>(null);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+  useEffect(() => {
+    let timer: number | undefined;
+    const refreshClock = () => setDeadlineClock(Date.now());
+    const scheduleNextMinute = () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      const delay = 60_000 - (Date.now() % 60_000) + 50;
+      timer = window.setTimeout(() => {
+        refreshClock();
+        scheduleNextMinute();
+      }, delay);
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      refreshClock();
+      scheduleNextMinute();
+    };
+    scheduleNextMinute();
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, []);
+  const [file, setFile] = useState<File | null>(null);
+  const [previewRows, setPreviewRows] = useState<ImportRow[]>([]);
+  const [parsing, setParsing] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [forecast, setForecast] = useState<ForecastPayload>({ activeImport: null, imports: [], coverage: [], summary: null });
+  const [forecastLoading, setForecastLoading] = useState(false);
+  const [forecastFile, setForecastFile] = useState<File | null>(null);
+  const [forecastPreview, setForecastPreview] = useState<ForecastPreview | null>(null);
+  const [forecastParsing, setForecastParsing] = useState(false);
+  const [forecastImporting, setForecastImporting] = useState(false);
+  const [forecastProgress, setForecastProgress] = useState(0);
+  const [forecastSearch, setForecastSearch] = useState("");
+  const [forecastExporting, setForecastExporting] = useState(false);
+  const [forecastStatus, setForecastStatus] = useState<"all" | "overdue" | "within3" | "within7" | "within14" | "over14" | "shortage" | "covered">("all");
+  const [forecastFactory, setForecastFactory] = useState("ALL");
+  const [forecastRange, setForecastRange] = useState<7 | 14 | 30>(14);
+  const [forecastDragActive, setForecastDragActive] = useState(false);
+  const [rawTag, setRawTag] = useState("");
+  const [tagPreview, setTagPreview] = useState<TagPreview | null>(null);
+  const [dispatchConfirmation, setDispatchConfirmation] = useState<VerifyResult | null>(null);
+  const [dispatchKitSelection, setDispatchKitSelection] = useState<DispatchKitSelection | null>(null);
+  const [dispatchDueDate, setDispatchDueDate] = useState("");
+  const [dispatchDueTime, setDispatchDueTime] = useState("");
+  const [dispatchDueFact, setDispatchDueFact] = useState("");
+  const [checkingTag, setCheckingTag] = useState(false);
+  const [verifyRaw, setVerifyRaw] = useState("");
+  const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [arrangeDueDate, setArrangeDueDate] = useState("");
+  const [arrangeWarning, setArrangeWarning] = useState<{ message: string; date: string; time: string; fact: string } | null>(null);
+  const [arrangeDueTime, setArrangeDueTime] = useState("");
+  const [arrangeDueFact, setArrangeDueFact] = useState("");
+  const [arrangeTag, setArrangeTag] = useState("");
+  const [arrangeQty, setArrangeQty] = useState("");
+  const [arrangeDueSearch, setArrangeDueSearch] = useState("");
+  const [arrangeListPage, setArrangeListPage] = useState(1);
+  const [arrangedSearch, setArrangedSearch] = useState("");
+  const [arrangedPage, setArrangedPage] = useState(1);
+  const [arrangeConfirmQty,setArrangeConfirmQty]=useState("");
+  const [arrangeConfirmation, setArrangeConfirmation] = useState<ArrangeConfirmation | null>(null);
+  const arrangeRequestRef = useRef(false);
+  const arrangeConfirmButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (arrangeConfirmation) arrangeConfirmButtonRef.current?.focus(); }, [arrangeConfirmation]);
+  const [splitTagRequest,setSplitTagRequest]=useState<{pickId?:number;stockTagCode?:string;labelId?:string}|null>(null);
+  useEffect(()=>{const id=new URLSearchParams(window.location.search).get("splitLabel");if(!id)return;const timer=window.setTimeout(()=>setSplitTagRequest({labelId:id}),0);return()=>window.clearTimeout(timer);},[]);
+  function closeSplitTag() {
+    setSplitTagRequest(null);
+    const url=new URL(window.location.href);
+    if(url.searchParams.has("splitLabel")){url.searchParams.delete("splitLabel");window.history.replaceState(window.history.state,"",url.pathname+url.search+url.hash);}
+  }
+  const [arrangementPreview, setArrangementPreview] = useState<ArrangementPreview | null>(null);
+  const [filterDate, setFilterDate] = useState("");
+  const [dashboardStatusFilter, setDashboardStatusFilter] = useState<"all" | "completed" | "pending" | "over">("all");
+  const [planPage, setPlanPage] = useState(1);
+  const [planPageSize, setPlanPageSize] = useState(10);
+  const [filterFact, setFilterFact] = useState("ALL");
+  const [filterTime, setFilterTime] = useState("ALL");
+  const [query, setQuery] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraPurpose, setCameraPurpose] = useState<"scan" | "stock" | "stock-count">("scan");
+  const [cameraError, setCameraErrorState] = useState("");
+  const setCameraError = (value:string) => { setCameraErrorState(value); if(value)reportOperationWarning({page,message:value}); };
+  const [selectedScan, setSelectedScan] = useState<DueScan | null>(null);
+  const [settings, setSettings] = useState({ partial: true, confirm: true, sound: true, autoFocus: true });
+  function changeVoiceEnabled(sound:boolean) {
+    const next={...settings,sound};
+    setSettings(next);
+    try {window.localStorage.setItem('kit-due-settings',JSON.stringify(next));} catch { /* settings remain active for this session */ }
+  }
+  useEffect(() => {
+    if (notice) speakThaiAlert(notice.type, page, notice.text, settings.sound);
+  }, [notice, page, settings.sound]);
+  const [systemUsers, setSystemUsers] = useState<SystemUser[]>([]);
+  const [userSearch, setUserSearch] = useState("");
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [userSaving, setUserSaving] = useState(false);
+  const [userForm, setUserForm] = useState<UserForm>(EMPTY_USER);
+  const [userEditorOpen, setUserEditorOpen] = useState(false);
+  const [partImages, setPartImages] = useState<PartImageMapping[]>([]);
+  const [partActualImages, setPartActualImages] = useState<PartImageMapping[]>([]);
+  const [partActualImageFile, setPartActualImageFile] = useState<File | null>(null);
+  const [partImagesLoading, setPartImagesLoading] = useState(false);
+  const [partImageCode, setPartImageCode] = useState("");
+  const [partImageFile, setPartImageFile] = useState<File | null>(null);
+  const [partImageSaving, setPartImageSaving] = useState(false);
+  const [bulkMasterImageFiles, setBulkMasterImageFiles] = useState<File[]>([]);
+  const [bulkActualImageFiles, setBulkActualImageFiles] = useState<File[]>([]);
+  const [bulkImageRunning, setBulkImageRunning] = useState(false);
+  const [bulkImageProgress, setBulkImageProgress] = useState({ done: 0, total: 0 });
+  const [bulkImageFailed, setBulkImageFailed] = useState<Array<{ name: string; reason: string }>>([]);
+  const [partBundleExcel, setPartBundleExcel] = useState<File | null>(null);
+  const [partBundleMasterFiles, setPartBundleMasterFiles] = useState<File[]>([]);
+  const [partBundleActualFiles, setPartBundleActualFiles] = useState<File[]>([]);
+  const [partBundlePreview, setPartBundlePreview] = useState<PartBundlePreview | null>(null);
+  const [partBundleRunning, setPartBundleRunning] = useState(false);
+  const [partBundleProgress, setPartBundleProgress] = useState({ done: 0, total: 0 });
+  const [partBundleFailed, setPartBundleFailed] = useState<Array<{ name: string; reason: string }>>([]);
+  const [partImageNeedle, setPartImageNeedle] = useState("");
+  const [deletingImportId, setDeletingImportId] = useState<number | null>(null);
+  const [stock, setStock] = useState<StockPayload>({ parts: [], tags: [], allocations: [], picks: [], dispatchLinks: [], jobClosures: [], manualReceipts: [], countAdjustments: [], countAdjustmentLines: [], movementDays: [] });
+  const [stockListExpanded, setStockListExpanded] = useState(false);
+  const [stockManualEntry, setStockManualEntry] = useState(false);
+  const [lastStockReceipt, setLastStockReceipt] = useState<{ tagId: string; materialCode: string; jobNo: string; qty: number; locationCode: string } | null>(null);
+  const [manualStockForm, setManualStockForm] = useState({ materialCode: "", qty: "", jobNo: "", productionDate: new Date().toISOString().slice(0, 10), referenceNo: "", note: "" });
+  const [manualDuplicateJob, setManualDuplicateJob] = useState<ManualDuplicateJob | null>(null);
+  const [manualReceiptSuccess, setManualReceiptSuccess] = useState<ManualReceiptSuccess | null>(null);
+  const [manualTransactionOpen, setManualTransactionOpen] = useState("");
+  const [stockCountForm, setStockCountForm] = useState({ rawPayload: "", countedQty: "", countDate: new Date().toISOString().slice(0, 10), reason: "บันทึกยอดตรวจนับ Stock สิ้นเดือน" });
+  const [stockCountPreview, setStockCountPreview] = useState<StockCountPreview | null>(null);
+  const [stockCountConfirmOpen, setStockCountConfirmOpen] = useState(false);
+  const [stockManagementSaving, setStockManagementSaving] = useState(false);
+  const stockCountInputRef = useRef<HTMLInputElement>(null);
+  const [replacement, setReplacement] = useState<ReplacementPayload>({ requests: [], issues: [] });
+  const [replacementLoading, setReplacementLoading] = useState(false);
+  const [replacementSaving, setReplacementSaving] = useState(false);
+  const [replacementSearch, setReplacementSearch] = useState("");
+  const [replacementSelectedId, setReplacementSelectedId] = useState("");
+  const [replacementTag, setReplacementTag] = useState("");
+  const [replacementQty, setReplacementQty] = useState("");
+  const [replacementPreview, setReplacementPreview] = useState<ReplacementIssuePreview | null>(null);
+  const [replacementForm, setReplacementForm] = useState({
+    materialCode: "", customer: "", requestedQty: "", reasonType: "shortage", reasonDetail: "", neededDate: "",
+  });
+  const replacementInputRef = useRef<HTMLInputElement>(null);
+  const [jobClosingKey, setJobClosingKey] = useState("");
+  const [jobQtyAdjustment, setJobQtyAdjustment] = useState<JobQuantityAdjustment | null>(null);
+  const [jobQtyTarget, setJobQtyTarget] = useState("");
+  const [jobQtyReason, setJobQtyReason] = useState("");
+  const [jobQtyPreview, setJobQtyPreview] = useState<JobQuantityAdjustmentPreview | null>(null);
+  const [jobQtySaving, setJobQtySaving] = useState(false);
+  const [jobQtyCreatedTags, setJobQtyCreatedTags] = useState<StockTag[]>([]);
+  const [jobQtyAdjusted, setJobQtyAdjusted] = useState(false);
+  const [jobCloseSearch, setJobCloseSearch] = useState("");
+  const [jobClosePage, setJobClosePage] = useState(1);
+  const [stockLoading, setStockLoading] = useState(false);
+  const [clearingTestStock, setClearingTestStock] = useState(false);
+  const [stockPartForm, setStockPartForm] = useState({ materialCode: "", partName: "", customer: "", location: "", standardQty: "" });
+  const [partSearch, setPartSearch] = useState("");
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [historyDate, setHistoryDate] = useState("");
+  const [historyDateTo, setHistoryDateTo] = useState("");
+  const [historyType, setHistoryType] = useState("all");
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [auditLogsLoading, setAuditLogsLoading] = useState(false);
+  const [partPage, setPartPage] = useState(1);
+  const [partPageSize, setPartPageSize] = useState(10);
+  const [tagSearch, setTagSearch] = useState("");
+  const [tagPage, setTagPage] = useState(1);
+  const [tagPageSize, setTagPageSize] = useState(10);
+  const [deletingPartCode, setDeletingPartCode] = useState("");
+  const [deletingStockTagId, setDeletingStockTagId] = useState("");
+  const [stockTagForm, setStockTagForm] = useState({ materialCode: "", qty: "", jobNo: "", productionDate: new Date().toISOString().slice(0, 10) });
+  const [stockScan, setStockScan] = useState("");
+  const [stockLocation, setStockLocation] = useState<StockLocationSelection | null>(null);
+  const [stockLocationActivity, setStockLocationActivity] = useState(0);
+  const stockScanInputRef = useRef<HTMLInputElement>(null);
+  const stockScanTimerRef = useRef<number | null>(null);
+  const stockScanRequestRef = useRef(false);
+  const dispatchScanTimerRef = useRef<number | null>(null);
+  const dispatchScanRequestRef = useRef(false);
+  const hardwareScanBufferRef = useRef("");
+  const hardwareScanLastKeyRef = useRef(0);
+  const hardwareScanTimerRef = useRef<number | null>(null);
+  const [stockReceivePreview, setStockReceivePreview] = useState<StockReceivePreview | null>(null);
+  const [stockReceiveQty, setStockReceiveQty] = useState("");
+  const [stockReceiveProductionDate, setStockReceiveProductionDate] = useState("");
+  const [stockSaving, setStockSaving] = useState(false);
+  // Scanner/camera handlers live inside effects and can otherwise see an old Stock snapshot.
+  // Keep the latest data in a ref so a known printed Tag can open its confirmation immediately.
+  const stockDataRef = useRef(stock);
+  stockDataRef.current = stock;
+  const [createdStockTags, setCreatedStockTags] = useState<StockTag[]>([]);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const partBundleExcelInput = useRef<HTMLInputElement>(null);
+  const partBundleMasterInput = useRef<HTMLInputElement>(null);
+  const partBundleActualInput = useRef<HTMLInputElement>(null);
+  const tagInput = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const tagResultRef = useRef<HTMLElement>(null);
+  const verifyInput = useRef<HTMLInputElement>(null);
+  const verifyResultRef = useRef<HTMLElement>(null);
+  const canEditPage = (target: EditablePageKey) => user.role === "admin" || user.permissions.includes(`${target}-edit`);
+  const canPrintTags = user.role === "admin" || user.permissions?.includes("tags");
+  const canCreateReplacement = canEditPage("replacement") && (user.role === "admin" || user.role === "qc" || user.role === "inspector");
+  const canIssueReplacement = canEditPage("replacement") && (user.role === "admin" || user.role === "delivery" || user.role === "dispatcher");
+  const allowedPages = useMemo(() => {
+    const pages = new Set<PageKey>(NAV.filter((item) => user.role === "admin" || user.permissions.includes(item.key)).map((item) => item.key));
+    return pages;
+  }, [user.permissions, user.role]);
+  const firstAllowedPage = NAV.find((item) => allowedPages.has(item.key))?.key || "dashboard";
+  const workflowPage: PageKey | null = allowedPages.has("dispatch")
+    ? "dispatch"
+    : allowedPages.has("arrange") ? "arrange" : null;
+
+  const restoredPageRef = useRef(false);
+  useEffect(() => {
+    if (restoredPageRef.current) return;
+    restoredPageRef.current = true;
+    const savedPage = monitorMode ? "overdue" : pageFromLocation();
+    const nextPage = savedPage && allowedPages.has(savedPage) ? savedPage : firstAllowedPage;
+    setPage(nextPage);
+    if (!monitorMode) updatePageLocation(nextPage, "replace");
+  }, [allowedPages, firstAllowedPage, monitorMode]);
+
+  useEffect(() => {
+    const onHistoryChange = () => {
+      if (monitorMode) return;
+      const requestedPage = pageFromUrl();
+      const nextPage = requestedPage && allowedPages.has(requestedPage) ? requestedPage : firstAllowedPage;
+      window.localStorage.setItem("kit-current-page", nextPage);
+      setPage(nextPage);
+      if (nextPage !== "stock") {
+        setStockLocation(null);
+        setStockLocationActivity(0);
+        setStockScan("");
+      }
+      if (nextPage === "parts" || nextPage === "settings") void loadPartImages();
+      setMenuOpen(false);
+      window.scrollTo({ top: 0 });
+    };
+    window.addEventListener("popstate", onHistoryChange);
+    return () => window.removeEventListener("popstate", onHistoryChange);
+  }, [allowedPages, firstAllowedPage, monitorMode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadDue() {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/due", { cache: "no-store" });
+      const data = await response.json() as DuePayload;
+      if (!response.ok) throw new Error(data.error || "โหลดข้อมูล Due ไม่สำเร็จ");
+      setPayload(data);
+      setDueLoadedAt(new Date().toISOString());
+      if (!filterDate && data.dues.length) {
+        const dates = [...new Set(data.dues.map((due) => due.deliveryDate))].sort();
+        const today = bangkokDateTimeKey().slice(0, 10);
+        setFilterDate(dates.includes(today) ? today : dates.at(-1) || "");
+      }
+      if (!selectedScan && data.scans.length) setSelectedScan(data.scans[0]);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "โหลดข้อมูล Due ไม่สำเร็จ");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadStock() {
+    setStockLoading(true);
+    try {
+      const response = await fetch("/api/stock", { cache: "no-store" });
+      const data = await response.json() as StockPayload & { error?: string };
+      if (!response.ok) throw new Error(data.error || "โหลด Stock ไม่สำเร็จ");
+      setStock({
+        parts: data.parts || [], tags: data.tags || [], allocations: data.allocations || [],
+        picks: data.picks || [], dispatchLinks: data.dispatchLinks || [], jobClosures: data.jobClosures || [],
+        manualReceipts: data.manualReceipts || [], countAdjustments: data.countAdjustments || [],
+        countAdjustmentLines: data.countAdjustmentLines || [], movementDays: data.movementDays || [],
+      });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "โหลด Stock ไม่สำเร็จ" });
+    } finally {
+      setStockLoading(false);
+    }
+  }
+
+  async function loadForecast() {
+    setForecastLoading(true);
+    try {
+      const response = await fetch("/api/forecast", { cache: "no-store" });
+      const data = await response.json() as ForecastPayload;
+      if (!response.ok) throw new Error(data.error || "โหลด Forecast Stock ไม่สำเร็จ");
+      setForecast({
+        activeImport: data.activeImport || null,
+        imports: data.imports || [],
+        coverage: data.coverage || [],
+        summary: data.summary || null,
+        trend: data.trend || [],
+        calculatedAt: data.calculatedAt,
+      });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "โหลด Forecast Stock ไม่สำเร็จ" });
+    } finally {
+      setForecastLoading(false);
+    }
+  }
+
+  async function loadAuditLogs() {
+    setAuditLogsLoading(true);
+    try {
+      const response = await fetch("/api/audit-logs?limit=2000", { cache: "no-store" });
+      const data = await response.json() as { logs?: AuditLog[]; error?: string };
+      if (!response.ok) throw new Error(data.error || "โหลดประวัติการดำเนินการไม่สำเร็จ");
+      setAuditLogs(data.logs || []);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "โหลดประวัติการดำเนินการไม่สำเร็จ" });
+    } finally {
+      setAuditLogsLoading(false);
+    }
+  }
+
+  async function prepareForecastFile(selected: File | null) {
+    setForecastFile(selected);
+    setForecastPreview(null);
+    if (!selected) return;
+    if (!selected.name.toLowerCase().endsWith(".csv")) {
+      setForecastFile(null);
+      setNotice({ type: "error", text: "รองรับเฉพาะไฟล์ Forecast .csv" });
+      return;
+    }
+    setForecastParsing(true);
+    try {
+      const parsed = await parseForecastFile(selected);
+      setForecastPreview(parsed);
+    } catch (caught) {
+      setForecastFile(null);
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "อ่านไฟล์ Forecast ไม่สำเร็จ" });
+    } finally {
+      setForecastParsing(false);
+    }
+  }
+
+  async function selectForecastFile(event: ChangeEvent<HTMLInputElement>) {
+    await prepareForecastFile(event.target.files?.[0] || null);
+    event.target.value = "";
+  }
+
+  async function importForecast() {
+    if (!forecastFile || !forecastPreview || forecastImporting) return;
+    setForecastImporting(true);
+    setForecastProgress(0);
+    let importId = 0;
+    try {
+      const importToken = [forecastFile.name, forecastFile.size, forecastFile.lastModified, forecastPreview.sourceCalculatedAt].join("|");
+      const beginResponse = await fetch("/api/forecast", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "begin_import", importToken, fileName: forecastFile.name,
+          sourceCalculatedAt: forecastPreview.sourceCalculatedAt,
+        }),
+      });
+      const begin = await beginResponse.json() as { importId?: number; error?: string };
+      if (!beginResponse.ok || !begin.importId) throw new Error(begin.error || "เริ่มนำเข้า Forecast ไม่สำเร็จ");
+      importId = begin.importId;
+      const chunkSize = 100;
+      for (let offset = 0; offset < forecastPreview.rows.length; offset += chunkSize) {
+        const rows = forecastPreview.rows.slice(offset, offset + chunkSize);
+        const response = await fetch("/api/forecast", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "append_rows", importId, rows }),
+        });
+        const data = await response.json() as { error?: string };
+        if (!response.ok) throw new Error(data.error || `นำเข้าข้อมูลชุดที่ ${Math.floor(offset / chunkSize) + 1} ไม่สำเร็จ`);
+        setForecastProgress(Math.min(99, Math.round(((offset + rows.length) / forecastPreview.rows.length) * 100)));
+      }
+      const finalizeResponse = await fetch("/api/forecast", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "finalize_import", importId }),
+      });
+      const finalized = await finalizeResponse.json() as { error?: string };
+      if (!finalizeResponse.ok) throw new Error(finalized.error || "ยืนยัน Forecast ชุดใหม่ไม่สำเร็จ");
+      setForecastProgress(100);
+      setForecastFile(null);
+      setForecastPreview(null);
+      setNotice({ type: "success", text: "นำเข้า Forecast ชุดใหม่และคำนวณระยะ Stock เรียบร้อย" });
+      await loadForecast();
+    } catch (caught) {
+      if (importId) {
+        await fetch("/api/forecast", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "cancel_import", importId }),
+        }).catch(() => undefined);
+      }
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "นำเข้า Forecast ไม่สำเร็จ" });
+    } finally {
+      setForecastImporting(false);
+    }
+  }
+
+  async function loadReplacements() {
+    setReplacementLoading(true);
+    try {
+      const response = await fetch("/api/replacements", { cache: "no-store" });
+      const data = await response.json() as ReplacementPayload & { error?: string };
+      if (!response.ok) throw new Error(data.error || "โหลดใบขอเบิกงานทดแทนไม่สำเร็จ");
+      setReplacement({ requests: data.requests || [], issues: data.issues || [] });
+      setReplacementSelectedId((current) => {
+        if (current && (data.requests || []).some((item) => String(item.id) === current && !["completed", "cancelled"].includes(item.status))) return current;
+        const firstOpen = (data.requests || []).find((item) => item.status === "pending" || item.status === "partial");
+        return firstOpen ? String(firstOpen.id) : "";
+      });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "โหลดใบขอเบิกงานทดแทนไม่สำเร็จ" });
+    } finally {
+      setReplacementLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!hasDueDataPermission) return;
+    const timer = window.setTimeout(() => void loadDue(), 0);
+    return () => window.clearTimeout(timer);
+  }, [hasDueDataPermission]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (page !== "overdue" || !allowedPages.has("overdue")) return;
+    const refresh = () => { if (document.visibilityState === "visible") void loadDue(); };
+    const timer = window.setInterval(refresh, 30_000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", refresh); };
+  }, [page, allowedPages]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!["stock", "manual-stock", "stock-count", "parts", "tags", "arrange", "replacement", "dispatch", "reports", "history"].includes(page)) return;
+    const timer = window.setTimeout(() => void loadStock(), 0);
+    return () => window.clearTimeout(timer);
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== "forecast") return;
+    const timer = window.setTimeout(() => void loadForecast(), 0);
+    return () => window.clearTimeout(timer);
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== "replacement") return;
+    const timer = window.setTimeout(() => void loadReplacements(), 0);
+    return () => window.clearTimeout(timer);
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== "history" || !allowedPages.has("history")) return;
+    const timer = window.setTimeout(() => void loadAuditLogs(), 0);
+    return () => window.clearTimeout(timer);
+  }, [page, allowedPages]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (page !== "users" || user.role !== "admin" || !allowedPages.has("users")) return;
+    const timer = window.setTimeout(() => void loadUsers(), 0);
+    return () => window.clearTimeout(timer);
+  }, [page, user.role, allowedPages]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const stored = window.localStorage.getItem("kit-due-settings");
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored) as Partial<typeof settings>;
+          setSettings((current) => ({ ...current, ...parsed, sound: parsed.sound !== false }));
+        } catch { /* use defaults */ }
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  async function loadUsers() {
+    if (user.role !== "admin" || !allowedPages.has("users")) return;
+    setUsersLoading(true);
+    try {
+      const response = await fetch("/api/users", { cache: "no-store" });
+      const data = await response.json() as { users?: SystemUser[]; error?: string };
+      if (!response.ok) throw new Error(data.error || "โหลดผู้ใช้งานไม่สำเร็จ");
+      setSystemUsers(data.users || []);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "โหลดผู้ใช้งานไม่สำเร็จ" });
+    } finally {
+      setUsersLoading(false);
+    }
+  }
+
+  async function loadPartImages() {
+    if (!allowedPages.has("parts") && !allowedPages.has("settings")) return;
+    setPartImagesLoading(true);
+    try {
+      const [masterRes, actualRes] = await Promise.all([
+        fetch("/api/part-images", { cache: "no-store" }),
+        fetch("/api/part-images?slot=actual", { cache: "no-store" }),
+      ]);
+      const data = await masterRes.json() as { images?: PartImageMapping[]; error?: string };
+      if (!masterRes.ok) throw new Error(data.error || "โหลดรายการรูปไม่สำเร็จ");
+      setPartImages(data.images || []);
+      const actualData = await actualRes.json() as { images?: PartImageMapping[]; error?: string };
+      if (actualRes.ok) setPartActualImages(actualData.images || []);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "โหลดรายการรูปไม่สำเร็จ" });
+    } finally {
+      setPartImagesLoading(false);
+    }
+  }
+
+  async function uploadPartImage(event: FormEvent) {
+    event.preventDefault();
+    if (!partImageCode.trim() || !partImageFile) return;
+    setPartImageSaving(true);
+    setNotice(null);
+    try {
+      const form = new FormData();
+      form.set("materialCode", partImageCode.trim().toUpperCase());
+      form.set("image", partImageFile);
+      const response = await fetch("/api/part-images", { method: "POST", body: form });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || "อัปโหลดรูปไม่สำเร็จ");
+      setNotice({ type: "success", text: `บันทึกรูป ${partImageCode.trim().toUpperCase()} แล้ว รูปจะแสดงทันทีเมื่อสแกน` });
+      setPartImageCode("");
+      setPartImageFile(null);
+      await loadPartImages();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "อัปโหลดรูปไม่สำเร็จ" });
+    } finally {
+      setPartImageSaving(false);
+    }
+  }
+
+  /**
+   * แปลงชื่อไฟล์เป็น Material Code
+   *
+   * ตัดนามสกุลออก ตัดเลขสำเนาแบบ " (1)" ที่ Windows เติมให้เวลาชื่อซ้ำ
+   * แล้วแปลงเป็นตัวพิมพ์ใหญ่ ให้ตรงกับที่ระบบเก็บ Part No.
+   */
+  function materialCodeFromFileName(name: string) {
+    return name
+      .replace(/\.[^.]+$/, "")
+      .replace(/\s*\(\d+\)\s*$/, "")
+      .trim()
+      .toUpperCase();
+  }
+
+  /**
+   * อัปโหลดรูป Master และรูปชิ้นงานในกล่องหลายไฟล์ในรอบเดียว
+   * โดยใช้ชื่อไฟล์ (ไม่รวมนามสกุล) เป็น Material Code
+   */
+  async function uploadPartImagesBulk(event: FormEvent) {
+    event.preventDefault();
+    const uploads = [
+      ...bulkMasterImageFiles.map((file) => ({ file, slot: "master" as const, label: "Master" })),
+      ...bulkActualImageFiles.map((file) => ({ file, slot: "actual" as const, label: "รูปในกล่อง" })),
+    ];
+    if (!uploads.length) return;
+    setBulkImageRunning(true);
+    setNotice(null);
+    setBulkImageFailed([]);
+    setBulkImageProgress({ done: 0, total: uploads.length });
+
+    const failed: Array<{ name: string; reason: string }> = [];
+    let saved = 0;
+
+    for (const [index, upload] of uploads.entries()) {
+      const materialCode = materialCodeFromFileName(upload.file.name);
+      try {
+        if (!materialCode) throw new Error("ชื่อไฟล์ว่าง ตั้งชื่อไฟล์ให้ตรงกับ Part No.");
+        if (!stock.parts.some((part) => part.materialCode === materialCode)) {
+          throw new Error(`ไม่พบ Part ${materialCode} ในทะเบียน`);
+        }
+        const form = new FormData();
+        form.set("materialCode", materialCode);
+        form.set("slot", upload.slot);
+        form.set("image", upload.file);
+        const response = await fetch("/api/part-images", { method: "POST", body: form });
+        const data = await response.json() as { error?: string };
+        if (!response.ok) throw new Error(data.error || "อัปโหลดไม่สำเร็จ");
+        saved += 1;
+      } catch (caught) {
+        failed.push({ name: `${upload.label} · ${upload.file.name}`, reason: caught instanceof Error ? caught.message : "อัปโหลดไม่สำเร็จ" });
+      }
+      setBulkImageProgress({ done: index + 1, total: uploads.length });
+    }
+
+    setBulkImageFailed(failed);
+    setNotice(failed.length
+      ? { type: "error", text: `อัปโหลดสำเร็จ ${fmt(saved)} รูป ไม่สำเร็จ ${fmt(failed.length)} รูป ดูรายการด้านล่าง` }
+      : { type: "success", text: `อัปโหลดรูป Master และรูปในกล่องสำเร็จทั้งหมด ${fmt(saved)} รูป` });
+    setBulkMasterImageFiles([]);
+    setBulkActualImageFiles([]);
+    setBulkImageRunning(false);
+    await loadPartImages();
+  }
+
+  async function deletePartImage(materialCode: string) {
+    if (!window.confirm(`ลบรูปของ ${materialCode} ใช่หรือไม่?`)) return;
+    const response = await fetch("/api/part-images", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ materialCode }) });
+    const data = await response.json() as { error?: string };
+    if (!response.ok) return setNotice({ type: "error", text: data.error || "ลบรูปไม่สำเร็จ" });
+    setNotice({ type: "success", text: `ลบรูป ${materialCode} แล้ว` });
+    await loadPartImages();
+  }
+
+  async function saveUser(event: FormEvent) {
+    event.preventDefault();
+    if (!userForm.permissions.length) {
+      setNotice({ type: "error", text: "กรุณาเลือกสิทธิ์เข้าใช้งานอย่างน้อย 1 หน้า" });
+      return;
+    }
+    setUserSaving(true);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/users", {
+        method: userForm.id ? "PATCH" : "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...userForm, permissions: [...new Set([...userForm.permissions, "permission-model-v2" as const])] }),
+      });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || "บันทึกผู้ใช้งานไม่สำเร็จ");
+      setNotice({ type: "success", text: userForm.id ? "แก้ไขผู้ใช้งานเรียบร้อย" : "เพิ่มผู้ใช้งานเรียบร้อย สามารถเข้าสู่ระบบได้ทันที" });
+      setUserForm(EMPTY_USER);
+      setUserEditorOpen(false);
+      await loadUsers();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "บันทึกผู้ใช้งานไม่สำเร็จ" });
+    } finally {
+      setUserSaving(false);
+    }
+  }
+
+  function editUser(target: SystemUser) {
+    setUserForm({
+      id: target.id, employeeCode: target.employeeCode, displayName: target.displayName,
+      email: target.email, role: target.role as UserRole, pin: "",
+      active: target.active, permissions: [...(target.permissions || [])],
+    });
+    setUserEditorOpen(true);
+  }
+
+  async function toggleUser(target: SystemUser) {
+    const response = await fetch("/api/users", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: target.id, active: !target.active }) });
+    const data = await response.json() as { error?: string };
+    if (!response.ok) return setNotice({ type: "error", text: data.error || "เปลี่ยนสถานะไม่สำเร็จ" });
+    setNotice({ type: "success", text: `${target.active ? "ระงับ" : "เปิดใช้"}บัญชี ${target.employeeCode} แล้ว` });
+    await loadUsers();
+  }
+
+  useEffect(() => {
+    if (!cameraOpen) return;
+    const videoElement = videoRef.current;
+    let stopped = false;
+    let scannerControls: { stop(): void } | null = null;
+    const handleCameraValue = (value: string) => {
+      setCameraOpen(false);
+      if (cameraPurpose === "stock") {
+        setStockScan(value);
+        void receiveStockTag(value);
+        return;
+      }
+      if (cameraPurpose === "stock-count") {
+        setStockCountForm((current) => ({ ...current, rawPayload: value }));
+        void loadStockCountTag(value);
+        return;
+      }
+      if (page === "verify") {
+        setVerifyRaw(value);
+        setVerifyResult(null);
+        void verifyTag(value);
+        return;
+      }
+      if (page === "replacement") {
+        setReplacementTag(value);
+        setReplacementPreview(null);
+        void previewReplacementIssue(value);
+        return;
+      }
+      if (page === "arrange") {
+        setArrangeTag(value);
+        setArrangementPreview(null);
+        void stageStockTag(value);
+      } else {
+        setRawTag(value);
+        setTagPreview(null);
+        void handleDispatchScan(value);
+      }
+    };
+    async function start() {
+      try {
+        setCameraError("");
+        if (!navigator.mediaDevices?.getUserMedia || !videoElement) throw new Error("อุปกรณ์นี้ไม่รองรับการเปิดกล้อง");
+        const [{ BrowserMultiFormatReader, BrowserQRCodeReader, BarcodeFormat }, { DecodeHintType }] = await Promise.all([
+          import("@zxing/browser"),
+          import("@zxing/library"),
+        ]);
+        if (stopped) return;
+        const customerTagMode = page === "dispatch" && Boolean(dispatchKitSelection);
+        const hints = new Map();
+        hints.set(DecodeHintType.POSSIBLE_FORMATS, customerTagMode ? [BarcodeFormat.QR_CODE] : [
+          BarcodeFormat.QR_CODE, BarcodeFormat.DATA_MATRIX, BarcodeFormat.CODE_128, BarcodeFormat.CODE_39,
+        ]);
+        hints.set(DecodeHintType.TRY_HARDER, true);
+        const videoConstraints = {
+          facingMode: { ideal: "environment" },
+          width: { ideal: customerTagMode ? 1920 : 1280 },
+          height: { ideal: customerTagMode ? 1080 : 720 },
+          frameRate: { ideal: 30 },
+        };
+        const enhanceCameraTrack = async (track: MediaStreamTrack) => {
+          const capabilities = track.getCapabilities() as MediaTrackCapabilities & {
+            focusMode?: string[];
+            zoom?: { min:number; max:number };
+          };
+          const advanced: Record<string, unknown> = {};
+          if (capabilities.focusMode?.includes("continuous")) advanced.focusMode = "continuous";
+          if (customerTagMode && capabilities.zoom && capabilities.zoom.max > capabilities.zoom.min) {
+            advanced.zoom = Math.min(capabilities.zoom.max, Math.max(capabilities.zoom.min, 1.25));
+          }
+          if (Object.keys(advanced).length) {
+            const enhancedConstraints = { advanced: [advanced] } as unknown as MediaTrackConstraints;
+            await track.applyConstraints(enhancedConstraints).catch(() => undefined);
+          }
+        };
+        if (customerTagMode) {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
+          if (stopped) {
+            stream.getTracks().forEach((track) => track.stop());
+            return;
+          }
+          videoElement.srcObject = stream;
+          await videoElement.play();
+          const track = stream.getVideoTracks()[0];
+          if (track) await enhanceCameraTrack(track);
+          const reader = new BrowserQRCodeReader(hints, { delayBetweenScanAttempts: 60, delayBetweenScanSuccess: 200 });
+          const canvas = document.createElement("canvas");
+          const context = canvas.getContext("2d", { alpha: false });
+          if (!context) throw new Error("อุปกรณ์นี้ไม่รองรับการประมวลผล QR");
+          let scanTimer: number | null = null;
+          let scanAttempt = 0;
+          const scanCustomerQr = () => {
+            if (stopped) return;
+            if (videoElement.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && videoElement.videoWidth > 0) {
+              const scanFullFrame = scanAttempt % 4 === 3;
+              const cropScale = scanFullFrame ? 1 : 0.66;
+              const sourceWidth = Math.round(videoElement.videoWidth * cropScale);
+              const sourceHeight = Math.round(videoElement.videoHeight * cropScale);
+              const sourceX = Math.round((videoElement.videoWidth - sourceWidth) / 2);
+              const sourceY = Math.round((videoElement.videoHeight - sourceHeight) / 2);
+              const targetHeight = Math.max(540, Math.round(960 * sourceHeight / sourceWidth));
+              if (canvas.width !== 960 || canvas.height !== targetHeight) {
+                canvas.width = 960;
+                canvas.height = targetHeight;
+                context.imageSmoothingEnabled = true;
+                context.imageSmoothingQuality = "high";
+              }
+              context.drawImage(videoElement, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+              try {
+                const result = reader.decodeFromCanvas(canvas);
+                const scannedValue = result.getText().trim();
+                if (scannedValue) {
+                  stopped = true;
+                  stream.getTracks().forEach((mediaTrack) => mediaTrack.stop());
+                  handleCameraValue(scannedValue);
+                  return;
+                }
+              } catch {
+                // Keep scanning while the QR is moving, blurred or not yet inside the guide frame.
+              }
+              scanAttempt += 1;
+            }
+            scanTimer = window.setTimeout(scanCustomerQr, 60);
+          };
+          scannerControls = {
+            stop() {
+              if (scanTimer !== null) window.clearTimeout(scanTimer);
+              stream.getTracks().forEach((mediaTrack) => mediaTrack.stop());
+            },
+          };
+          scanCustomerQr();
+          return;
+        }
+        const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 80, delayBetweenScanSuccess: 250 });
+        scannerControls = await reader.decodeFromConstraints(
+          { video: videoConstraints, audio: false },
+          videoElement,
+          (result, _error, controls) => {
+            if (!result || stopped) return;
+            const scannedValue = result.getText().trim();
+            stopped = true;
+            controls.stop();
+            handleCameraValue(scannedValue);
+          },
+        );
+        const stream = videoElement.srcObject;
+        const track = stream instanceof MediaStream ? stream.getVideoTracks()[0] : undefined;
+        if (track) {
+          void enhanceCameraTrack(track);
+        }
+      } catch (caught) {
+        setCameraError(caught instanceof Error ? caught.message : "เปิดกล้องไม่สำเร็จ");
+      }
+    }
+    void start();
+    return () => {
+      stopped = true;
+      scannerControls?.stop();
+      const stream = videoElement?.srcObject;
+      if (stream instanceof MediaStream) stream.getTracks().forEach((track) => track.stop());
+    };
+  }, [cameraOpen, cameraPurpose, page, dispatchKitSelection, stockLocation]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const scannerPage = page === "stock" || page === "stock-count" || page === "dispatch" || (page === "replacement" && canIssueReplacement);
+    if (!scannerPage || stockReceivePreview || dispatchConfirmation || replacementPreview || cameraOpen || splitTagRequest) return;
+    const activeInput = page === "stock" ? stockScanInputRef.current : page === "stock-count" ? stockCountInputRef.current : page === "replacement" ? replacementInputRef.current : tagInput.current;
+    const mobileOrTouch = window.matchMedia("(max-width: 720px), (pointer: coarse)").matches;
+    const focusTimer = mobileOrTouch ? null : window.setTimeout(() => activeInput?.focus(), 80);
+    const submitBuffer = () => {
+      const value = hardwareScanBufferRef.current.trim();
+      hardwareScanBufferRef.current = "";
+      if (hardwareScanTimerRef.current !== null) window.clearTimeout(hardwareScanTimerRef.current);
+      hardwareScanTimerRef.current = null;
+      if (value.length < 4) return;
+      if (page === "stock") {
+        setStockScan(value);
+        void receiveStockTag(value);
+      } else if (page === "stock-count") {
+        setStockCountForm((current) => ({ ...current, rawPayload: value }));
+        void loadStockCountTag(value);
+      } else if (page === "replacement") {
+        setReplacementTag(value);
+        void previewReplacementIssue(value);
+      } else {
+        setRawTag(value);
+        setTagPreview(null);
+        void handleDispatchScan(value);
+      }
+    };
+    const onScannerKey = (event: globalThis.KeyboardEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target === activeInput || target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.tagName === "SELECT") return;
+      if (event.key === "Enter" || event.key === "Tab") {
+        if (hardwareScanBufferRef.current) {
+          event.preventDefault();
+          submitBuffer();
+        }
+        return;
+      }
+      if (event.key.length !== 1) return;
+      const now = Date.now();
+      if (now - hardwareScanLastKeyRef.current > 400) hardwareScanBufferRef.current = "";
+      hardwareScanLastKeyRef.current = now;
+      hardwareScanBufferRef.current += event.key;
+      if (hardwareScanTimerRef.current !== null) window.clearTimeout(hardwareScanTimerRef.current);
+      hardwareScanTimerRef.current = window.setTimeout(submitBuffer, 320);
+    };
+    document.addEventListener("keydown", onScannerKey);
+    return () => {
+      if (focusTimer !== null) window.clearTimeout(focusTimer);
+      if (hardwareScanTimerRef.current !== null) window.clearTimeout(hardwareScanTimerRef.current);
+      hardwareScanBufferRef.current = "";
+      document.removeEventListener("keydown", onScannerKey);
+    };
+  }, [page, stockReceivePreview, dispatchConfirmation, replacementPreview, cameraOpen, replacementSelectedId, splitTagRequest, dispatchKitSelection, stockLocation]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (page !== "stock") return;
+    if (!stockLocation || !stockLocationActivity) return;
+    const timer = window.setTimeout(() => {
+      const keep = window.confirm(`ไม่มีการสแกนที่ชั้น ${stockLocation.code} เป็นเวลา 5 นาที\n\nยังรับงานเข้าชั้นเดิมอยู่หรือไม่?`);
+      if (keep) {
+        setStockLocationActivity(Date.now());
+        window.setTimeout(() => stockScanInputRef.current?.focus(), 50);
+      } else {
+        setStockLocation(null);
+        setStockLocationActivity(0);
+        setStockScan("");
+        setNotice({ type: "success", text: "ยกเลิกชั้นจัดเก็บแล้ว กรุณาสแกน QR ชั้นใหม่" });
+      }
+    }, 5 * 60 * 1000);
+    return () => window.clearTimeout(timer);
+  }, [page, stockLocation, stockLocationActivity]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function parseExcel(event: ChangeEvent<HTMLInputElement>) {
+    const selected = event.target.files?.[0] ?? null;
+    setFile(selected);
+    setPreviewRows([]);
+    setNotice(null);
+    if (!selected) return;
+    setParsing(true);
+    try {
+      if (!/\.xlsx?$/i.test(selected.name)) throw new Error("กรุณาเลือกไฟล์ Excel .xlsx หรือ .xls");
+      const xlsx = await import("xlsx");
+      // Keep Excel dates as serial numbers: formatted .w text may use month/day,
+      // and converting to JS Date can shift the calendar date across time zones.
+      const workbook = xlsx.read(await selected.arrayBuffer(), { type: "array", cellDates: false });
+      const normalized = (value: unknown) => text(value).toLowerCase().replace(/[\s._/()\-]+/g, "");
+      const normalizeDueDate = (value: unknown) => normalizeDueExcelDate(value, xlsx, Boolean(workbook.Workbook?.WBProps?.date1904));
+      const valueAt = (row: unknown[], headers: string[], aliases: string[]) => {
+        const index = headers.findIndex((header) => aliases.includes(header));
+        return index >= 0 ? row[index] : "";
+      };
+      const alias = {
+        material: ["materialcode", "materialno", "partno", "itemno"],
+        qty: ["reqqty", "dueqty", "quantity", "qty"],
+        description: ["materialdescription", "description", "partname"],
+        doNo: ["deliveryorderno", "dono", "pono", "ordernumber"],
+        doSubGroup: ["dosubgroup"],
+        seq: ["seq", "poitem", "item"],
+        date: ["deliverydate", "duedate"],
+        time: ["deliverytime", "duetime"],
+        fact: ["fact", "factory", "fac"],
+        line: ["line"],
+        shop: ["shop", "deliveryspot"],
+        site: ["site"],
+      };
+      const candidates: Array<{ sheetName: string; rows: ImportRow[] }> = [];
+      // ชีตแผน FAC ต้องขึ้นต้นด้วยรหัสตัวเลข เช่น 02, 09, 09.0 F3 หรือ 09.00 F3
+      // ไม่ใช้การค้นหาตัวเลขที่ตำแหน่งใดก็ได้ เพื่อไม่ให้ Sheet1/Sheet2 ถูกอ่านเป็นแผนงาน
+      const isNumericDueSheet = (name: string) => /^\d{1,2}(?:[.:]\d{1,2})?(?:\s|$)/.test(name.trim());
+
+      for (const sheetName of workbook.SheetNames) {
+        const trimmedSheetName = sheetName.trim();
+        const isTimeSheet = isNumericDueSheet(trimmedSheetName);
+        const isMcpSheet = /^mcp\s*site\s*[12](?:\s|$)/i.test(trimmedSheetName);
+        // ข้ามชีตช่วยคำนวณ/สรุป เช่น vlookup, รอบเช้า, Sheet1 ตั้งแต่ก่อนอ่านข้อมูล
+        if (!isTimeSheet && !isMcpSheet) continue;
+
+        const sheet = workbook.Sheets[sheetName];
+        const grid = xlsx.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: "" });
+        // แบบฟอร์ม MCP รวมชื่อ Site, วันที่ และรอบเวลาไว้ในหัวด้านบน (เซลล์ merged เช่น B1)
+        // จึงอ่านข้อความจาก 6 แถวแรกและใช้วันที่/เวลานี้กับทุกรายการในชีต
+        const mcpHeader = isMcpSheet
+          ? grid.slice(0, 6).flat().map((value) => text(value)).filter(Boolean).join(" ")
+          : "";
+        const mcpDateMatch = mcpHeader.match(/(?:^|\s)(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})(?=\s|$)/);
+        const mcpTimeMatch = mcpHeader.match(/รอบ\s*(\d{1,2})[.:](\d{2})/i);
+        const mcpHeaderDate = mcpDateMatch
+          ? (() => {
+              const rawYear = Number(mcpDateMatch[3]);
+              const year = rawYear > 2400 ? rawYear - 543 : rawYear < 100 ? rawYear + 2000 : rawYear;
+              return `${year}-${mcpDateMatch[2].padStart(2, "0")}-${mcpDateMatch[1].padStart(2, "0")}`;
+            })()
+          : "";
+        const mcpHeaderTime = mcpTimeMatch
+          ? `${mcpTimeMatch[1].padStart(2, "0")}:${mcpTimeMatch[2]}`
+          : "";
+        const sheetDeliveryDate = isTimeSheet
+          ? normalizeDueDate(sheet["A2"]?.v ?? grid[1]?.[0])
+          : isMcpSheet ? mcpHeaderDate : "";
+        const sheetDeliveryTime = isTimeSheet
+          ? normalizeTime(grid[1]?.[1])
+          : isMcpSheet ? mcpHeaderTime : "";
+        let activeHeaders: string[] = [];
+        const parsedRows: ImportRow[] = [];
+
+        for (let rowIndex = 0; rowIndex < grid.length; rowIndex += 1) {
+          const row = grid[rowIndex];
+          const normalizedRow = row.map(normalized);
+          const hasMaterial = normalizedRow.some((header) => alias.material.includes(header));
+          const hasQty = normalizedRow.some((header) => alias.qty.includes(header));
+          if (hasMaterial && hasQty) {
+            activeHeaders = normalizedRow;
+            continue;
+          }
+          if (!activeHeaders.length) continue;
+
+          const materialCode = text(valueAt(row, activeHeaders, alias.material)).toUpperCase();
+          const reqQty = number(valueAt(row, activeHeaders, alias.qty));
+          if (!materialCode || materialCode === "ITEM NO." || materialCode.includes("ผลรวม") || reqQty <= 0) continue;
+
+          const doSubGroup = text(valueAt(row, activeHeaders, alias.doSubGroup));
+          const doRaw = doSubGroup.split("|")[0] || text(valueAt(row, activeHeaders, alias.doNo));
+          const doNo = doRaw.toUpperCase();
+          const seq = number(valueAt(row, activeHeaders, alias.seq)) || rowIndex + 1;
+          const rowDeliveryDate = normalizeDueDate(valueAt(row, activeHeaders, alias.date));
+          const suppliedTime = normalizeTime(valueAt(row, activeHeaders, alias.time));
+          const deliveryDate = sheetDeliveryDate || rowDeliveryDate;
+          const deliveryTime = sheetDeliveryTime || suppliedTime || "09:00";
+          const deliverySpot = text(valueAt(row, activeHeaders, alias.shop)).toUpperCase();
+          const filenameSite = selected.name.match(/SITE\s*([1-9])/i)?.[1] || "";
+          const spotFactory = deliverySpot.match(/(?:^|[-_ ])F(?:AC)?\s*([1-9])(?:$|[-_ ])/i)?.[1] || "";
+          const factRaw = text(valueAt(row, activeHeaders, alias.fact)).toUpperCase();
+          const fact = factRaw || (spotFactory ? `FAC${spotFactory}` : filenameSite ? `FAC${filenameSite}` : "FAC1");
+          const line = text(valueAt(row, activeHeaders, alias.line)).toUpperCase();
+          const shop = deliverySpot;
+          const siteRaw = text(valueAt(row, activeHeaders, alias.site)).toUpperCase();
+          const site = siteRaw || (/MCP/i.test(selected.name) ? "MCP" : deliverySpot);
+          if (!doNo || !deliveryDate) continue;
+
+          const baseKey = [doNo, materialCode, seq, deliveryDate, deliveryTime, fact, line, shop].join("|");
+          parsedRows.push({
+            sourceKey: `${baseKey}|SHEET:${sheetName.trim().toUpperCase()}|ROW:${rowIndex + 1}`,
+            doNo, seq, materialCode,
+            materialDescription: text(valueAt(row, activeHeaders, alias.description)),
+            site, fact, line, shop, reqQty, deliveryDate, deliveryTime,
+          });
+        }
+        if (parsedRows.length) candidates.push({ sheetName, rows: parsedRows });
+      }
+
+      // ไฟล์ MCP ใช้ชีต MCP site1/site2 เป็นข้อมูลหลัก
+      // ไฟล์ FAC รวมใช้เฉพาะชีตที่ขึ้นต้นด้วยรหัสตัวเลข เพื่อไม่อ่าน Sheet1/vlookup/รอบเช้า
+      const mcpSheets = candidates.filter((candidate) => /^mcp\s*site\s*[12](?:\s|$)/i.test(candidate.sheetName.trim()));
+      const timeSheets = candidates.filter((candidate) => isNumericDueSheet(candidate.sheetName));
+      const selectedSheets = mcpSheets.length ? mcpSheets : timeSheets;
+      const rows = selectedSheets.flatMap((candidate) => candidate.rows);
+      if (!rows.length) throw new Error("ไม่พบรายการ Due ในชีตรหัสตัวเลข เช่น 02, 09 หรือ 09.00 F3 กรุณาตรวจสอบชื่อชีตและข้อมูลวันที่ส่งงาน");
+      setPreviewRows(rows);
+      setNotice({ type: "success", text: `อ่านจากชีต ${selectedSheets.map((item) => item.sheetName.trim()).join(", ")} สำเร็จ ${fmt(rows.length)} รายการ รวม ${fmt(rows.reduce((sum, row) => sum + row.reqQty, 0))} ชิ้น` });
+    } catch (caught) {
+      setFile(null);
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "อ่านไฟล์ Excel ไม่สำเร็จ" });
+    } finally {
+      setParsing(false);
+    }
+  }
+
+  async function importExcel() {
+    if (!file || !previewRows.length) return;
+    setImporting(true);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/due-import", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ importToken: `${file.name}|${file.size}|${file.lastModified}`, fileName: file.name, rows: previewRows }),
+      });
+      const result = await response.json() as { error?: string; rowCount?: number; totalQty?: number };
+      if (!response.ok) throw new Error(result.error || "นำเข้าไฟล์ไม่สำเร็จ");
+      setFile(null);
+      setPreviewRows([]);
+      setFilterDate("");
+      setFilterFact("ALL");
+      setFilterTime("ALL");
+      setQuery("");
+      setPlanPage(1);
+      if (fileInput.current) fileInput.current.value = "";
+      setNotice({ type: "success", text: `นำเข้า Due สำเร็จ ${fmt(result.rowCount || 0)} รายการ รวม ${fmt(result.totalQty || 0)} ชิ้น · แสดงรายการทั้งหมดแล้ว` });
+      await loadDue();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "นำเข้าไฟล์ไม่สำเร็จ" });
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  async function deleteImport(item: DueImport, confirmActivity = false) {
+    if (!confirmActivity && !window.confirm(`ลบข้อมูลที่นำเข้าจากไฟล์ ${item.fileName} จำนวน ${fmt(item.rowCount)} รายการ ใช่หรือไม่?`)) return;
+    setDeletingImportId(item.id);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/due-import", {
+        method: "DELETE", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: item.id, confirmActivity }),
+      });
+      const data = await response.json() as { error?: string; requiresConfirmation?: boolean; scanCount?: number; receiptCount?: number; stockCount?: number };
+      if (response.status === 409 && data.requiresConfirmation) {
+        const confirmed = window.confirm(`คำเตือน: ชุดนี้มีประวัติจัดงาน ${fmt(data.receiptCount || 0)} รายการ ส่งออก ${fmt(data.scanCount || 0)} รายการ และเชื่อม Stock ${fmt(data.stockCount || 0)} รายการ\n\nหากลบ ระบบจะคืน Stock ที่ขายออกจากชุดนี้และลบประวัติที่เกี่ยวข้อง ต้องการดำเนินการต่อหรือไม่?`);
+        if (confirmed) { await deleteImport(item, true); return; }
+        return;
+      }
+      if (!response.ok) throw new Error(data.error || "ลบข้อมูลนำเข้าไม่สำเร็จ");
+      setNotice({ type: "success", text: `ลบข้อมูลจาก ${item.fileName} แล้ว ${fmt(item.rowCount)} รายการ` });
+      await loadDue();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ลบข้อมูลนำเข้าไม่สำเร็จ" });
+    } finally {
+      setDeletingImportId(null);
+    }
+  }
+
+  function updateDispatchScannerValue(value: string) {
+    setRawTag(value);
+    setTagPreview(null);
+    setDispatchConfirmation(null);
+    if (dispatchScanTimerRef.current !== null) window.clearTimeout(dispatchScanTimerRef.current);
+    if (value.trim().length < 4) return;
+    dispatchScanTimerRef.current = window.setTimeout(() => {
+      dispatchScanTimerRef.current = null;
+      void handleDispatchScan(value);
+    }, 320);
+  }
+
+  function handleDispatchScan(value?: string | FormEvent) {
+    return dispatchKitSelection ? previewDispatchTag(value) : previewDispatchKitTag(value);
+  }
+
+  async function previewDispatchKitTag(value?: string | FormEvent) {
+    const event = typeof value === "object" ? value : undefined;
+    event?.preventDefault();
+    if (dispatchScanTimerRef.current !== null) {
+      window.clearTimeout(dispatchScanTimerRef.current);
+      dispatchScanTimerRef.current = null;
+    }
+    const scannedValue = typeof value === "string" ? value.trim() : rawTag.trim();
+    if (!effectiveDispatchDueDate) {
+      setNotice({ type: "error", text: "กรุณาเลือกวันที่ส่งงานก่อนสแกน KIT Tag" });
+      return;
+    }
+    if (!scannedValue || dispatchScanRequestRef.current) return;
+    dispatchScanRequestRef.current = true;
+    setCheckingTag(true);
+    setDispatchConfirmation(null);
+    setTagPreview(null);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/due", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ rawPayload: scannedValue, mode: "dispatch_kit_verify", deliveryDate: effectiveDispatchDueDate, deliveryTime: dispatchDueTime, fact: dispatchDueFact }),
+      });
+      const result = await response.json() as { verdict?: string; message?: string; kit?: DispatchKitSelection; error?: string };
+      if (!response.ok || result.verdict !== "ready" || !result.kit) throw new Error(result.error || result.message || "ไม่พบ KIT Tag ที่จัดงานแล้ว");
+      setDispatchKitSelection(result.kit);
+      setRawTag("");
+      setNotice({ type: "success", text: `พบ KIT Tag ${result.kit.stockTagCode} · ${result.kit.materialCode} · ${fmt(result.kit.waitingQty)} ชิ้น กรุณาสแกน Tag ลูกค้า` });
+      window.setTimeout(() => tagInput.current?.focus(), 80);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบ KIT Tag ไม่สำเร็จ" });
+      window.setTimeout(() => tagInput.current?.select(), 80);
+    } finally {
+      dispatchScanRequestRef.current = false;
+      setCheckingTag(false);
+    }
+  }
+
+  async function previewDispatchTag(value?: string | FormEvent) {
+    const event = typeof value === "object" ? value : undefined;
+    event?.preventDefault();
+    if (dispatchScanTimerRef.current !== null) {
+      window.clearTimeout(dispatchScanTimerRef.current);
+      dispatchScanTimerRef.current = null;
+    }
+    const scannedValue = typeof value === "string" ? value.trim() : rawTag.trim();
+    if (!effectiveDispatchDueDate) {
+      setNotice({ type: "error", text: "กรุณาเลือกวันที่ส่งงานก่อนสแกน Tag ลูกค้า" });
+      return;
+    }
+    if (!dispatchKitSelection) {
+      setNotice({ type: "error", text: "กรุณาสแกน KIT Tag ที่จัดงานแล้วก่อน" });
+      return;
+    }
+    if (!scannedValue || dispatchScanRequestRef.current) return;
+    dispatchScanRequestRef.current = true;
+    setCheckingTag(true);
+    setDispatchConfirmation(null);
+    setTagPreview(null);
+    setNotice(null);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 12_000);
+    try {
+      const response = await fetch("/api/due", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ rawPayload: scannedValue, mode: "dispatch_verify", pickId: dispatchKitSelection.pickId, stockTagCode: dispatchKitSelection.stockTagCode, deliveryDate: effectiveDispatchDueDate, deliveryTime: dispatchDueTime, fact: dispatchDueFact }),
+        signal: controller.signal,
+      });
+      const contentType = response.headers.get("content-type") || "";
+      const result = contentType.includes("application/json")
+        ? await response.json() as VerifyResult & { error?: string }
+        : { action: "verify" as const, verdict: "bad_tag" as const, error: response.redirected ? "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่" : "ระบบตอบกลับไม่ถูกต้อง กรุณาลองสแกนใหม่" };
+      const responseError = "error" in result ? result.error : undefined;
+      const responseMessage = "message" in result ? result.message : undefined;
+      if (!response.ok || !contentType.includes("application/json")) throw new Error(responseError || responseMessage || "ตรวจสอบ Tag ไม่สำเร็จ");
+      setRawTag(scannedValue);
+      setDispatchConfirmation(result);
+      if(result.verdict !== "ready" && result.verdict !== "ready_noimg") reportOperationWarning({page:'dispatch',message:result.message || 'ข้อมูลไม่พร้อมขายออก',showPopup:false,context:{verdict:result.verdict,tagId:result.tag?.tagId || '',materialCode:result.tag?.materialCode || ''}});
+    } catch (caught) {
+      const message = caught instanceof DOMException && caught.name === "AbortError"
+        ? "ตรวจสอบ Tag ใช้เวลานานเกินไป กรุณาลองสแกนใหม่"
+        : caught instanceof Error ? caught.message : "ตรวจสอบ Tag ไม่สำเร็จ";
+      setNotice({ type: "error", text: message });
+      window.setTimeout(() => tagInput.current?.select(), 80);
+    } finally {
+      window.clearTimeout(timeout);
+      dispatchScanRequestRef.current = false;
+      setCheckingTag(false);
+    }
+  }
+
+  async function confirmDispatch() {
+    const rawPayload = dispatchConfirmation?.tag?.rawPayload;
+    if (!rawPayload || !dispatchKitSelection || checkingTag) return;
+    setDispatchConfirmation(null);
+    await processTag(rawPayload, { deliveryDate: effectiveDispatchDueDate, deliveryTime: dispatchDueTime, fact: dispatchDueFact });
+  }
+
+  async function processTag(value?: string | FormEvent, scope?: { deliveryDate: string; deliveryTime: string; fact: string }) {
+    const event = typeof value === "object" ? value : undefined;
+    event?.preventDefault();
+    const scannedValue = typeof value === "string" ? value.trim() : rawTag.trim();
+    if (!scannedValue || checkingTag) return;
+    setCheckingTag(true);
+    setTagPreview(null);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/due", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ rawPayload: scannedValue, pickId: dispatchKitSelection?.pickId, stockTagCode: dispatchKitSelection?.stockTagCode, deliveryDate: scope?.deliveryDate || effectiveDispatchDueDate, deliveryTime: scope?.deliveryTime ?? dispatchDueTime, fact: scope?.fact ?? dispatchDueFact }),
+      });
+      const result = await response.json() as TagPreview & { action?: string; error?: string };
+      if (!response.ok) throw new Error(result.error || "บันทึก Tag ไม่สำเร็จ");
+      setTagPreview(result);
+      setRawTag("");
+      setDispatchKitSelection(null);
+      setNotice({ type: "success", text: `ขายออก ตัด Stock และ Due ${result.due.materialCode} สำเร็จ เหลือ Due ${fmt(result.due.remainingAfter)} ชิ้น` });
+      await Promise.all([loadDue(), loadStock()]);
+      window.setTimeout(() => {
+        if (window.matchMedia("(max-width: 720px)").matches) tagResultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        else tagInput.current?.focus();
+      }, 120);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "บันทึก Tag ไม่สำเร็จ" });
+    } finally {
+      setCheckingTag(false);
+    }
+  }
+
+  async function verifyTag(value?: string | FormEvent) {
+    const event = typeof value === "object" ? value : undefined;
+    event?.preventDefault();
+    const scannedValue = typeof value === "string" ? value.trim() : verifyRaw.trim();
+    if (!scannedValue || verifyLoading) return;
+    setVerifyLoading(true);
+    setVerifyResult(null);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/due", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ rawPayload: scannedValue, mode: "verify" }),
+      });
+      const result = await response.json() as VerifyResult & { error?: string };
+      if (!response.ok) throw new Error(result.error || "ตรวจสอบชิ้นงานไม่สำเร็จ");
+      setVerifyResult(result);
+      if(result.verdict !== "ready" && result.verdict !== "ready_noimg") reportOperationWarning({page:'dispatch',message:result.message || 'ตรวจสอบชิ้นงานไม่ผ่าน',context:{verdict:result.verdict,tagId:result.tag?.tagId || ''}});
+      window.setTimeout(() => {
+        if (window.matchMedia("(max-width: 720px)").matches) verifyResultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        else verifyInput.current?.focus();
+      }, 120);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบชิ้นงานไม่สำเร็จ" });
+    } finally {
+      setVerifyLoading(false);
+    }
+  }
+
+  function goDispatchFromVerify() {
+    if (!verifyResult?.tag) return;
+    setRawTag(verifyResult.tag.rawPayload);
+    setTagPreview(null);
+    go("dispatch");
+  }
+
+  async function stageStockTag(value?: string | FormEvent, confirmation?: ArrangeConfirmation) {
+    const event = typeof value === "object" ? value : undefined;
+    event?.preventDefault();
+    const scannedValue = typeof value === "string" ? value.trim() : arrangeTag.trim();
+    if (checkingTag || arrangeWarning || arrangeRequestRef.current || (arrangeConfirmation && !confirmation)) return;
+    const deliveryDate = confirmation?.deliveryDate || effectiveArrangeDueDate;
+    const deliveryTime = confirmation ? confirmation.deliveryTime : arrangeDueTime;
+    const fact = confirmation ? confirmation.fact : arrangeDueFact;
+    let warningLogged = false;
+    const warn = async (message: string) => {
+      setArrangeConfirmation(null);
+      setArrangeWarning({ message, date: deliveryDate, time: deliveryTime, fact: fact });
+      setNotice({ type: "error", text: message, warningHandled: true });
+      setArrangeTag("");
+      if (!warningLogged) await recordClientAudit("arrange_warning", `${message} · วันที่ ${deliveryDate || "ยังไม่เลือก"} · รอบ ${deliveryTime || "ทั้งหมด"} · ${fact || "ทุก FAC"}`, {
+        warningMessage: message, deliveryDate: deliveryDate, deliveryTime: deliveryTime, fact: fact,
+        stockTagCode: /^KITSTK-[A-Z0-9-]+$/i.test(scannedValue) ? scannedValue : "[Tag ไม่ถูกต้อง]",
+      });
+    };
+    if (confirmation && !validArrangementQuantity(confirmation.pickedQty,Math.min(confirmation.tagAvailableQty,confirmation.dueOpenQty))) {
+      await warn("กรุณาระบุจำนวนจัดงานเป็นจำนวนเต็ม มากกว่า 0 และไม่เกิน Stock พร้อมใช้ / Due ที่เหลือ");
+      return;
+    }
+    if (!deliveryDate || !scannedValue) {
+      await warn(!deliveryDate ? "กรุณาเลือกวันที่ Due ก่อนสแกน Tag" : "กรุณาสแกนหรือระบุ KIT Stock Tag");
+      return;
+    }
+    // Keep the chosen scope even after its last remaining Due is arranged.
+    setArrangeDueDate(deliveryDate);
+    arrangeRequestRef.current = true;
+    setCheckingTag(true);
+    setArrangementPreview(null);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "stage",
+          deliveryDate: deliveryDate,
+          deliveryTime: deliveryTime,
+          fact: fact,
+          rawPayload: scannedValue,
+          qty: confirmation ? confirmation.pickedQty : Number(arrangeQty || 0),
+          preview: !confirmation,
+          ...(confirmation ? { dueLineId: confirmation.due.id } : {}),
+        }),
+      });
+      const result = await response.json() as (ArrangementPreview | ArrangeConfirmation) & { error?: string; warningLogged?: boolean };
+      warningLogged = Boolean(result.warningLogged);
+      if (!response.ok) throw new Error(result.error || "จัดงานไม่สำเร็จ");
+      if (!confirmation && result.action === "preview_stage") {
+        setArrangeConfirmQty(String(result.pickedQty));
+        setArrangeConfirmation({ ...result, rawPayload: scannedValue, deliveryDate, deliveryTime, fact });
+        return;
+      }
+      if (result.action !== "staged") throw new Error("ข้อมูลจัดงานไม่ถูกต้อง กรุณาสแกนใหม่");
+      setArrangeConfirmation(null);
+      setArrangementPreview(result);
+      setArrangeTag("");
+      setArrangeQty("");
+      setNotice({
+        type: "success",
+        text: `จัด ${fmt(result.pick.pickedQty)} ชิ้นจาก Job ${result.tag.jobNo} รอขายออก — ย้ายยอดจาก Stock พร้อมใช้ไปจัดงานรอส่งแล้ว`,
+      });
+      await Promise.all([loadDue(), loadStock()]);
+      window.setTimeout(() => {
+        if (window.matchMedia("(max-width: 720px)").matches) tagResultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        else tagInput.current?.focus();
+      }, 120);
+    } catch (caught) {
+      await warn(caught instanceof Error ? caught.message : "จัดงานไม่สำเร็จ");
+    } finally {
+      arrangeRequestRef.current = false;
+      setCheckingTag(false);
+    }
+  }
+
+
+  async function submitManualStockReceipt(confirmDuplicateJob = false) {
+    if (stockManagementSaving) return;
+    setStockManagementSaving(true);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "manual_receive", ...manualStockForm,
+          qty: Number(manualStockForm.qty || 0), confirmDuplicateJob,
+        }),
+      });
+      const data = await response.json() as ManualReceiptSuccess & {
+        duplicate?: ManualDuplicateJob; code?: string; error?: string;
+      };
+      if (response.status === 409 && data.code === "duplicate_job_confirmation_required" && data.duplicate) {
+        setManualDuplicateJob(data.duplicate);
+        return;
+      }
+      if (!response.ok) throw new Error(data.error || "คีย์รับงานเข้า Stock ไม่สำเร็จ");
+      setManualDuplicateJob(null);
+      setManualReceiptSuccess(data);
+      setManualStockForm((current) => ({
+        ...current, materialCode: "", qty: "", jobNo: "", referenceNo: "", note: "",
+      }));
+      setNotice({
+        type: "success",
+        text: `รับเข้า Stock ${fmt(Number(data.totalQty || 0))} ชิ้น และสร้าง ${fmt(Number(data.boxCount || data.tags?.length || 0))} Tag สำเร็จ`,
+      });
+      await loadStock();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "คีย์รับงานเข้า Stock ไม่สำเร็จ" });
+    } finally {
+      setStockManagementSaving(false);
+    }
+  }
+
+  async function saveManualStockReceipt(event: FormEvent) {
+    event.preventDefault();
+    await submitManualStockReceipt(false);
+  }
+
+  function defaultStockCountReason(difference: number) {
+    if (difference > 0) return "ปรับเพิ่มยอดนับ Stock สิ้นเดือน";
+    if (difference < 0) return "ปรับลดยอดนับ Stock สิ้นเดือน";
+    return "บันทึกยอดตรวจนับ Stock สิ้นเดือน";
+  }
+
+  async function loadStockCountTag(value?: string) {
+    const rawPayload = (value ?? stockCountForm.rawPayload).trim();
+    if (!rawPayload || stockManagementSaving) return;
+    setStockManagementSaving(true);
+    setStockCountConfirmOpen(false);
+    setStockCountPreview(null);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "preview_tag_count", rawPayload, countDate: stockCountForm.countDate }),
+      });
+      const data = await response.json() as StockCountPreview & { error?: string };
+      if (!response.ok) throw new Error(data.error || "ตรวจสอบ KIT Stock Tag ไม่สำเร็จ");
+      setStockCountForm((current) => ({
+        ...current, rawPayload: data.tagId, countedQty: String(data.stockAreaSystemQty),
+        reason: defaultStockCountReason(0),
+      }));
+      setStockCountPreview(data);
+      setNotice({ type: "success", text: `พบ Tag ${data.tagId} · ควรอยู่ในพื้นที่ Stock ${fmt(data.stockAreaSystemQty)} ชิ้น · จัดงาน/จองไว้ ${fmt(data.reservedQty)} ชิ้น` });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบ KIT Stock Tag ไม่สำเร็จ" });
+    } finally {
+      setStockManagementSaving(false);
+    }
+  }
+
+  async function previewStockCount(event: FormEvent) {
+    event.preventDefault();
+    if (stockManagementSaving) return;
+    setStockManagementSaving(true);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "preview_tag_count", rawPayload: stockCountForm.rawPayload,
+          countedQty: Number(stockCountForm.countedQty), countDate: stockCountForm.countDate,
+          expectedSystemQty: stockCountPreview?.systemQty,
+          expectedReservedQty: stockCountPreview?.reservedQty,
+          expectedStatus: stockCountPreview?.status,
+        }),
+      });
+      const data = await response.json() as StockCountPreview & { error?: string };
+      if (response.status === 409) {
+        setStockCountConfirmOpen(false);
+        setStockCountPreview(null);
+      }
+      if (!response.ok) throw new Error(data.error || "ตรวจสอบยอด Tag ไม่สำเร็จ");
+      setStockCountForm((current) => ({
+        ...current,
+        reason: current.reason.trim() && current.reason !== "บันทึกยอดตรวจนับ Stock สิ้นเดือน"
+          ? current.reason : defaultStockCountReason(data.difference),
+      }));
+      setStockCountPreview(data);
+      setStockCountConfirmOpen(true);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบยอด Tag ไม่สำเร็จ" });
+    } finally {
+      setStockManagementSaving(false);
+    }
+  }
+
+  async function confirmStockCountAdjustment() {
+    if (!stockCountPreview || stockManagementSaving) return;
+    setStockManagementSaving(true);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "confirm_tag_count", rawPayload: stockCountForm.rawPayload,
+          countedQty: Number(stockCountForm.countedQty), countDate: stockCountForm.countDate,
+          expectedSystemQty: stockCountPreview?.systemQty,
+          expectedReservedQty: stockCountPreview?.reservedQty,
+          expectedStatus: stockCountPreview?.status,
+          reason: stockCountForm.reason,
+        }),
+      });
+      const data = await response.json() as StockCountPreview & { adjustmentNo?: string; error?: string };
+      if (response.status === 409) {
+        setStockCountConfirmOpen(false);
+        setStockCountPreview(null);
+      }
+      if (!response.ok) throw new Error(data.error || "ปรับยอด Tag ไม่สำเร็จ");
+      setStockCountConfirmOpen(false);
+      setStockCountPreview(null);
+      setStockCountForm((current) => ({ ...current, rawPayload: "", countedQty: "", reason: "บันทึกยอดตรวจนับ Stock สิ้นเดือน" }));
+      setNotice({ type: "success", text: `บันทึก Tag ${data.tagId} แล้ว · ${data.difference > 0 ? "เพิ่ม" : data.difference < 0 ? "ลด" : "ยอดตรง"} ${fmt(Math.abs(data.difference))} ชิ้น · Stock รวม ${fmt(data.materialTotalAfter)} ชิ้น` });
+      await loadStock();
+      window.setTimeout(() => stockCountInputRef.current?.focus(), 100);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ปรับยอด Tag ไม่สำเร็จ" });
+    } finally {
+      setStockManagementSaving(false);
+    }
+  }
+
+  async function saveStockPart(event: FormEvent) {
+    event.preventDefault();
+    setStockSaving(true);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "save_part", ...stockPartForm, standardQty: Number(stockPartForm.standardQty || 0) }),
+      });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || "บันทึก Part ไม่สำเร็จ");
+      const savedCode = stockPartForm.materialCode.trim().toUpperCase();
+      if (partImageFile) {
+        const form = new FormData();
+        form.set("materialCode", savedCode);
+        form.set("image", partImageFile);
+        const imageResponse = await fetch("/api/part-images", { method: "POST", body: form });
+        const imageData = await imageResponse.json() as { error?: string };
+        if (!imageResponse.ok) throw new Error(imageData.error || "บันทึก Part สำเร็จ แต่บันทึกรูปไม่สำเร็จ");
+      }
+      if (partActualImageFile) {
+        const form = new FormData();
+        form.set("materialCode", savedCode);
+        form.set("slot", "actual");
+        form.set("image", partActualImageFile);
+        const imageResponse = await fetch("/api/part-images", { method: "POST", body: form });
+        const imageData = await imageResponse.json() as { error?: string };
+        if (!imageResponse.ok) throw new Error(imageData.error || "บันทึก Part สำเร็จ แต่บันทึกรูปชิ้นงานในกล่องไม่สำเร็จ");
+      }
+      const savedAnyImage = Boolean(partImageFile || partActualImageFile);
+      setStockPartForm({ materialCode: "", partName: "", customer: "", location: "", standardQty: "" });
+      setPartImageCode("");
+      setPartImageFile(null);
+      setPartActualImageFile(null);
+      setNotice({ type: "success", text: savedAnyImage ? "บันทึกข้อมูลและรูปชิ้นงานแล้ว" : "บันทึก Part ในทะเบียน Stock แล้ว" });
+      await Promise.all([loadStock(), loadPartImages()]);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "บันทึก Part ไม่สำเร็จ" });
+    } finally {
+      setStockSaving(false);
+    }
+  }
+
+  async function parsePartExcel(selected: File): Promise<PartImportItem[]> {
+    if (!/\.xlsx?$/i.test(selected.name)) throw new Error("กรุณาเลือกไฟล์ Excel .xlsx หรือ .xls");
+    const xlsx = await import("xlsx");
+    const workbook = xlsx.read(await selected.arrayBuffer(), { type: "array", cellDates: true });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const grid = xlsx.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: "" });
+    const normalized = (value: unknown) => text(value).toLowerCase().replace(/[\s._/()\-]+/g, "");
+    const aliases = {
+      materialCode: ["partno", "material", "materialno", "materialcode", "partmaterialno", "itemno", "itemnumber", "รหัสpart", "พาร์ท", "รหัสชิ้นงาน"],
+      partName: ["partname", "materialdescription", "description", "itemname", "ชื่อชิ้นงาน", "รายละเอียด"],
+      customer: ["customer", "customername", "ลูกค้า"],
+      location: ["location", "locationcode", "storage", "bin", "rack", "โลเคชั่น", "ตำแหน่งจัดเก็บ", "สถานที่จัดเก็บ"],
+      standardQty: ["maxqtyperbox", "maxperbox", "packqty", "standardqty", "qtyperbox", "จำนวนสูงสุดต่อกล่อง", "ชิ้นต่อกล่อง", "จำนวนต่อกล่อง"],
+    };
+    const normalizedAliases = Object.fromEntries(
+      Object.entries(aliases).map(([key, values]) => [key, values.map(normalized)]),
+    ) as Record<keyof typeof aliases, string[]>;
+    const headerIndex = grid.findIndex((row) => {
+      const headers = row.map(normalized);
+      return normalizedAliases.materialCode.some((name) => headers.includes(name))
+        && normalizedAliases.partName.some((name) => headers.includes(name));
+    });
+    if (headerIndex < 0) throw new Error("ไม่พบหัวตาราง Part / Material No. (หรือ Item No.) และ Part Name ในไฟล์");
+    const headers = grid[headerIndex].map(normalized);
+    const columnIndex = (names: string[]) => headers.findIndex((header) => names.includes(header));
+    const indexes = {
+      materialCode: columnIndex(normalizedAliases.materialCode),
+      partName: columnIndex(normalizedAliases.partName),
+      customer: columnIndex(normalizedAliases.customer),
+      location: columnIndex(normalizedAliases.location),
+      standardQty: columnIndex(normalizedAliases.standardQty),
+    };
+    if (indexes.standardQty < 0) throw new Error("ไม่พบคอลัมน์ Max Qty per Box / จำนวนสูงสุดต่อกล่อง");
+    const byCode = new Map<string, PartImportItem>();
+    for (const row of grid.slice(headerIndex + 1)) {
+      const part = {
+        materialCode: text(row[indexes.materialCode]).toUpperCase(),
+        partName: text(row[indexes.partName]),
+        customer: indexes.customer >= 0 ? text(row[indexes.customer]) : "",
+        location: indexes.location >= 0 ? text(row[indexes.location]).toUpperCase() : "",
+        standardQty: number(row[indexes.standardQty]),
+      };
+      if (part.materialCode && part.partName && part.standardQty > 0) byCode.set(part.materialCode, part);
+    }
+    const parts = [...byCode.values()];
+    if (!parts.length) throw new Error("ไม่พบข้อมูล Part ที่มี Part No., Part Name และจำนวนต่อกล่องครบถ้วน");
+    return parts;
+  }
+
+  async function downloadPartWorkbook(mode: "template" | "export") {
+    try {
+      const xlsx = await import("xlsx");
+      const headers = ["Part / Material No.", "Part Name", "Customer", "Location", "Max Qty per Box"];
+      const rows = mode === "export"
+        ? stock.parts.map((part) => [part.materialCode, part.partName, part.customer, part.location, part.standardQty])
+        : [];
+      const worksheet = xlsx.utils.aoa_to_sheet([headers, ...rows]);
+      worksheet["!cols"] = [{ wch: 24 }, { wch: 36 }, { wch: 24 }, { wch: 20 }, { wch: 20 }];
+      const workbook = xlsx.utils.book_new();
+      xlsx.utils.book_append_sheet(workbook, worksheet, "Parts");
+      const fileName = mode === "template"
+        ? "KIT-Part-Import-Template.xlsx"
+        : `KIT-Part-Registry-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      xlsx.writeFile(workbook, fileName);
+      setNotice({ type: "success", text: mode === "template" ? "ดาวน์โหลด Template ทะเบียน Part แล้ว" : `ดาวน์โหลดข้อมูล Part ${fmt(rows.length)} รายการแล้ว` });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ดาวน์โหลดไฟล์ Part ไม่สำเร็จ" });
+    }
+  }
+
+  function matchBundleImages(files: File[], parts: PartImportItem[]) {
+    const codes = parts.map((part) => part.materialCode).sort((a, b) => b.length - a.length);
+    const matched = new Map<string, File>();
+    const unmatched: string[] = [];
+    const duplicates: string[] = [];
+    for (const file of files) {
+      if (!/^image\/(jpeg|png|webp)$/i.test(file.type) || file.size > 5 * 1024 * 1024) {
+        unmatched.push(`${file.name} — รองรับ JPG, PNG, WebP ขนาดไม่เกิน 5MB`);
+        continue;
+      }
+      const stem = materialCodeFromFileName(file.name);
+      const code = codes.find((item) => stem === item || stem.startsWith(`${item}_`) || stem.startsWith(`${item}-MASTER`) || stem.startsWith(`${item}-ACTUAL`) || stem.startsWith(`${item}-BOX`) || stem.startsWith(`${item}-SAMPLE`));
+      if (!code) {
+        unmatched.push(`${file.name} — ไม่พบ Part No. ที่ตรงกันใน Excel`);
+        continue;
+      }
+      const previous = matched.get(code);
+      if (previous) {
+        duplicates.push(`${code}: ${previous.name}, ${file.name}`);
+        continue;
+      }
+      matched.set(code, file);
+    }
+    return { matched, unmatched, duplicates };
+  }
+
+  async function previewPartBundle(event: FormEvent) {
+    event.preventDefault();
+    setPartBundleFailed([]);
+    setNotice(null);
+    try {
+      if (!partBundleExcel) throw new Error("กรุณาเลือกไฟล์ Excel ทะเบียน Part");
+      const parts = await parsePartExcel(partBundleExcel);
+      const master = matchBundleImages(partBundleMasterFiles, parts);
+      const actual = matchBundleImages(partBundleActualFiles, parts);
+      setPartBundlePreview({
+        fileName: partBundleExcel.name,
+        rows: parts.map((part) => ({ part, masterFile: master.matched.get(part.materialCode), actualFile: actual.matched.get(part.materialCode) })),
+        unmatchedMaster: master.unmatched,
+        unmatchedActual: actual.unmatched,
+        duplicateImages: [...master.duplicates.map((item) => `รูปตัวอย่าง · ${item}`), ...actual.duplicates.map((item) => `รูปในกล่อง · ${item}`)],
+      });
+    } catch (caught) {
+      setPartBundlePreview(null);
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบไฟล์ไม่สำเร็จ" });
+    }
+  }
+
+  function resetPartBundle() {
+    setPartBundleExcel(null);
+    setPartBundleMasterFiles([]);
+    setPartBundleActualFiles([]);
+    setPartBundlePreview(null);
+    setPartBundleFailed([]);
+    setPartBundleProgress({ done: 0, total: 0 });
+    if (partBundleExcelInput.current) partBundleExcelInput.current.value = "";
+    if (partBundleMasterInput.current) partBundleMasterInput.current.value = "";
+    if (partBundleActualInput.current) partBundleActualInput.current.value = "";
+  }
+
+  async function importPartBundle() {
+    if (!partBundlePreview || partBundleRunning) return;
+    setPartBundleRunning(true);
+    setPartBundleFailed([]);
+    setNotice(null);
+    const candidateUploads = partBundlePreview.rows.flatMap((row) => [
+      ...(row.masterFile ? [{ materialCode: row.part.materialCode, file: row.masterFile, slot: "master" as const }] : []),
+      ...(row.actualFile ? [{ materialCode: row.part.materialCode, file: row.actualFile, slot: "actual" as const }] : []),
+    ]);
+    setPartBundleProgress({ done: 0, total: candidateUploads.length + 1 });
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ importContract: "preserve_existing_v1", action: "import_parts", parts: partBundlePreview.rows.map((row) => row.part) }),
+      });
+      const data = await response.json() as { importContract?: string; imported?: number; skipped?: number; skippedMaterialCodes?: string[]; error?: string };
+      if (!response.ok) throw new Error(data.error || "นำเข้าทะเบียน Part ไม่สำเร็จ");
+      if (data.importContract !== "preserve_existing_v1" || !Array.isArray(data.skippedMaterialCodes)) {
+        throw new Error("ระบบนำเข้า Part ยังไม่รองรับการคงข้อมูลเดิม กรุณารีเฟรชหน้าแล้วลองใหม่");
+      }
+      const skippedCodes = new Set(data.skippedMaterialCodes);
+      const uploads = candidateUploads.filter((upload) => !skippedCodes.has(upload.materialCode));
+      setPartBundleProgress({ done: 1, total: uploads.length + 1 });
+      const failed: Array<{ name: string; reason: string }> = [];
+      for (const [index, upload] of uploads.entries()) {
+        try {
+          const form = new FormData();
+          form.set("materialCode", upload.materialCode);
+          form.set("slot", upload.slot);
+          form.set("image", upload.file);
+          const imageResponse = await fetch("/api/part-images", { method: "POST", body: form });
+          const imageData = await imageResponse.json() as { error?: string };
+          if (!imageResponse.ok) throw new Error(imageData.error || "อัปโหลดรูปไม่สำเร็จ");
+        } catch (caught) {
+          failed.push({ name: `${upload.materialCode} · ${upload.file.name}`, reason: caught instanceof Error ? caught.message : "อัปโหลดรูปไม่สำเร็จ" });
+        }
+        setPartBundleProgress({ done: index + 2, total: uploads.length + 1 });
+      }
+      setPartBundleFailed(failed);
+      await Promise.all([loadStock(), loadPartImages()]);
+      const importedCount = data.imported || 0;
+      const skippedCount = data.skipped || 0;
+      if (failed.length) {
+        setNotice({ type: "error", text: `เพิ่ม Part ใหม่ ${fmt(importedCount)} รายการ ข้าม Part ซ้ำ ${fmt(skippedCount)} รายการ แต่อัปโหลดรูปไม่สำเร็จ ${fmt(failed.length)} รูป` });
+      } else {
+        setNotice({ type: "success", text: `เพิ่ม Part ใหม่ ${fmt(importedCount)} รายการ ข้าม Part ซ้ำ ${fmt(skippedCount)} รายการ พร้อมรูป ${fmt(uploads.length)} รูปเรียบร้อย` });
+        resetPartBundle();
+      }
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "นำเข้า Part พร้อมรูปไม่สำเร็จ" });
+    } finally {
+      setPartBundleRunning(false);
+    }
+  }
+
+  async function syncDueParts() {
+    setStockSaving(true);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "sync_due_parts" }),
+      });
+      const data = await response.json() as { changed?: number; error?: string };
+      if (!response.ok) throw new Error(data.error || "นำ Part จาก Due ไม่สำเร็จ");
+      setNotice({ type: "success", text: `นำ Part จาก Due เข้าทะเบียนแล้ว ${fmt(data.changed || 0)} รายการ` });
+      await loadStock();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "นำ Part จาก Due ไม่สำเร็จ" });
+    } finally {
+      setStockSaving(false);
+    }
+  }
+
+  async function deleteStockPart(part: StockPart) {
+    if (!window.confirm(`ยืนยันลบ Part ${part.materialCode} · ${part.partName} หรือไม่?`)) return;
+    setDeletingPartCode(part.materialCode);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "delete_part", materialCode: part.materialCode }),
+      });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || "ลบ Part ไม่สำเร็จ");
+      setNotice({ type: "success", text: `ลบ Part ${part.materialCode} แล้ว` });
+      await loadStock();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ลบ Part ไม่สำเร็จ" });
+    } finally {
+      setDeletingPartCode("");
+    }
+  }
+
+  async function deleteUnusedStockParts() {
+    if (!window.confirm("ยืนยันลบ Part ทุกตัวที่ยังไม่เคยสร้าง Tag หรือมีประวัติ Stock หรือไม่?")) return;
+    setDeletingPartCode("__ALL__");
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "delete_unused_parts" }),
+      });
+      const data = await response.json() as { deleted?: number; error?: string };
+      if (!response.ok) throw new Error(data.error || "ลบ Part ไม่สำเร็จ");
+      setNotice({ type: "success", text: `ลบ Part ที่ยังไม่เคยใช้งานแล้ว ${fmt(data.deleted || 0)} รายการ` });
+      await loadStock();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ลบ Part ไม่สำเร็จ" });
+    } finally {
+      setDeletingPartCode("");
+    }
+  }
+
+  async function createStockTag(event: FormEvent) {
+    event.preventDefault();
+    setStockSaving(true);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "create_tag", ...stockTagForm, qty: Number(stockTagForm.qty) }),
+      });
+      const data = await response.json() as { tags?: StockTag[]; totalQty?: number; packQty?: number; boxCount?: number; error?: string };
+      if (!response.ok || !data.tags?.length) throw new Error(data.error || "สร้าง Tag ไม่สำเร็จ");
+      setCreatedStockTags(data.tags);
+      setStockTagForm((current) => ({ ...current, qty: "", jobNo: "" }));
+      const fullBoxes = Math.floor(Number(data.totalQty || 0) / Number(data.packQty || 1));
+      const remainder = Number(data.totalQty || 0) % Number(data.packQty || 1);
+      setNotice({
+        type: "success",
+        text: `สร้าง ${fmt(data.boxCount || data.tags.length)} Tag แล้ว · กล่องเต็ม ${fmt(fullBoxes)} กล่อง${remainder ? ` · เศษ 1 กล่อง ${fmt(remainder)} ชิ้น` : ""}`,
+      });
+      await loadStock();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "สร้าง Tag ไม่สำเร็จ" });
+    } finally {
+      setStockSaving(false);
+    }
+  }
+
+  function updateStockScannerValue(value: string) {
+    setStockScan(value);
+    if (stockScanTimerRef.current !== null) window.clearTimeout(stockScanTimerRef.current);
+    if (value.trim().length < 4) return;
+    stockScanTimerRef.current = window.setTimeout(() => {
+      stockScanTimerRef.current = null;
+      void receiveStockTag(value);
+    }, 320);
+  }
+
+  async function selectStockLocation(rawPayload: string) {
+    if (!rawPayload.trim() || stockScanRequestRef.current) return;
+    stockScanRequestRef.current = true;
+    setStockSaving(true);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "validate_location", rawPayload: rawPayload.trim() }),
+      });
+      const data = await response.json() as { locationCode?: string; partCount?: number; error?: string };
+      if (!response.ok || !data.locationCode) throw new Error(data.error || "ตรวจสอบชั้นจัดเก็บไม่สำเร็จ");
+      setStockLocation({ code: data.locationCode, partCount: Number(data.partCount || 0) });
+      setStockLocationActivity(Date.now());
+      setStockScan("");
+      setLastStockReceipt(null);
+      setNotice({ type: "success", text: `เลือกชั้น ${data.locationCode} แล้ว · สแกน KIT Tag รับเข้าได้ต่อเนื่อง` });
+      window.setTimeout(() => stockScanInputRef.current?.focus(), 80);
+    } catch (caught) {
+      setStockScan("");
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบชั้นจัดเก็บไม่สำเร็จ" });
+      window.setTimeout(() => stockScanInputRef.current?.focus(), 80);
+    } finally {
+      stockScanRequestRef.current = false;
+      setStockSaving(false);
+    }
+  }
+
+  async function receiveStockTag(input: FormEvent | string) {
+    if (typeof input !== "string") input.preventDefault();
+    if (stockScanTimerRef.current !== null) {
+      window.clearTimeout(stockScanTimerRef.current);
+      stockScanTimerRef.current = null;
+    }
+    const rawPayload = (typeof input === "string" ? input : stockScan).trim();
+    if (!rawPayload || stockScanRequestRef.current) return;
+    if (!stockLocation) {
+      await selectStockLocation(rawPayload);
+      return;
+    }
+
+    stockScanRequestRef.current = true;
+    setStockSaving(true);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 12_000);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "receive", mode: "pallet_preview", rawPayload, locationCode: stockLocation.code }),
+        signal: controller.signal,
+      });
+      const contentType = response.headers.get("content-type") || "";
+      const data = contentType.includes("application/json")
+        ? await response.json() as StockReceivePreview & { error?: string }
+        : { error: response.redirected ? "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่" : "ระบบตอบกลับไม่ถูกต้อง กรุณาลองสแกนใหม่" };
+      if (!response.ok || !("tag" in data) || !data.tag) throw new Error(data.error || "ตรวจสอบ Tag ไม่สำเร็จ");
+      setStockScan(rawPayload);
+      setStockReceiveQty(String(data.pallet?.totalQty || data.tag.qty));
+      setStockReceiveProductionDate(bangkokDateTimeKey().slice(0, 10));
+      setStockReceivePreview(data);
+    } catch (caught) {
+      const message = caught instanceof DOMException && caught.name === "AbortError"
+        ? "ตรวจสอบ Tag ใช้เวลานานเกินไป กรุณาลองสแกนใหม่"
+        : caught instanceof Error ? caught.message : "ตรวจสอบ Tag ไม่สำเร็จ";
+      setNotice({ type: "error", text: message });
+      if (!window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) {
+        window.setTimeout(() => stockScanInputRef.current?.select(), 80);
+      }
+    } finally {
+      window.clearTimeout(timeout);
+      stockScanRequestRef.current = false;
+      setStockSaving(false);
+    }
+  }
+
+  async function confirmReceiveStockTag() {
+    if (!stockReceivePreview || stockSaving) return;
+    const isPallet = !!stockReceivePreview.pallet;
+    const receivedQty = Number(stockReceiveQty);
+    const totalQty = Number(stockReceivePreview.pallet?.totalQty || stockReceivePreview.tag.qty);
+    const productionDate = stockReceiveProductionDate;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(productionDate)) {
+      setNotice({ type: "error", text: "กรุณาเลือกวันที่ผลิต" });
+      return;
+    }
+    if (!Number.isInteger(receivedQty) || receivedQty < 0 || receivedQty > totalQty || (isPallet && receivedQty !== totalQty)) {
+      setNotice({ type: "error", text: `จำนวนรับเข้าต้องอยู่ระหว่าง 0 ถึง ${fmt(totalQty)} ชิ้น` });
+      return;
+    }
+    setStockSaving(true);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "receive", mode: isPallet ? "pallet_confirm" : undefined, rawPayload: stockReceivePreview.rawPayload, locationCode: stockReceivePreview.selectedLocation, tagIds: stockReceivePreview.pallet?.tagIds, receivedQty, productionDate }),
+      });
+      const data = await response.json() as { tag?: StockTag; pallet?: { tagCount: number; totalQty: number; tagIds: string[] }; receivedQty?: number; ngQty?: number; error?: string };
+      if (!response.ok) throw new Error(data.error || "รับเข้า Stock ไม่สำเร็จ");
+      setStockScan("");
+      setStockReceivePreview(null);
+      setStockReceiveQty("");
+      setStockReceiveProductionDate("");
+      setStockLocationActivity(Date.now());
+      const ngQty = Number(data.ngQty || 0);
+      setLastStockReceipt({
+        tagId: data.pallet ? `พาเลท ${data.pallet.tagCount} Tag` : data.tag?.tagId || stockReceivePreview.tag.tagId,
+        materialCode: data.tag?.materialCode || stockReceivePreview.tag.materialCode,
+        jobNo: data.tag?.jobNo || stockReceivePreview.tag.jobNo,
+        qty: Number(data.pallet?.totalQty || data.receivedQty || receivedQty),
+        locationCode: stockReceivePreview.selectedLocation,
+      });
+      setNotice({ type: "success", text: data.pallet
+        ? `รับเข้าทั้งพาเลทสำเร็จ ${fmt(data.pallet.tagCount)} Tag รวม ${fmt(data.pallet.totalQty)} ชิ้น`
+        : `รับ Tag ${data.tag?.tagId || ""} เข้า Stock ${fmt(Number(data.receivedQty || receivedQty))} ชิ้น${ngQty ? ` · NG ${fmt(ngQty)} ชิ้น` : ""}` });
+      void loadStock();
+      if (!window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) {
+        window.setTimeout(() => stockScanInputRef.current?.focus(), 120);
+      }
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "รับเข้า Stock ไม่สำเร็จ" });
+    } finally {
+      setStockSaving(false);
+    }
+  }
+
+  async function printStockLocationQrs() {
+    const locations = [...new Set(stock.parts.filter((part) => part.active).map((part) => part.location.trim().toUpperCase()).filter(Boolean))].sort();
+    if (!locations.length) return setNotice({ type: "error", text: "ยังไม่มีรหัส Location ในทะเบียน Part" });
+    const popup = window.open("", "_blank", "width=1000,height=900");
+    if (!popup) return setNotice({ type: "error", text: "เบราว์เซอร์บล็อกหน้าพิมพ์ กรุณาอนุญาต Pop-up" });
+    popup.document.write("<!doctype html><html><head><meta charset='utf-8'><title>กำลังสร้าง QR ชั้นจัดเก็บ</title></head><body>กำลังสร้าง QR ชั้นจัดเก็บ…</body></html>");
+    try {
+      const qrcode = await import("qrcode");
+      const labels = await Promise.all(locations.map(async (code) => ({ code, qr: await qrcode.toDataURL(`KITLOC|${code}`, { width: 560, margin: 1, errorCorrectionLevel: "M" }) })));
+      const safe = (value: string) => value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[char] || char);
+      popup.document.open();
+      popup.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>QR ชั้นจัดเก็บ KIT</title><style>@page{size:A4;margin:8mm}*{box-sizing:border-box}body{margin:0;font-family:Arial,"Noto Sans Thai",sans-serif;color:#102b59}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8mm}.label{height:132mm;border:3px solid #185ed1;border-radius:18px;padding:10mm;display:grid;place-items:center;text-align:center;break-inside:avoid;page-break-inside:avoid}.label:nth-child(4n+1){page-break-before:auto}.label img{width:72mm;height:72mm}.label small{font-size:14px;font-weight:800;color:#5b7191}.label h1{margin:2mm 0;font-size:34px}.label p{margin:0;font-size:14px}.payload{font-family:monospace;font-size:11px;color:#718096}@media print{.grid{gap:8mm}}</style></head><body><main class="grid">${labels.map((item) => `<section class="label"><small>KIT STOCK LOCATION</small><img src="${item.qr}" alt="QR ${safe(item.code)}"><h1>${safe(item.code)}</h1><p>สแกนชั้นก่อนรับเข้า Stock</p><span class="payload">KITLOC|${safe(item.code)}</span></section>`).join("")}</main><script>window.onload=()=>setTimeout(()=>window.print(),300)<\/script></body></html>`);
+      popup.document.close();
+    } catch (caught) {
+      popup.close();
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "สร้าง QR ชั้นจัดเก็บไม่สำเร็จ" });
+    }
+  }
+
+  async function closeStockJob(jobNo: string, materialCode: string, totalQty: number, receivedQty: number, ngQty: number) {
+    const reason = window.prompt("ระบุสาเหตุที่ปิดรับเข้าและตีงานคงเหลือเป็น NG", "รับเข้าไม่ครบตามจำนวน Tag");
+    if (reason === null) return;
+    if (!reason.trim()) return setNotice({ type: "error", text: "กรุณาระบุสาเหตุที่ปิดรับเข้า Job" });
+    const confirmed = window.confirm(`ยืนยันปิดรับเข้า Job ${jobNo}\nPart ${materialCode}\n\nTag ทั้งหมด ${fmt(totalQty)} ชิ้น\nรับเข้าแล้ว ${fmt(receivedQty)} ชิ้น\nตีเป็น NG ${fmt(ngQty)} ชิ้น\n\nTag NG จะไม่สามารถรับเข้า Stock หรือจัดงานได้`);
+    if (!confirmed) return;
+    const key = jobNo + "|" + materialCode;
+    setJobClosingKey(key);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "close_job", jobNo, materialCode, reason: reason.trim() }),
+      });
+      const data = await response.json() as { ngQty?: number; error?: string };
+      if (!response.ok) throw new Error(data.error || "ปิดรับเข้า Job ไม่สำเร็จ");
+      setNotice({ type: "success", text: `ปิด Job ${jobNo} แล้ว · ตีเป็น NG ${fmt(Number(data.ngQty || ngQty))} ชิ้น` });
+      await loadStock();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ปิดรับเข้า Job ไม่สำเร็จ" });
+    } finally {
+      setJobClosingKey("");
+    }
+  }
+
+  async function reopenNgStockJob(jobNo: string, materialCode: string, ngQty: number) {
+    if (!window.confirm(`เปิดรับเข้า Job ${jobNo} คืนหรือไม่?\nTag NG ${fmt(ngQty)} ชิ้นจะกลับเป็นสถานะรอรับเข้า`)) return;
+    const key = jobNo + "|" + materialCode;
+    setJobClosingKey(key);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "reopen_ng_job", jobNo, materialCode }),
+      });
+      const data = await response.json() as { reopenedTags?: number; error?: string };
+      if (!response.ok) throw new Error(data.error || "เปิด Job คืนไม่สำเร็จ");
+      setNotice({ type: "success", text: `เปิด Job ${jobNo} คืนแล้ว ${fmt(Number(data.reopenedTags || 0))} Tag` });
+      await loadStock();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "เปิด Job คืนไม่สำเร็จ" });
+    } finally {
+      setJobClosingKey("");
+    }
+  }
+
+  function openJobQuantityAdjustment(job: JobQuantityAdjustment) {
+    setJobQtyAdjustment(job);
+    setJobQtyTarget(String(job.currentQty));
+    setJobQtyReason("");
+    setJobQtyPreview(null);
+    setJobQtyCreatedTags([]);
+    setJobQtyAdjusted(false);
+  }
+
+  function closeJobQuantityAdjustment() {
+    if (jobQtySaving) return;
+    setJobQtyAdjustment(null);
+    setJobQtyPreview(null);
+    setJobQtyCreatedTags([]);
+    setJobQtyAdjusted(false);
+  }
+
+  async function previewJobQuantity(event: FormEvent) {
+    event.preventDefault();
+    if (!jobQtyAdjustment) return;
+    const targetQty = Number(jobQtyTarget);
+    if (!Number.isSafeInteger(targetQty) || targetQty < 0) return setNotice({ type: "error", text: "กรุณากรอกจำนวนผลิตจริงเป็นเลขจำนวนเต็มตั้งแต่ 0 ชิ้นขึ้นไป" });
+    if (!jobQtyReason.trim()) return setNotice({ type: "error", text: "กรุณาระบุสาเหตุที่ปรับจำนวนผลิตจริง" });
+    setJobQtySaving(true);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "preview_job_qty_adjustment", jobNo: jobQtyAdjustment.jobNo, materialCode: jobQtyAdjustment.materialCode, targetQty }),
+      });
+      const data = await response.json() as { preview?: JobQuantityAdjustmentPreview; error?: string };
+      if (!response.ok || !data.preview) throw new Error(data.error || "ตรวจสอบการปรับจำนวนไม่สำเร็จ");
+      setJobQtyPreview(data.preview);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบการปรับจำนวนไม่สำเร็จ" });
+    } finally {
+      setJobQtySaving(false);
+    }
+  }
+
+  async function confirmJobQuantityAdjustment() {
+    if (!jobQtyAdjustment || !jobQtyPreview) return;
+    setJobQtySaving(true);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "adjust_job_qty", jobNo: jobQtyAdjustment.jobNo, materialCode: jobQtyAdjustment.materialCode,
+          targetQty: jobQtyPreview.targetQty, expectedCurrentQty: jobQtyPreview.currentQty, reason: jobQtyReason.trim(),
+        }),
+      });
+      const data = await response.json() as { tags?: StockTag[]; preview?: JobQuantityAdjustmentPreview; error?: string };
+      if (!response.ok) throw new Error(data.error || "ปรับจำนวนผลิตจริงไม่สำเร็จ");
+      setJobQtyCreatedTags(data.tags || []);
+      setJobQtyAdjusted(true);
+      setNotice({ type: "success", text: `ปรับ Job ${jobQtyAdjustment.jobNo} เป็น ${fmt(jobQtyPreview.targetQty)} ชิ้นแล้ว${data.tags?.length ? ` · สร้าง Tag ใหม่ ${fmt(data.tags.length)} ใบ` : ""}` });
+      await loadStock();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ปรับจำนวนผลิตจริงไม่สำเร็จ" });
+      setJobQtyPreview(null);
+    } finally {
+      setJobQtySaving(false);
+    }
+  }
+
+  async function deleteStockTag(tag: StockTag) {
+    if (!window.confirm(`ยืนยันลบ Tag ${tag.tagId}\nPart ${tag.materialCode} · Job ${tag.jobNo} หรือไม่?\n\nลบได้เฉพาะ Tag ที่ยังไม่เคยรับเข้า Stock เท่านั้น`)) return;
+    setDeletingStockTagId(tag.tagId);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "delete_tag", tagId: tag.tagId }),
+      });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || "ลบ Tag ไม่สำเร็จ");
+      setCreatedStockTags((current) => current.filter((item) => item.tagId !== tag.tagId));
+      setNotice({ type: "success", text: `ลบ Tag ${tag.tagId} แล้ว` });
+      await loadStock();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ลบ Tag ไม่สำเร็จ" });
+    } finally {
+      setDeletingStockTagId("");
+    }
+  }
+
+  async function printStockTags(input: StockTag | StockTag[]) {
+    const tags = Array.isArray(input) ? input : [input];
+    if (!tags.length) return;
+    const popup = window.open("", "_blank", "width=900,height=950");
+    if (!popup) return setNotice({ type: "error", text: "เบราว์เซอร์บล็อกหน้าพิมพ์ กรุณาอนุญาต Pop-up" });
+    popup.document.write('<!doctype html><html lang="th"><head><meta charset="utf-8"><title>กำลังตรวจสอบ Tag</title></head><body style="font-family:Arial,sans-serif;padding:32px"><b>กำลังตรวจสอบสิทธิ์พิมพ์ Tag…</b></body></html>');
+    popup.document.close();
+    try {
+      const authorization = await fetch("/api/stock", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "authorize_tag_print", tagIds: tags.map((tag) => tag.tagId) }),
+      });
+      const result = await authorization.json() as { allowed?: boolean; error?: string; blockedTagId?: string; splitLabelId?: string };
+      if (!authorization.ok || !result.allowed) {
+        popup.close();
+        if (result.splitLabelId) setSplitTagRequest({ labelId: result.splitLabelId });
+        setNotice({ type: "error", text: result.error || "Tag นี้ไม่สามารถพิมพ์ได้" });
+        await loadStock();
+        return;
+      }
+    } catch (caught) {
+      popup.close();
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบสิทธิ์พิมพ์ Tag ไม่สำเร็จ" });
+      return;
+    }
+    const qrcode = await import("qrcode");
+    let imageUrl = "";
+    try {
+      const imageResponse = await fetch(`/api/part-images?materialCode=${encodeURIComponent(tags[0].materialCode)}`, { cache: "no-store" });
+      if (imageResponse.ok) {
+        const imageBlob = await imageResponse.blob();
+        imageUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(imageBlob);
+        });
+      }
+    } catch {
+      imageUrl = "";
+    }
+    const tagMarkups = await Promise.all(tags.map(async (tag) => {
+      const payloadValue = tag.payload || `KITSTOCK|${tag.tagId}|${tag.materialCode}|${tag.qty}|${tag.jobNo}|${tag.productionDate}`;
+      const qr = await qrcode.toDataURL(payloadValue, { width: 440, margin: 1, errorCorrectionLevel: "M" });
+      const boxMatch = tag.tagId.match(/-B(\d+)OF(\d+)$/);
+      const boxNo = tag.boxNo || Number(boxMatch?.[1] || 1);
+      const boxCount = tag.boxCount || Number(boxMatch?.[2] || 1);
+      const batchCode = tag.tagId.replace(/-B\d+OF\d+$/, "");
+      const tagPart = stock.parts.find((part) => part.materialCode === tag.materialCode);
+      const packQty = Number(tagPart?.standardQty || 0);
+      const location = tagPart?.location || "—";
+      const isFullBox = packQty > 0 ? tag.qty >= packQty : boxNo < boxCount;
+      const boxTypeThai = isFullBox ? "TAG เต็ม" : "TAG เศษ";
+      const boxTypeEnglish = isFullBox ? "FULL TAG" : "REMAINDER TAG";
+      const deliveryQty = tag.deliveryQty || stock.tags
+        .filter((item) => item.tagId.replace(/-B\d+OF\d+$/, "") === batchCode)
+        .reduce((sum, item) => sum + Number(item.qty), 0) || tag.qty;
+      return `<section class="tag"><header><div class="brand">KiT<small>CONTROL STOCK KIT</small></div><div class="tag-title"><b>STOCK RECEIVING TAG</b><small>TAG รับงานเข้า STOCK</small></div></header>
+        <div class="product"><div class="photo-wrap">${imageUrl ? `<img class="photo" src="${imageUrl}" alt="รูปชิ้นงาน ${html(tag.materialCode)}" />` : `<div class="photo-fallback"><strong>◇</strong>ยังไม่มีรูปชิ้นงาน</div>`}</div><div class="qr-wrap"><img class="qr" src="${qr}" alt="QR"><small>QR / BARCODE</small></div><div class="main"><small>CUSTOMER</small><p class="customer">${html(tag.customer || "—")}</p><small>PART NO. / MATERIAL</small><b>${html(tag.materialCode)}</b><small>PART NAME</small><p>${html(tag.partName)}</p></div></div>
+        <div class="grid"><div><small>DELIVERY QTY / จำนวนงานรวม</small><b class="qty">${fmt(deliveryQty)}</b> <span class="unit">PC</span></div><div><small>QTY IN BOX / จำนวนในกล่อง</small><b class="qty">${fmt(tag.qty)}</b> <span class="unit">PC</span></div><div class="box-cell"><small>BOX / กล่อง</small><b>${fmt(boxNo)} / ${fmt(boxCount)}</b><span class="box-type ${isFullBox ? "full" : "remainder"}"><strong>${boxTypeThai}</strong><small>${boxTypeEnglish}</small></span></div><div><small>JOB NO.</small><b>${html(tag.jobNo)}</b></div><div><small>TAG ISSUE DATE / วันที่ออก TAG</small><b>${html(formatDateOnly(tag.createdAt))}</b></div><div><small>LOCATION / ตำแหน่งจัดเก็บ</small><b>${html(location)}</b></div></div>
+        <footer><b class="code">${html(tag.tagId)}</b><p class="payload">${html(payloadValue)}</p><div class="hint">ยิง QR เพื่อรับงานเข้า Stock</div></footer>
+      </section>`;
+    }));
+    const tagsPerPage = 10;
+    const pages = Array.from({ length: Math.ceil(tagMarkups.length / tagsPerPage) }, (_, pageIndex) =>
+      `<div class="sheet">${tagMarkups.slice(pageIndex * tagsPerPage, pageIndex * tagsPerPage + tagsPerPage).join("")}</div>`,
+    ).join("");
+    popup.document.open();
+    popup.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${html(tags[0].jobNo)} · ${fmt(tags.length)} Tag</title><style>
+      @page{size:A4 portrait;margin:5mm}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;font-family:Arial,"Noto Sans Thai",sans-serif;color:#071a35;font-weight:500}
+      .sheet{width:200mm;height:283mm;display:grid;grid-template-columns:repeat(2,100mm);grid-template-rows:repeat(5,55mm);column-gap:0;row-gap:2mm;break-after:page}.sheet:last-child{break-after:auto}.tag{width:100mm;height:55mm;min-width:0;min-height:0;border:1.6px solid #003f98;border-radius:2mm;overflow:hidden;display:grid;grid-template-rows:auto auto 1fr auto;break-inside:avoid;background:#fff;box-shadow:inset 0 0 0 .25mm #c5d7ed}
+      header{display:flex;justify-content:space-between;align-items:center;padding:.8mm 1.6mm;color:#fff;background:#003f98}.brand{font-size:15px;font-weight:900;line-height:.78}.brand small{display:block;margin-top:.5mm;font-size:3.8px;font-weight:800;letter-spacing:.55px;color:#fff}.tag-title{text-align:right}.tag-title b{display:block;font-size:6.8px;font-weight:900;letter-spacing:.2px}.tag-title small{font-size:4.7px;font-weight:800;color:#fff}
+      .product{display:grid;grid-template-columns:27mm 16mm 1fr;gap:1.2mm;padding:.8mm 1.6mm;border-bottom:1.4px solid #48688d;background:#e7f0fc}.photo-wrap{height:19mm;display:grid;place-items:center;border:1.4px solid #2e5f9a;border-radius:1.6mm;background:#fff;overflow:hidden}.photo{width:100%;height:100%;object-fit:contain;padding:.5mm}.photo-fallback{color:#344b68;text-align:center;font-size:5px;font-weight:700}.photo-fallback strong{display:block;font-size:13px;color:#48688d}.qr-wrap{height:19mm;display:grid;place-items:center;align-content:center;border:1.2px solid #48688d;border-radius:1.3mm;background:#fff}.qr{width:14mm;height:14mm}.qr-wrap small{font-size:3.6px;font-weight:800;color:#071a35}
+      .main{align-self:center;min-width:0}.main small{font-size:4.5px;font-weight:800;letter-spacing:.1px;color:#243e60}.main b{display:block;margin:.2mm 0;font-size:9px;font-weight:900;color:#071a35;overflow-wrap:anywhere}.main p{margin:0;color:#071a35;font-size:6px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.customer{margin-top:.25mm!important;color:#003f98!important;font-size:6.6px!important;font-weight:900!important}
+      .grid{display:grid;grid-template-columns:1fr 1fr;margin:.6mm 1.6mm;border:1.3px solid #48688d;background:#fff}.grid div{min-height:5.7mm;padding:.4mm .7mm;border-right:1.1px solid #48688d;border-bottom:1.1px solid #48688d;overflow:hidden}.grid div:nth-child(even){border-right:0}.grid div:nth-last-child(-n+2){border-bottom:0}.grid small{display:block;color:#243e60;font-size:4px;font-weight:800;letter-spacing:0}.grid b{font-size:6.2px;font-weight:900;color:#071a35;overflow-wrap:anywhere}.qty,.box-cell b{font-size:10.8px!important;color:#003f98}.unit{font-size:4.6px;font-weight:800;color:#071a35}.box-cell{position:relative;padding-right:29mm!important}.box-type{position:absolute;right:.7mm;top:50%;transform:translateY(-50%);display:inline-grid;min-width:27mm;padding:.55mm 1mm;border:1.4px solid;border-radius:1mm;line-height:1;text-align:center}.box-type strong{font-size:7.2px;font-weight:900;letter-spacing:.15px}.box-type small{margin-top:.35mm;font-size:3.6px;font-weight:900;color:inherit}.box-type.full{color:#075b2a;background:#dff6e7;border-color:#198754}.box-type.remainder{color:#7a3700;background:#fff0d5;border-color:#d97706}
+      footer{display:grid;grid-template-columns:1fr auto;gap:.35mm 1mm;align-items:center;padding:.55mm 1.6mm;border-top:1.5px solid #003f98;min-width:0;background:#f1f5fa}.code{display:block;font-size:5.4px;font-weight:900;color:#071a35;overflow-wrap:anywhere}.payload{grid-column:1/-1;margin:0;font-size:3.1px;font-weight:600;line-height:1.05;color:#243e60;overflow-wrap:anywhere}.hint{display:inline-block;padding:.55mm .9mm;color:#fff;background:#003f98;border-radius:.8mm;font-size:4.2px;font-weight:900;white-space:nowrap}
+      @media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
+    </style></head><body>${pages}<script>window.onload=()=>{const images=[...document.images];Promise.all(images.map((image)=>image.complete?Promise.resolve():new Promise((resolve)=>{image.onload=resolve;image.onerror=resolve}))).finally(()=>setTimeout(()=>window.print(),250))}<\/script></body></html>`);
+    popup.document.close();
+  }
+
+  const dates = useMemo(() => [...new Set(payload.dues.map((due) => due.deliveryDate))].sort().reverse(), [payload.dues]);
+  const facts = useMemo(() => [...new Set(payload.dues.map((due) => due.fact))].filter(Boolean).sort(), [payload.dues]);
+  const times = useMemo(() => [...new Set(payload.dues.filter((due) => !filterDate || due.deliveryDate === filterDate).map((due) => due.deliveryTime))].filter(Boolean).sort(), [payload.dues, filterDate]);
+  const filtered = useMemo(() => payload.dues.filter((due) => {
+    const search = query.trim().toUpperCase();
+    return (!filterDate || due.deliveryDate === filterDate)
+      && (filterFact === "ALL" || due.fact === filterFact)
+      && (filterTime === "ALL" || due.deliveryTime === filterTime)
+      && (dashboardStatusFilter === "all"
+        || (dashboardStatusFilter === "completed" && stateOf(due, new Date(deadlineClock)) === "completed")
+        || (dashboardStatusFilter === "pending" && stateOf(due, new Date(deadlineClock)) !== "completed")
+        || (dashboardStatusFilter === "over" && stateOf(due, new Date(deadlineClock)) === "over"))
+      && (!search || [due.materialCode, due.materialDescription, due.doNo, String(due.seq), due.line, due.shop].some((value) => value.toUpperCase().includes(search)));
+  }), [payload.dues, filterDate, filterFact, filterTime, query, dashboardStatusFilter, deadlineClock]);
+
+  const overdueDues = useMemo(() => {
+    if (!deadlineClock) return [];
+    const now = new Date(deadlineClock);
+    return payload.dues.filter((due) => isDeliveryOverdue(due, now)).sort((left, right) =>
+      left.deliveryDate.localeCompare(right.deliveryDate) || left.deliveryTime.localeCompare(right.deliveryTime),
+    );
+  }, [payload.dues, deadlineClock]);
+
+  useEffect(() => {
+    if (!dueLoadedAt) return;
+    const currentIds = new Set(overdueDues.map((due) => due.id));
+    const previousIds = previousOverdueIdsRef.current;
+    if (!overdueSoundEnabled || previousIds === null) {
+      previousOverdueIdsRef.current = currentIds;
+      return;
+    }
+    if (!overdueDues.some((due) => !previousIds.has(due.id))) {
+      previousOverdueIdsRef.current = currentIds;
+      return;
+    }
+
+    let cancelled = false;
+    void playOverdueAlertTone(overdueAudioContextRef).then((played) => {
+      if (cancelled) return;
+      previousOverdueIdsRef.current = currentIds;
+      if (!played) {
+        setOverdueSoundEnabled(false);
+        setNotice({ type: "error", text: "เสียงแจ้งเตือนถูกระงับ กรุณากดเปิดเสียงอีกครั้ง" });
+      }
+    });
+    return () => { cancelled = true; };
+  }, [overdueDues, overdueSoundEnabled, dueLoadedAt]);
+
+  const summary = useMemo(() => {
+    const now = new Date(deadlineClock);
+    return filtered.reduce((total, due) => {
+      total.items += 1;
+      total.plan += Number(due.reqQty);
+      total.sent += Number(due.scannedQty);
+      total[stateOf(due, now)] += 1;
+      return total;
+    }, { items: 0, plan: 0, sent: 0, completed: 0, partial: 0, pending: 0, over: 0 });
+  }, [filtered, deadlineClock]);
+  const completePct = summary.items ? Math.round((summary.completed / summary.items) * 100) : 0;
+
+  const facStats = useMemo(() => {
+    const now = new Date(deadlineClock);
+    return facts.map((fact) => {
+      const rows = payload.dues.filter((due) => due.fact === fact && (!filterDate || due.deliveryDate === filterDate));
+      return {
+        fact,
+        items: rows.length,
+        plan: rows.reduce((sum, row) => sum + Number(row.reqQty), 0),
+        sent: rows.reduce((sum, row) => sum + Number(row.scannedQty), 0),
+        completed: rows.filter((row) => stateOf(row, now) === "completed").length,
+        remaining: rows.filter((row) => ["pending", "partial", "over"].includes(stateOf(row, now))).length,
+      };
+    }).sort((a, b) => b.items - a.items);
+  }, [facts, payload.dues, filterDate, deadlineClock]);
+
+  const dailyStats = useMemo(() => {
+    const now = new Date(deadlineClock);
+    return dates.map((date) => {
+      const rows = payload.dues.filter((due) => due.deliveryDate === date);
+      return { date, items: rows.length, completed: rows.filter((row) => stateOf(row, now) === "completed").length, partial: rows.filter((row) => stateOf(row, now) === "partial").length, pending: rows.filter((row) => stateOf(row, now) === "pending").length, over: rows.filter((row) => stateOf(row, now) === "over").length, qty: rows.reduce((sum, row) => sum + Number(row.scannedQty), 0) };
+    });
+  }, [dates, payload.dues, deadlineClock]);
+
+  const arrangeableDues = useMemo(() => payload.dues.filter((due) =>
+    Number(due.reqQty) > Number(due.scannedQty) + Number(due.arrangedQty || 0)
+  ), [payload.dues]);
+  const arrangeDueDates = useMemo(() => [...new Set(payload.dues.map((due) => due.deliveryDate))].sort(), [payload.dues]);
+  const effectiveArrangeDueDate = arrangeDueDate
+    ? arrangeDueDate
+    : arrangeDueDates.includes(bangkokDateTimeKey().slice(0, 10))
+      ? bangkokDateTimeKey().slice(0, 10)
+      : arrangeableDues.map((due) => due.deliveryDate).sort()[0] || arrangeDueDates[0] || "";
+  const arrangeDueTimes = useMemo(() => [...new Set(payload.dues
+    .filter((due) => due.deliveryDate === effectiveArrangeDueDate)
+    .map((due) => due.deliveryTime))].filter(Boolean).sort(), [payload.dues, effectiveArrangeDueDate]);
+  const arrangeDueFacts = useMemo(() => [...new Set(payload.dues
+    .filter((due) => due.deliveryDate === effectiveArrangeDueDate && (!arrangeDueTime || due.deliveryTime === arrangeDueTime))
+    .map((due) => due.fact))].filter(Boolean).sort(), [payload.dues, effectiveArrangeDueDate, arrangeDueTime]);
+  const arrangeScopeDues = useMemo(() => arrangeableDues.filter((due) =>
+    due.deliveryDate === effectiveArrangeDueDate
+    && (!arrangeDueTime || due.deliveryTime === arrangeDueTime)
+    && (!arrangeDueFact || due.fact === arrangeDueFact)
+  ), [arrangeableDues, effectiveArrangeDueDate, arrangeDueTime, arrangeDueFact]);
+  const dispatchableDues = useMemo(() => payload.dues.filter((due) =>
+    Number(due.reqQty) > Number(due.scannedQty)
+    && Number(due.arrangedQty || 0) > 0
+  ), [payload.dues]);
+  const dispatchDueDates = useMemo(() => [...new Set(payload.dues.map((due) => due.deliveryDate))].sort(), [payload.dues]);
+  const effectiveDispatchDueDate = dispatchDueDate
+    ? dispatchDueDate
+    : dispatchDueDates.includes(bangkokDateTimeKey().slice(0, 10))
+      ? bangkokDateTimeKey().slice(0, 10)
+      : dispatchDueDates[0] || "";
+  const dispatchDueTimes = useMemo(() => [...new Set(payload.dues
+    .filter((due) => due.deliveryDate === effectiveDispatchDueDate)
+    .map((due) => due.deliveryTime))].filter(Boolean).sort(), [payload.dues, effectiveDispatchDueDate]);
+  const dispatchDueFacts = useMemo(() => [...new Set(payload.dues
+    .filter((due) => due.deliveryDate === effectiveDispatchDueDate && (!dispatchDueTime || due.deliveryTime === dispatchDueTime))
+    .map((due) => due.fact))].filter(Boolean).sort(), [payload.dues, effectiveDispatchDueDate, dispatchDueTime]);
+  const dispatchScopeDues = useMemo(() => dispatchableDues.filter((due) =>
+    due.deliveryDate === effectiveDispatchDueDate
+    && (!dispatchDueTime || due.deliveryTime === dispatchDueTime)
+    && (!dispatchDueFact || due.fact === dispatchDueFact)
+  ), [dispatchableDues, effectiveDispatchDueDate, dispatchDueTime, dispatchDueFact]);
+
+
+
+  function go(next: PageKey) {
+    if (!allowedPages.has(next)) {
+      setNotice({ type: "error", text: "บัญชีนี้ไม่มีสิทธิ์เปิดหน้านี้ กรุณาติดต่อ Admin" });
+      setMenuOpen(false);
+      return;
+    }
+    setArrangeConfirmation(null);
+    closeSplitTag();
+    setPage(next);
+    if (next !== "stock") {
+      setStockLocation(null);
+      setStockLocationActivity(0);
+      setStockScan("");
+    }
+    updatePageLocation(next);
+    if (next === "parts" || next === "settings") void loadPartImages();
+    if (next === "replacement") void loadReplacements();
+    setMenuOpen(false);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function showOverduePlan() {
+    if (!allowedPages.has("plan")) {
+      setNotice({ type: "error", text: "บัญชีนี้ไม่มีสิทธิ์ดูหน้าแผนส่งงาน กรุณาติดต่อ Admin" });
+      return;
+    }
+    setFilterDate("");
+    setFilterFact("ALL");
+    setFilterTime("ALL");
+    setQuery("");
+    setPlanPage(1);
+    go("plan");
+  }
+
+  async function toggleOverdueSound() {
+    if (overdueSoundEnabled) {
+      setOverdueSoundEnabled(false);
+      setNotice({ type: "success", text: "ปิดเสียงแจ้งเตือนงานเกิน Due แล้ว" });
+      return;
+    }
+    const played = await playOverdueAlertTone(overdueAudioContextRef);
+    if (!played) {
+      setNotice({ type: "error", text: "เบราว์เซอร์นี้ไม่สามารถเปิดเสียงแจ้งเตือนได้" });
+      return;
+    }
+    previousOverdueIdsRef.current = dueLoadedAt ? new Set(overdueDues.map((due) => due.id)) : null;
+    setOverdueSoundEnabled(true);
+    setNotice({ type: "success", text: "เปิดเสียงแจ้งเตือนแล้ว ระบบจะดังเมื่อมีงานเกิน Due ใหม่" });
+  }
+
+  function renderOverdueSoundControl() {
+    return <button type="button" className={`overdue-sound-toggle ${overdueSoundEnabled ? "enabled" : ""}`} onClick={() => void toggleOverdueSound()} aria-pressed={overdueSoundEnabled}>
+      <span>{overdueSoundEnabled ? "🔔" : "🔕"}</span><b>{overdueSoundEnabled ? "เปิดเสียงแล้ว" : "เปิดเสียงแจ้งเตือน"}</b><small>{overdueSoundEnabled ? "กดเพื่อปิดเสียง" : "กดหนึ่งครั้งต่อการเปิดหน้านี้"}</small>
+    </button>;
+  }
+
+  function exportCsv() {
+    const rows = filtered.filter((due) => Number(due.scannedQty) > 0);
+    const csv = [
+      ["Delivery Date", "Time", "FAC", "Line", "DO", "Material", "Plan Qty", "Sent Qty", "Remaining", "Status"],
+      ...rows.map((due) => [due.deliveryDate, due.deliveryTime, due.fact, due.line, due.doNo, due.materialCode, due.reqQty, due.scannedQty, Math.max(due.reqQty - due.scannedQty, 0), stateLabel(due)]),
+    ].map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `KIT-delivery-${new Date().toISOString().slice(0, 10)}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    void recordClientAudit("export_delivery_csv", `ส่งออกรายการส่งออก CSV ${rows.length} รายการ`, { itemCount: rows.length, filterDate, filterFact, filterTime });
+    setNotice({ type: "success", text: `ส่งออกรายการ CSV แล้ว ${fmt(rows.length)} รายการ` });
+  }
+
+  async function exportDeliveryExcel() {
+    const rows = filtered.filter((due) => Number(due.scannedQty) > 0);
+    try {
+      const xlsx = await import("xlsx");
+      const workbook = xlsx.utils.book_new();
+      const sheet = xlsx.utils.aoa_to_sheet([
+        ["วันที่ส่งออก", "เวลา", "FAC", "Line", "DO / เลขที่เอกสาร", "Material / Part No.", "รายละเอียด", "แผน", "ส่งแล้ว", "คงเหลือ", "สถานะ"],
+        ...rows.map((due) => [due.deliveryDate, due.deliveryTime, due.fact, due.line, due.doNo, due.materialCode, due.materialDescription, due.reqQty, due.scannedQty, Math.max(due.reqQty - due.scannedQty, 0), stateLabel(due)]),
+      ]);
+      sheet["!cols"] = [13, 9, 12, 12, 24, 24, 36, 12, 12, 12, 18].map((wch) => ({ wch }));
+      xlsx.utils.book_append_sheet(workbook, sheet, "รายการส่งออก");
+      xlsx.writeFile(workbook, `KIT-delivery-${new Date().toISOString().slice(0, 10)}.xlsx`);
+      void recordClientAudit("export_delivery_excel", `ส่งออกรายการส่งออก Excel ${rows.length} รายการ`, { itemCount: rows.length, filterDate, filterFact, filterTime });
+      setNotice({ type: "success", text: `ส่งออกรายการ Excel แล้ว ${fmt(rows.length)} รายการ` });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ส่งออก Excel ไม่สำเร็จ" });
+    }
+  }
+
+  function reportFileName(extension: string) {
+    const scope = [filterDate || "all-dates", filterFact === "ALL" ? "all-fac" : filterFact, filterTime === "ALL" ? "all-times" : filterTime.replace(":", "-")].join("_");
+    return `KIT-delivery-report_${scope}.${extension}`;
+  }
+
+  function reportTableRows() {
+    return [
+      ["วันที่ส่งงาน", "เวลา", "FAC", "Line", "Shop", "DO No.", "Seq", "Material / Part No.", "รายละเอียด", "แผน (ชิ้น)", "จัดรอขาย (ชิ้น)", "ส่งแล้ว (ชิ้น)", "คงเหลือ (ชิ้น)", "สถานะ"],
+      ...filtered.map((due) => [due.deliveryDate, due.deliveryTime, due.fact, due.line, due.shop, due.doNo, due.seq, due.materialCode, due.materialDescription, due.reqQty, due.arrangedQty || 0, due.scannedQty, Math.max(due.reqQty - due.scannedQty, 0), stateLabel(due)]),
+    ];
+  }
+
+  function exportReportCsv() {
+    const csv = reportTableRows().map((row) => row.map((cell) => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = reportFileName("csv");
+    anchor.click();
+    URL.revokeObjectURL(url);
+    void recordClientAudit("export_report_csv", `ส่งออกรายงาน CSV ${filtered.length} รายการ`, { itemCount: filtered.length, filterDate, filterFact, filterTime });
+    setNotice({ type: "success", text: `ส่งออกรายงาน CSV แล้ว ${fmt(filtered.length)} รายการ` });
+  }
+
+  async function exportReportExcel() {
+    try {
+      const xlsx = await import("xlsx");
+      const workbook = xlsx.utils.book_new();
+      const summarySheet = xlsx.utils.aoa_to_sheet([
+        ["Control Stock KIT — สรุปรายงาน"],
+        ["วันที่ส่งงาน", filterDate ? formatDate(filterDate) : "ทุกวันที่"],
+        ["FAC", filterFact === "ALL" ? "ทั้งหมด" : filterFact],
+        ["เวลา", filterTime === "ALL" ? "ทั้งหมด" : filterTime],
+        ["จำนวนรายการ", summary.items], ["แผนทั้งหมด (ชิ้น)", summary.plan], ["ส่งแล้ว (ชิ้น)", summary.sent],
+        ["ครบตามแผน", summary.completed], ["คงเหลือ", summary.partial + summary.pending], ["เกินดิวจัดส่ง", summary.over],
+      ]);
+      const detailSheet = xlsx.utils.aoa_to_sheet(reportTableRows());
+      detailSheet["!cols"] = [12, 8, 12, 12, 12, 24, 8, 24, 36, 14, 14, 14, 14, 20].map((wch) => ({ wch }));
+      const traceSheet = xlsx.utils.aoa_to_sheet([
+        ["Tag ลูกค้า", "KIT Stock Tag", "Job", "Material", "DO", "FAC", "Line", "วันที่ผลิต", "วันที่รับเข้า Stock", "จำนวน", "ผู้จัดงาน", "เวลาจัดงาน", "ผู้ตรวจ", "เวลาขายออก"],
+        ...stock.dispatchLinks.map((item) => [
+          item.customerTagId, item.stockTagCode, item.jobNo, item.materialCode, item.doNo,
+          item.fact, item.line, item.productionDate, item.receivedAt || "", item.qty,
+          item.pickedByName, item.pickedAt, item.dispatchedByName, item.dispatchedAt,
+        ]),
+      ]);
+      traceSheet["!cols"] = [28, 24, 18, 22, 24, 12, 12, 14, 22, 12, 18, 22, 18, 22].map((wch) => ({ wch }));
+      xlsx.utils.book_append_sheet(workbook, summarySheet, "สรุปรายงาน");
+      xlsx.utils.book_append_sheet(workbook, detailSheet, "รายละเอียด Due");
+      xlsx.utils.book_append_sheet(workbook, traceSheet, "Job Traceability");
+      xlsx.writeFile(workbook, reportFileName("xlsx"));
+      void recordClientAudit("export_report_excel", `ส่งออกรายงาน Excel ${filtered.length} รายการ`, { itemCount: filtered.length, filterDate, filterFact, filterTime });
+      setNotice({ type: "success", text: `ส่งออกรายงาน Excel แล้ว ${fmt(filtered.length)} รายการ` });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ส่งออก Excel ไม่สำเร็จ" });
+    }
+  }
+
+  function exportReportPdf() {
+    const popup = window.open("", "_blank", "width=1200,height=850");
+    if (!popup) return setNotice({ type: "error", text: "เบราว์เซอร์บล็อกหน้าต่างรายงาน กรุณาอนุญาต Pop-up แล้วลองใหม่" });
+    const escape = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character] || character);
+    const rows = filtered.map((due) => `<tr><td>${escape(formatDate(due.deliveryDate))}</td><td>${escape(due.deliveryTime)}</td><td>${escape(due.fact)} / ${escape(due.line || "—")}</td><td>${escape(due.materialCode)}<small>${escape(due.materialDescription)}</small></td><td>${fmt(due.reqQty)}</td><td>${fmt(due.scannedQty)}</td><td>${fmt(Math.max(due.reqQty - due.scannedQty, 0))}</td><td>${escape(stateLabel(due))}</td></tr>`).join("");
+    popup.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>Control Stock KIT Report</title><style>@page{size:A4 landscape;margin:12mm}body{font:12px Arial,sans-serif;color:#132647}header{display:flex;justify-content:space-between;border-bottom:3px solid #075fd7;padding-bottom:12px}h1{margin:0;color:#075fd7}.scope{color:#64748b}.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:14px 0}.metrics div{padding:10px;border:1px solid #dbe5f2;border-radius:8px}.metrics b{display:block;font-size:20px}table{width:100%;border-collapse:collapse}th{background:#eaf3ff;color:#123765}th,td{padding:7px;border:1px solid #dbe3ed;text-align:left}td:nth-last-child(-n+4){text-align:right}small{display:block;color:#718096;margin-top:3px}footer{margin-top:10px;color:#718096;text-align:right}@media print{button{display:none}}</style></head><body><header><div><h1>Control Stock KIT</h1><b>รายงานสถานะการส่งงาน</b></div><div class="scope">วันที่ ${escape(filterDate ? formatDate(filterDate) : "ทุกวันที่")} · FAC ${escape(filterFact === "ALL" ? "ทั้งหมด" : filterFact)} · เวลา ${escape(filterTime === "ALL" ? "ทั้งหมด" : filterTime)}</div></header><section class="metrics"><div>รายการทั้งหมด<b>${fmt(summary.items)}</b></div><div>แผนทั้งหมด<b>${fmt(summary.plan)}</b></div><div>ส่งแล้ว<b>${fmt(summary.sent)}</b></div><div>ครบตามแผน<b>${fmt(summary.completed)}</b></div><div>คงเหลือ<b>${fmt(summary.partial + summary.pending)}</b></div></section><table><thead><tr><th>วันที่</th><th>เวลา</th><th>FAC / Line</th><th>Material / Part No.</th><th>แผน</th><th>ส่งแล้ว</th><th>คงเหลือ</th><th>สถานะ</th></tr></thead><tbody>${rows || '<tr><td colspan="8">ไม่พบข้อมูลตามตัวกรอง</td></tr>'}</tbody></table><footer>สร้างรายงาน ${escape(new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date()))}</footer><script>window.onload=()=>setTimeout(()=>window.print(),300)<\/script></body></html>`);
+    popup.document.close();
+    void recordClientAudit("export_report_pdf", `พิมพ์หรือส่งออกรายงาน PDF ${filtered.length} รายการ`, { itemCount: filtered.length, filterDate, filterFact, filterTime });
+  }
+
+  async function recordClientAudit(action: string, summary: string, details?: Record<string, unknown>) {
+    await fetch("/api/audit-logs", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action, summary, details }),
+    }).catch(() => undefined);
+  }
+
+  function saveSettings() {
+    window.localStorage.setItem("kit-due-settings", JSON.stringify(settings));
+    void recordClientAudit("save_settings", "บันทึกการตั้งค่าการตัดยอดและการสแกนบนอุปกรณ์นี้", settings);
+    setNotice({ type: "success", text: "บันทึกการตั้งค่าบนอุปกรณ์นี้แล้ว" });
+  }
+
+  async function clearTestStock() {
+    if (!window.confirm(`ยืนยันล้างข้อมูล Stock ทดลองทั้งหมดหรือไม่?\n\nระบบจะลบ Tag Stock ${stock.tags.length} ใบ และประวัติการจัด/ขายออกที่เชื่อมโยง\nแต่จะไม่ลบทะเบียน Part, รูปชิ้นงาน, แผน Due หรือผู้ใช้งาน\n\nรายการที่ลบแล้วไม่สามารถกู้คืนจากหน้าระบบได้`)) return;
+    setClearingTestStock(true);
+    try {
+      const response = await fetch("/api/stock", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "clear_test_stock" }),
+      });
+      const data = await response.json() as { error?: string; deleted?: { tags?: number; picks?: number; allocations?: number; dispatchLinks?: number } };
+      if (!response.ok) throw new Error(data.error || "ล้างข้อมูล Stock ไม่สำเร็จ");
+      setCreatedStockTags([]);
+      setNotice({ type: "success", text: `ล้างข้อมูล Stock ทดลองแล้ว ${fmt(data.deleted?.tags || 0)} Tag` });
+      await loadStock();
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ล้างข้อมูล Stock ไม่สำเร็จ" });
+    } finally {
+      setClearingTestStock(false);
+    }
+  }
+
+  const Filters = () => (<>
+    <button className="mobile-filter-toggle" type="button" onClick={() => setFiltersOpen((open) => !open)} aria-expanded={filtersOpen}><span>⌄</span>{filtersOpen ? "ซ่อนตัวกรอง" : "แสดงตัวกรอง"}<b>{[filterDate, filterFact !== "ALL" ? filterFact : "", filterTime !== "ALL" ? filterTime : "", query].filter(Boolean).length || ""}</b></button>
+    <div className={`filter-grid ${filtersOpen ? "mobile-open" : ""}`}>
+      <label><span>วันที่ส่งงาน</span><select value={filterDate} onChange={(e) => setFilterDate(e.target.value)}><option value="">ทุกวันที่</option>{dates.map((date) => <option key={date} value={date}>{formatDate(date)}</option>)}</select></label>
+      <label><span>โรงงาน (FAC)</span><select value={filterFact} onChange={(e) => setFilterFact(e.target.value)}><option value="ALL">ทั้งหมด</option>{facts.map((fact) => <option key={fact}>{fact}</option>)}</select></label>
+      <label><span>เวลา</span><select value={filterTime} onChange={(e) => setFilterTime(e.target.value)}><option value="ALL">ทั้งหมด</option>{times.map((time) => <option key={time}>{time}</option>)}</select></label>
+      <label className="search-field"><span>ค้นหา</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Material / Part No. / DO" /></label>
+      <button className="button secondary filter-reset" onClick={() => { setFilterFact("ALL"); setFilterTime("ALL"); setQuery(""); }}>↻ ล้างค่า</button>
+    </div>
+  </>);
+
+  const DueTable = ({ rows, limit }: { rows: DueLine[]; limit?: number }) => {
+    const shown = typeof limit === "number" ? rows.slice(0, limit) : rows;
+    if (!shown.length) return <Empty text="ไม่พบรายการตามตัวกรองที่เลือก" />;
+    return (
+      <div className="table-wrap mobile-table-wrap">
+        <table className="mobile-card-table due-table">
+          <thead><tr><th>เวลา</th><th>FAC / Line</th><th>Material / Part No.</th><th>รายละเอียด</th><th className="num">แผน</th><th className="num">จัดรอขาย</th><th className="num">ส่งแล้ว</th><th className="num">คงเหลือ</th><th>สถานะ</th><th /></tr></thead>
+          <tbody>{shown.map((due) => <tr key={due.id}>
+            <td data-label="เวลา"><b>{due.deliveryTime}</b><small>{formatDate(due.deliveryDate)}</small></td>
+            <td data-label="FAC / Line"><b>{due.fact}</b><small>{[due.line, due.shop].filter(Boolean).join(" / ") || "—"}</small></td>
+            <td data-label="Part No."><b>{due.materialCode}</b><small>{due.doNo} · Seq {due.seq}</small></td>
+            <td data-label="รายละเอียด">{due.materialDescription || "—"}</td>
+            <td data-label="แผน" className="num"><b>{fmt(due.reqQty)}</b></td>
+            <td data-label="จัดรอขาย" className="num warning"><b>{fmt(due.arrangedQty || 0)}</b></td>
+            <td data-label="ส่งแล้ว" className="num sent"><b>{fmt(due.scannedQty)}</b></td>
+            <td data-label="คงเหลือ" className={`num ${stateOf(due) === "over" ? "danger" : "warning"}`}><b>{fmt(Math.max(due.reqQty - due.scannedQty, 0))}</b></td>
+            <td data-label="สถานะ"><span className={`status ${Number(due.arrangedQty) > 0 && stateOf(due) === "pending" ? "partial" : stateOf(due)}`}>{stateLabel(due)}</span></td>
+            <td data-label="จัดการ">{workflowPage && <button className="tiny-button" onClick={() => {
+              setArrangeDueDate(due.deliveryDate);
+              go(workflowPage);
+            }}>{Number(due.scannedQty) < due.reqQty ? (workflowPage === "dispatch" ? "ขายออก" : "จัดงาน") : "ดู"}</button>}</td>
+          </tr>)}</tbody>
+        </table>
+      </div>
+    );
+  };
+
+  async function createReplacementRequest(event: FormEvent) {
+    event.preventDefault();
+    setReplacementSaving(true);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/replacements", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "create", ...replacementForm }),
+      });
+      const data = await response.json() as { request?: ReplacementRequest; error?: string };
+      if (!response.ok) throw new Error(data.error || "สร้างใบขอเบิกไม่สำเร็จ");
+      setReplacementForm({ materialCode: "", customer: "", requestedQty: "", reasonType: "shortage", reasonDetail: "", neededDate: "" });
+      if (data.request) setReplacementSelectedId(String(data.request.id));
+      setNotice({ type: "success", text: `สร้างใบขอเบิก ${data.request?.requestNo || ""} แล้ว ทีมจัดงานสามารถสแกน KIT Tag ได้ทันที` });
+      await Promise.all([loadReplacements(), loadStock()]);
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "สร้างใบขอเบิกไม่สำเร็จ" });
+    } finally {
+      setReplacementSaving(false);
+    }
+  }
+
+  async function previewReplacementIssue(rawValue?: string) {
+    const rawPayload = (rawValue || replacementTag).trim();
+    if (!replacementSelectedId) return setNotice({ type: "error", text: "กรุณาเลือกใบขอเบิกก่อนสแกน KIT Tag" });
+    if (!rawPayload || replacementSaving) return;
+    setReplacementSaving(true);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/replacements", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "preview_issue", requestId: Number(replacementSelectedId), rawPayload }),
+      });
+      const data = await response.json() as ReplacementIssuePreview & { error?: string };
+      if (!response.ok) throw new Error(data.error || "ตรวจ KIT Tag ไม่สำเร็จ");
+      setReplacementTag(rawPayload);
+      setReplacementPreview(data);
+      setReplacementQty(String(data.suggestedQty || ""));
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจ KIT Tag ไม่สำเร็จ" });
+      setReplacementTag("");
+      if (!window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) {
+        window.setTimeout(() => replacementInputRef.current?.focus(), 80);
+      }
+    } finally {
+      setReplacementSaving(false);
+    }
+  }
+
+  async function confirmReplacementIssue() {
+    if (!replacementPreview) return;
+    const qty = Number(replacementQty || 0);
+    setReplacementSaving(true);
+    try {
+      const response = await fetch("/api/replacements", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "confirm_issue", requestId: replacementPreview.request.id,
+          rawPayload: replacementTag, qty,
+        }),
+      });
+      const data = await response.json() as { request?: ReplacementRequest; issue?: ReplacementIssue; error?: string };
+      if (!response.ok) throw new Error(data.error || "เบิกงานทดแทนไม่สำเร็จ");
+      setReplacementPreview(null);
+      setReplacementTag("");
+      setReplacementQty("");
+      setNotice({ type: "success", text: `เบิกงานทดแทน ${fmt(qty)} ชิ้นแล้ว และตัดยอด Stock/ใบขอเรียบร้อย` });
+      await Promise.all([loadReplacements(), loadStock()]);
+      if (!window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) {
+        window.setTimeout(() => replacementInputRef.current?.focus(), 100);
+      }
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "เบิกงานทดแทนไม่สำเร็จ" });
+    } finally {
+      setReplacementSaving(false);
+    }
+  }
+
+  async function cancelReplacementRequest(item: ReplacementRequest) {
+    if (!window.confirm(`ยกเลิกใบขอเบิก ${item.requestNo} ใช่หรือไม่?`)) return;
+    const response = await fetch("/api/replacements", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "cancel", requestId: item.id }),
+    });
+    const data = await response.json() as { error?: string };
+    if (!response.ok) return setNotice({ type: "error", text: data.error || "ยกเลิกใบขอไม่สำเร็จ" });
+    setNotice({ type: "success", text: `ยกเลิกใบขอเบิก ${item.requestNo} แล้ว` });
+    await loadReplacements();
+  }
+
+  async function printReplacementIssue(issue: ReplacementIssue) {
+    const item = replacement.requests.find((request) => request.id === issue.requestId);
+    if (!item) return setNotice({ type: "error", text: "ไม่พบข้อมูลใบขอเบิกสำหรับพิมพ์" });
+    const popup = window.open("", "_blank", "width=900,height=900");
+    if (!popup) return setNotice({ type: "error", text: "เบราว์เซอร์บล็อกหน้าพิมพ์ กรุณาอนุญาต Pop-up" });
+    const entities: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" };
+    const safe = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (character) => entities[character] || character);
+    const reason = item.reasonType === "defect" ? "งานเสีย" : item.reasonType === "shortage" ? "งานขาด" : "อื่น ๆ";
+    const qrcode = await import("qrcode");
+    const replacementPayload = `KITREPL|${issue.noticeNo}|${item.materialCode}|${issue.qty}|${issue.stockTagCode}`;
+    const replacementQr = await qrcode.toDataURL(replacementPayload, { width: 420, margin: 1, errorCorrectionLevel: "M" });
+    popup.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${safe(issue.noticeNo)}</title><style>
+      @page{size:100mm 55mm;margin:0}*{box-sizing:border-box}html,body{width:100mm;height:55mm;margin:0;font-family:Arial,"Noto Sans Thai",sans-serif;color:#10234a}.sheet{width:100mm;height:55mm;border:1.5px solid #1767df;border-radius:2mm;overflow:hidden;display:grid;grid-template-rows:8mm 1fr 6mm}.head{padding:.8mm 2mm;color:#fff;background:linear-gradient(135deg,#096fe8,#753fe0);display:flex;justify-content:space-between;align-items:center}.head h1{margin:0;font-size:12px}.head p,.head b{margin:0;font-size:5.8px}.body{min-height:0;display:grid;grid-template-columns:1fr 21mm;gap:1.2mm;padding:1.1mm 2mm}.part small,.cell small{display:block;color:#65789d;font-size:5.7px;font-weight:800}.part h2{font-size:15px;line-height:1.05;margin:.2mm 0;overflow-wrap:anywhere}.part p{margin:0;font-size:6.6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.55mm 2mm;margin-top:.7mm}.cell b{display:block;font-size:6.6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.qty{margin-top:.6mm;padding:.5mm;border:1px solid #1767df;border-radius:1mm}.qty small{font-size:5.6px}.qty b{font-size:17px;color:#0963da}.qr{display:grid;place-items:center;align-content:center;border:1px solid #b8cbea;border-radius:1mm}.qr img{width:17mm;height:17mm}.qr small{font-size:5px;font-weight:800;text-align:center}.foot{padding:.6mm 2mm;background:#f0f5fd;display:flex;justify-content:space-between;align-items:center;font-size:5.6px}.foot b{font-size:6.5px}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}</style></head><body>
+      <section class="sheet"><div class="head"><div><p>CONTROL STOCK KIT</p><h1>TAG งานทดแทน</h1></div><div><b>${safe(issue.noticeNo)}</b><p>${safe(formatDateTime(issue.issuedAt))}</p></div></div>
+      <div class="body"><div><div class="part"><small>PART / MATERIAL</small><h2>${safe(item.materialCode)}</h2><p>${safe(item.partName || "—")}</p></div><div class="grid"><div class="cell"><small>JOB</small><b>${safe(issue.jobNo || "—")}</b></div><div class="cell"><small>ลูกค้า</small><b>${safe(item.customer || "—")}</b></div><div class="cell"><small>ใบขอ QC</small><b>${safe(item.requestNo)}</b></div><div class="cell"><small>สาเหตุ</small><b>${safe(reason)}</b></div><div class="cell"><small>KIT STOCK TAG</small><b>${safe(issue.stockTagCode)}</b></div><div class="qty"><small>จำนวนทดแทน</small><b>${safe(fmt(issue.qty))} PCS</b></div></div></div><div class="qr"><img src="${replacementQr}" alt="QR"><small>REPLACEMENT TAG</small></div></div>
+      <div class="foot"><b>${safe(issue.issuedByName)} (${safe(issue.issuedByCode)})</b><span>ฉลาก 100 × 55 mm · ไม่มี Customer Tag</span></div></section>
+      <script>window.onload=()=>{const image=document.querySelector('img');const print=()=>setTimeout(()=>window.print(),150);if(image&&!image.complete){image.onload=print;image.onerror=print}else print()}<\/script></body></html>`);
+    popup.document.close();
+    void fetch("/api/replacements", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "mark_printed", issueId: issue.id }),
+    }).then(() => loadReplacements());
+  }
+
+  function renderDashboard() {
+    return <DashboardControlCenter
+      userName={user.displayName}
+      userRole={ROLE_LABELS[user.role] || user.role}
+      signOutPath={signOutPath}
+      onSignOut={signOut}
+      canOpen={(target) => allowedPages.has(target)}
+      onNavigate={(target, detail) => {
+        setFilterDate(detail?.date || "");
+        setFilterFact(detail?.fact || "ALL");
+        setFilterTime("ALL");
+        setQuery("");
+        setDashboardStatusFilter(detail?.status || "all");
+        setPlanPage(1);
+        go(target);
+      }}
+    />;
+  }
+
+  function renderParts() {
+    const partNeedle = partSearch.trim().toLowerCase();
+    const visibleParts = stock.parts.filter((item) => !partNeedle
+      || item.materialCode.toLowerCase().includes(partNeedle)
+      || item.partName.toLowerCase().includes(partNeedle)
+      || item.customer.toLowerCase().includes(partNeedle)
+      || item.location.toLowerCase().includes(partNeedle));
+    const activeParts = stock.parts.filter((item) => item.active).length;
+    const partTotalPages = Math.max(1, Math.ceil(visibleParts.length / partPageSize));
+    const safePartPage = Math.min(partPage, partTotalPages);
+    const partStartIndex = (safePartPage - 1) * partPageSize;
+    const paginatedParts = visibleParts.slice(partStartIndex, partStartIndex + partPageSize);
+    const partPageButtons: Array<number | "…"> = [];
+    for (let current = 1; current <= partTotalPages; current += 1) {
+      if (current === 1 || current === partTotalPages || Math.abs(current - safePartPage) <= 1) {
+        partPageButtons.push(current);
+      } else if (partPageButtons[partPageButtons.length - 1] !== "…") {
+        partPageButtons.push("…");
+      }
+    }
+    const inactiveParts = stock.parts.length - activeParts;
+    const formCode = stockPartForm.materialCode.trim().toUpperCase();
+    const formImage = partImages.find((item) => item.materialCode === formCode);
+    const formActualImage = partActualImages.find((item) => item.materialCode === formCode);
+    const bundleMasterMatched = partBundlePreview?.rows.filter((row) => row.masterFile).length || 0;
+    const bundleActualMatched = partBundlePreview?.rows.filter((row) => row.actualFile).length || 0;
+    const bundleWarningCount = (partBundlePreview?.unmatchedMaster.length || 0) + (partBundlePreview?.unmatchedActual.length || 0) + (partBundlePreview?.duplicateImages.length || 0);
+    const editPart = (part: StockPart) => {
+      setStockPartForm({ materialCode: part.materialCode, partName: part.partName, customer: part.customer, location: part.location || "", standardQty: String(part.standardQty || "") });
+      setPartImageCode(part.materialCode);
+      setPartImageFile(null);
+      setPartActualImageFile(null);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+    const clearPartForm = () => {
+      setStockPartForm({ materialCode: "", partName: "", customer: "", location: "", standardQty: "" });
+      setPartImageCode("");
+      setPartImageFile(null);
+      setPartActualImageFile(null);
+    };
+    return <div className="parts-home">
+      <div className="part-stat-row page-summary">
+        <article className="part-stat blue"><span>▦</span><div><small>Part ในระบบ</small><b>{fmt(stock.parts.length)}</b><em>รายการ</em></div></article>
+        <article className="part-stat green"><span>✓</span><div><small>Active</small><b>{fmt(activeParts)}</b><em>Part</em></div></article>
+        <article className="part-stat orange"><span>◷</span><div><small>ยกเลิก</small><b>{fmt(inactiveParts)}</b><em>Part</em></div></article>
+        <article className="part-stat purple"><span>◇</span><div><small>มีรูปชิ้นงาน</small><b>{fmt(partImages.length)}</b><em>รายการ</em></div></article>
+      </div>
+
+      {canEditPage("parts") && <Card className="part-bundle-card" title={<span className="part-bundle-title"><i>⇧</i><span>นำเข้าทะเบียน Part จาก Excel<small>เลือก Excel อย่างเดียว หรือแนบรูป Master และรูปในกล่องหลายไฟล์พร้อมกัน</small></span></span>} action={partBundlePreview && <span className="part-bundle-ready">✓ ตรวจสอบแล้ว {fmt(partBundlePreview.rows.length)} Part</span>}>
+        <form className="part-bundle-form" onSubmit={previewPartBundle}>
+          <label className={partBundleExcel ? "selected" : ""}>
+            <span className="part-bundle-icon excel">X</span>
+            <span><b>1. ไฟล์ทะเบียน Part</b><small>{partBundleExcel?.name || "Excel .xlsx หรือ .xls"}</small></span>
+            <input ref={partBundleExcelInput} type="file" accept=".xlsx,.xls" disabled={partBundleRunning} onChange={(e) => { setPartBundleExcel(e.target.files?.[0] || null); setPartBundlePreview(null); setPartBundleFailed([]); }} />
+          </label>
+          <label className={partBundleMasterFiles.length ? "selected" : ""}>
+            <span className="part-bundle-icon master">▧</span>
+            <span><b>2. รูปตัวอย่าง (Master) — ไม่บังคับ</b><small>{partBundleMasterFiles.length ? `${fmt(partBundleMasterFiles.length)} รูป` : "เลือกหลายรูปได้ · ตั้งชื่อเป็น Part No."}</small></span>
+            <input ref={partBundleMasterInput} type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={partBundleRunning} onChange={(e) => { setPartBundleMasterFiles([...(e.target.files || [])]); setPartBundlePreview(null); setPartBundleFailed([]); }} />
+          </label>
+          <label className={partBundleActualFiles.length ? "selected" : ""}>
+            <span className="part-bundle-icon actual">◈</span>
+            <span><b>3. รูปชิ้นงานในกล่อง</b><small>{partBundleActualFiles.length ? `${fmt(partBundleActualFiles.length)} รูป` : "ไม่บังคับ · ใช้เทียบตอนขายออก"}</small></span>
+            <input ref={partBundleActualInput} type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={partBundleRunning} onChange={(e) => { setPartBundleActualFiles([...(e.target.files || [])]); setPartBundlePreview(null); setPartBundleFailed([]); }} />
+          </label>
+          <button className="button primary part-bundle-check" disabled={partBundleRunning || !partBundleExcel}>⌕ ตรวจสอบข้อมูลและจับคู่รูป</button>
+        </form>
+        <p className="part-bundle-help">Part No. ที่มีอยู่ในระบบแล้วจะถูกข้ามและคงข้อมูลกับรูปเดิมไว้ · ชื่อรูปต้องตรงกับ Part No. ใน Excel เช่น <code>BA04U385G05-F.jpg</code> · รองรับ JPG, PNG, WebP ไม่เกิน 5MB ต่อรูป</p>
+
+        {partBundlePreview && <div className="part-bundle-preview">
+          <div className="part-bundle-summary">
+            <span className="blue"><small>Part จาก Excel</small><b>{fmt(partBundlePreview.rows.length)}</b></span>
+            <span className="purple"><small>จับคู่รูป Master</small><b>{fmt(bundleMasterMatched)}</b></span>
+            <span className="green"><small>จับคู่รูปในกล่อง</small><b>{fmt(bundleActualMatched)}</b></span>
+            <span className={bundleWarningCount ? "orange" : "green"}><small>ต้องตรวจสอบ</small><b>{fmt(bundleWarningCount)}</b></span>
+          </div>
+          <div className="part-bundle-table">
+            <div className="part-bundle-head"><span>Part No.</span><span>ชื่อชิ้นงาน / Location</span><span>รูป Master</span><span>รูปในกล่อง</span></div>
+            <div className="part-bundle-body">{partBundlePreview.rows.slice(0, 100).map((row) => <div className="part-bundle-row" key={row.part.materialCode}>
+              <span><b>{row.part.materialCode}</b><small>{fmt(row.part.standardQty)} ชิ้น/กล่อง</small></span>
+              <span><b>{row.part.partName}</b><small>{row.part.location || "ไม่ระบุ Location"}</small></span>
+              <span className={row.masterFile ? "matched" : "missing"}>{row.masterFile ? `✓ ${row.masterFile.name}` : "— ไม่มีรูป"}</span>
+              <span className={row.actualFile ? "matched" : "optional"}>{row.actualFile ? `✓ ${row.actualFile.name}` : "— ไม่ได้เลือก"}</span>
+            </div>)}</div>
+            {partBundlePreview.rows.length > 100 && <p className="part-bundle-more">และอีก {fmt(partBundlePreview.rows.length - 100)} รายการ</p>}
+          </div>
+          {bundleWarningCount > 0 && <div className="part-bundle-warnings"><b>ไฟล์ที่ต้องตรวจสอบก่อนนำเข้า</b><ul>{[...partBundlePreview.unmatchedMaster, ...partBundlePreview.unmatchedActual, ...partBundlePreview.duplicateImages].map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></div>}
+          {partBundleFailed.length > 0 && <div className="part-bundle-warnings failed"><b>รูปที่อัปโหลดไม่สำเร็จ</b><ul>{partBundleFailed.map((item) => <li key={item.name}><strong>{item.name}</strong> — {item.reason}</li>)}</ul></div>}
+          <div className="part-bundle-actions">
+            <button type="button" className="button secondary" disabled={partBundleRunning} onClick={resetPartBundle}>ล้างไฟล์</button>
+            <button type="button" className="button primary" disabled={partBundleRunning} onClick={() => void importPartBundle()}>{partBundleRunning ? `กำลังบันทึก ${fmt(partBundleProgress.done)}/${fmt(partBundleProgress.total)}…` : `✓ ยืนยันนำเข้า ${fmt(partBundlePreview.rows.length)} Part พร้อม ${fmt(bundleMasterMatched + bundleActualMatched)} รูป`}</button>
+          </div>
+        </div>}
+      </Card>}
+
+      {canEditPage("parts") && <Card className="part-editor-card" title={stockPartForm.materialCode ? "แก้ไข Part" : "เพิ่ม Part ใหม่"} action={<button className="button primary" form="part-editor-form" disabled={stockSaving}>▣ {stockSaving ? "กำลังบันทึก…" : "บันทึก Part"}</button>}>
+        <form id="part-editor-form" className="part-editor-grid" onSubmit={saveStockPart}>
+          <label><span>Part / Material No. *</span><input value={stockPartForm.materialCode} onChange={(e) => { const code=e.target.value.toUpperCase(); setStockPartForm((current) => ({ ...current, materialCode: code })); setPartImageCode(code); }} required /></label>
+          <label><span>ชื่อชิ้นงาน *</span><input value={stockPartForm.partName} onChange={(e) => setStockPartForm((current) => ({ ...current, partName: e.target.value }))} required /></label>
+          <label><span>ลูกค้า</span><input value={stockPartForm.customer} onChange={(e) => setStockPartForm((current) => ({ ...current, customer: e.target.value }))} /></label>
+          <label><span>Location</span><input value={stockPartForm.location} onChange={(e) => setStockPartForm((current) => ({ ...current, location: e.target.value.toUpperCase() }))} placeholder="เช่น A-01 หรือ RACK-02" /></label>
+          <label><span>จำนวนสูงสุดต่อกล่อง *</span><input type="number" min="1" value={stockPartForm.standardQty} onChange={(e) => setStockPartForm((current) => ({ ...current, standardQty: e.target.value }))} required /></label>
+          <div className="part-photo-editor">
+            <div className="part-current-photo">{stockPartForm.materialCode ? <PartImage materialCode={stockPartForm.materialCode} version={formImage?.updatedAt} /> : <span>▧</span>}</div>
+            <label className="part-change-photo"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setPartImageFile(e.target.files?.[0] || null)} /><b>⇧ {formImage ? "เปลี่ยนรูปตัวอย่าง" : "เพิ่มรูปตัวอย่าง"}</b><small>{partImageFile?.name || "รูป Master · JPG, PNG, WebP (ไม่เกิน 5MB)"}</small></label>
+          </div>
+          <div className="part-photo-editor">
+            <div className="part-current-photo">{stockPartForm.materialCode ? <PartImage materialCode={stockPartForm.materialCode} slot="actual" version={formActualImage?.updatedAt} /> : <span>▧</span>}</div>
+            <label className="part-change-photo"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setPartActualImageFile(e.target.files?.[0] || null)} /><b>⇧ {formActualImage ? "เปลี่ยนรูปชิ้นงานในกล่อง" : "เพิ่มรูปชิ้นงานในกล่อง"}</b><small>{partActualImageFile?.name || "รูปชิ้นงานที่จัดวางในกล่อง · ใช้เทียบตอนขายออก"}</small></label>
+          </div>
+        </form>
+        <div className="part-editor-foot"><span>Excel รองรับคอลัมน์: Part / Material No., Part Name, Customer, Location และ Max Qty per Box</span>{stockPartForm.materialCode && <button type="button" className="tiny-button" onClick={clearPartForm}>＋ เพิ่ม Part ใหม่</button>}</div>
+      </Card>}
+
+      <Card className="part-list-card" title="รายการ Part ทั้งหมด" action={<div className="part-list-actions"><input value={partSearch} onChange={(e) => { setPartSearch(e.target.value); setPartPage(1); }} placeholder="⌕ ค้นหา Part No., ชื่อชิ้นงาน, ลูกค้า หรือ Location..." /><button className="button secondary" onClick={() => void downloadPartWorkbook("template")}>⇩ ดาวน์โหลด Template</button><button className="button secondary" disabled={!stock.parts.length} onClick={() => void downloadPartWorkbook("export")}>⇩ ดาวน์โหลดข้อมูล Part</button><button className="button secondary" onClick={() => void Promise.all([loadStock(), loadPartImages()])}>↻ รีเฟรช</button></div>}>
+        {visibleParts.length ? <div className="part-modern-table">
+          <div className="part-modern-head"><span>Part / Material No.</span><span>ชื่อชิ้นงาน</span><span>ลูกค้า</span><span>Location</span><span>จำนวนสูงสุดต่อกล่อง</span><span>สถานะ</span><span>จัดการ</span></div>
+          <div className="part-modern-body">{paginatedParts.map((part) => {
+            const masterImage = partImages.find((item) => item.materialCode === part.materialCode);
+            const actualImage = partActualImages.find((item) => item.materialCode === part.materialCode);
+            const hasTag = stock.tags.some((tag) => tag.materialCode === part.materialCode);
+            return <div className="part-modern-row" key={part.materialCode}>
+              <span className="part-code-cell"><PartImagePair materialCode={part.materialCode} masterVersion={masterImage?.updatedAt} actualVersion={actualImage?.updatedAt} masterAvailable={Boolean(masterImage)} actualAvailable={Boolean(actualImage)} /><span><b>{part.materialCode}</b><small>ในกล่อง: {actualImage ? "มีรูป" : "ยังไม่มี"} · Master: {masterImage ? "มีรูป" : "ยังไม่มี"}</small></span></span>
+              <span>{part.partName}</span><span>{part.customer || "—"}</span><span><b>{part.location || "—"}</b></span><span>{part.standardQty > 0 ? fmt(part.standardQty) + " ชิ้น" : "ยังไม่กำหนด"}</span>
+              <span><em className={"part-active " + (part.active ? "on" : "off")}>{part.active ? "ใช้งาน" : "ยกเลิก"}</em></span>
+              <span className="part-row-actions">{canEditPage("parts") ? <><button className="tiny-button" onClick={() => editPart(part)}>✎ แก้ไข</button>{user.role === "admin" && (hasTag ? <small>มีประวัติ Stock</small> : <button className="tiny-button danger-outline" disabled={Boolean(deletingPartCode)} onClick={() => void deleteStockPart(part)}>♲ {deletingPartCode === part.materialCode ? "กำลังลบ…" : "ลบ"}</button>)}</> : <small>ดูข้อมูลเท่านั้น</small>}</span>
+            </div>;
+          })}</div>
+          <footer>
+            <span>แสดง {fmt(partStartIndex + 1)} - {fmt(Math.min(partStartIndex + partPageSize, visibleParts.length))} จาก {fmt(visibleParts.length)} รายการ</span>
+            <nav className="part-pagination" aria-label="หน้ารายการ Part">
+              <button className="part-page-button" disabled={safePartPage === 1} onClick={() => setPartPage(Math.max(1, safePartPage - 1))}>‹</button>
+              {partPageButtons.map((item, index) => item === "…" ? <span className="part-page-dots" key={"dots-" + index}>…</span> : <button className={"part-page-button " + (item === safePartPage ? "active" : "")} key={item} onClick={() => setPartPage(item)}>{item}</button>)}
+              <button className="part-page-button" disabled={safePartPage === partTotalPages} onClick={() => setPartPage(Math.min(partTotalPages, safePartPage + 1))}>›</button>
+            </nav>
+            <label className="part-page-size">แสดงต่อหน้า <select value={partPageSize} onChange={(e) => { setPartPageSize(Number(e.target.value)); setPartPage(1); }}><option value={10}>10</option><option value={20}>20</option><option value={50}>50</option></select></label>
+          </footer>
+        </div> : <Empty title="ไม่พบ Part" text={partNeedle ? "ลองเปลี่ยนคำค้นหา" : "ยังไม่มี Part ในทะเบียน Stock"} />}
+      </Card>
+
+      {canEditPage("parts") && <details className="part-bulk-panel"><summary>อัปโหลดรูปหลาย Part พร้อมกัน — Master และรูปในกล่อง</summary>
+        <form className="part-image-upload bulk" onSubmit={uploadPartImagesBulk}>
+          <label className="part-file bulk-file"><span>รูปตัวอย่าง (Master) · ชื่อไฟล์ต้องตรงกับ Part No.</span><input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={bulkImageRunning} onChange={(e) => { setBulkMasterImageFiles([...(e.target.files || [])]); setBulkImageFailed([]); }} /><small>{bulkMasterImageFiles.length ? `เลือกแล้ว ${fmt(bulkMasterImageFiles.length)} รูป` : "เลือกได้หลายรูป"}</small></label>
+          <label className="part-file bulk-file"><span>รูปชิ้นงานในกล่อง · ชื่อไฟล์ต้องตรงกับ Part No.</span><input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={bulkImageRunning} onChange={(e) => { setBulkActualImageFiles([...(e.target.files || [])]); setBulkImageFailed([]); }} /><small>{bulkActualImageFiles.length ? `เลือกแล้ว ${fmt(bulkActualImageFiles.length)} รูป` : "เลือกได้หลายรูป"}</small></label>
+          <button className="button primary" disabled={bulkImageRunning || (!bulkMasterImageFiles.length && !bulkActualImageFiles.length)}>{bulkImageRunning ? `กำลังอัปโหลด ${fmt(bulkImageProgress.done)}/${fmt(bulkImageProgress.total)}…` : `⇧ อัปโหลด ${fmt(bulkMasterImageFiles.length + bulkActualImageFiles.length)} รูป`}</button>
+        </form>
+        <p className="part-bundle-help">ตั้งชื่อไฟล์เป็น Part No. เช่น <code>BA04U385G05-F.jpg</code> ระบบจะแยกเก็บ Master และรูปในกล่องตามช่องที่เลือก</p>
+        {bulkImageFailed.length > 0 && <div className="bulk-preview failed"><b>ไฟล์ที่อัปโหลดไม่สำเร็จ</b><ul>{bulkImageFailed.map((item) => <li key={item.name}><code>{item.name}</code><small>{item.reason}</small></li>)}</ul></div>}
+      </details>}
+    </div>;
+  }
+
+  function renderTags() {
+    const awaitingReceipt = stock.tags.filter((item) => item.status === "printed").length;
+    const receivedTags = stock.tags.filter((item) => item.status === "in_stock" || item.status === "depleted").length;
+    const tagNeedle = tagSearch.trim().toLowerCase();
+    const visibleTags = stock.tags.filter((item) => !tagNeedle || [
+      item.tagId, item.materialCode, item.partName, item.customer,
+      item.jobNo, item.productionDate, item.createdAt,
+    ].some((value) => String(value || "").toLowerCase().includes(tagNeedle)));
+    const jobCount = new Set(stock.tags.map((item) => item.jobNo.trim().toUpperCase()).filter(Boolean)).size;
+    const selectedStockPart = stock.parts.find((item) => item.materialCode === stockTagForm.materialCode);
+    const selectedPartImage = partImages.find((item) => item.materialCode === stockTagForm.materialCode);
+    const activeStockParts = stock.parts.filter((item) => item.active).sort((x, y) => x.materialCode.localeCompare(y.materialCode));
+    const plannedTotalQty = Number(stockTagForm.qty || 0);
+    const plannedBoxCount = selectedStockPart?.standardQty && plannedTotalQty > 0 ? Math.ceil(plannedTotalQty / selectedStockPart.standardQty) : 0;
+    const tagTotalPages = Math.max(1, Math.ceil(visibleTags.length / tagPageSize));
+    const safeTagPage = Math.min(tagPage, tagTotalPages);
+    const tagStartIndex = (safeTagPage - 1) * tagPageSize;
+    const paginatedTags = visibleTags.slice(tagStartIndex, tagStartIndex + tagPageSize);
+    const tagPageButtons: Array<number | "…"> = [];
+    for (let current = 1; current <= tagTotalPages; current += 1) {
+      if (current === 1 || current === tagTotalPages || Math.abs(current - safeTagPage) <= 1) tagPageButtons.push(current);
+      else if (tagPageButtons[tagPageButtons.length - 1] !== "…") tagPageButtons.push("…");
+    }
+    const jobGroupMap = new Map<string, { jobNo: string; materialCode: string; partName: string; totalQty: number; receivedQty: number; pendingQty: number; ngQty: number; tagCount: number; cancelledQty: number }>();
+    stock.tags.forEach((tag) => {
+      const key = tag.jobNo + "|" + tag.materialCode;
+      const current = jobGroupMap.get(key) || { jobNo: tag.jobNo, materialCode: tag.materialCode, partName: tag.partName, totalQty: 0, receivedQty: 0, pendingQty: 0, ngQty: 0, tagCount: 0, cancelledQty: 0 };
+      if (tag.status === "cancelled") {
+        current.cancelledQty += Number(tag.qty);
+        jobGroupMap.set(key, current);
+        return;
+      }
+      current.totalQty += Number(tag.qty);
+      current.tagCount += 1;
+      if (tag.status === "printed") current.pendingQty += Number(tag.qty);
+      else if (tag.status === "ng") current.ngQty += Number(tag.ngQty ?? tag.qty);
+      else if (tag.status === "in_stock" || tag.status === "depleted") {
+        current.receivedQty += Number(tag.receivedQty ?? tag.qty);
+        current.ngQty += Number(tag.ngQty || 0);
+      }
+      jobGroupMap.set(key, current);
+    });
+    const closedJobKeys = new Set(stock.jobClosures.map((item) => item.jobNo + "|" + item.materialCode));
+    const stockJobGroups = [...jobGroupMap.values()].sort((a, b) => b.pendingQty - a.pendingQty || b.ngQty - a.ngQty || a.jobNo.localeCompare(b.jobNo));
+    const jobCloseNeedle = jobCloseSearch.trim().toLowerCase();
+    const filteredStockJobGroups = stockJobGroups.filter((group) => !jobCloseNeedle
+      || group.jobNo.toLowerCase().includes(jobCloseNeedle)
+      || group.materialCode.toLowerCase().includes(jobCloseNeedle)
+      || group.partName.toLowerCase().includes(jobCloseNeedle));
+    const jobClosePageSize = 10;
+    const jobCloseTotalPages = Math.max(1, Math.ceil(filteredStockJobGroups.length / jobClosePageSize));
+    const safeJobClosePage = Math.min(jobClosePage, jobCloseTotalPages);
+    const jobCloseStartIndex = (safeJobClosePage - 1) * jobClosePageSize;
+    const paginatedStockJobGroups = filteredStockJobGroups.slice(jobCloseStartIndex, jobCloseStartIndex + jobClosePageSize);
+    const jobClosePageButtons: Array<number | "…"> = [];
+    for (let current = 1; current <= jobCloseTotalPages; current += 1) {
+      if (current === 1 || current === jobCloseTotalPages || Math.abs(current - safeJobClosePage) <= 1) jobClosePageButtons.push(current);
+      else if (jobClosePageButtons[jobClosePageButtons.length - 1] !== "…") jobClosePageButtons.push("…");
+    }
+
+    return <div className="tag-print-home">
+      <div className="tag-stat-row page-summary">
+        <article className="tag-stat green"><span>▤</span><div><small>Tag ทั้งหมด</small><b>{fmt(stock.tags.length)}</b><em>ใบ</em></div></article>
+        <article className="tag-stat orange"><span>◷</span><div><small>รอรับเข้า Stock</small><b>{fmt(awaitingReceipt)}</b><em>ใบ</em></div></article>
+        <article className="tag-stat purple"><span>✓</span><div><small>รับเข้าแล้ว</small><b>{fmt(receivedTags)}</b><em>ใบ</em></div></article>
+        <article className="tag-stat blue"><span>▣</span><div><small>Job ที่สร้าง Tag</small><b>{fmt(jobCount)}</b><em>Job</em></div></article>
+      </div>
+
+      {canEditPage("tags") && <Card className="tag-create-card" title="สร้างและพิมพ์ Tag ก่อนส่งเข้า Stock" action={<button className="button primary" form="tag-create-form" disabled={stockSaving || !selectedStockPart || selectedStockPart.standardQty <= 0}>▣ {stockSaving ? "กำลังสร้าง…" : "สร้าง Tag"}</button>}>
+        <form id="tag-create-form" className="tag-create-form" onSubmit={createStockTag}>
+          <label className="tag-part-select"><span>เลือก Part *</span><input list="stock-part-codes" value={stockTagForm.materialCode} onChange={(event) => setStockTagForm((current) => ({ ...current, materialCode: event.target.value.toUpperCase(), qty: "" }))} placeholder="พิมพ์ Part No. หรือเลือกรายการ" autoComplete="off" spellCheck={false} required /></label>
+          <datalist id="stock-part-codes">{activeStockParts.map((item) => <option key={item.materialCode} value={item.materialCode}>{item.partName}{item.customer ? ` · ${item.customer}` : ""}</option>)}</datalist>
+          <label><span>จำนวนสูงสุดต่อกล่อง</span><input value={selectedStockPart?.standardQty ? fmt(selectedStockPart.standardQty) : ""} placeholder="เลือก Part ก่อน" readOnly /></label>
+          <label><span>จำนวนงานรวม (Job) *</span><input type="number" min="1" value={stockTagForm.qty} onChange={(event) => setStockTagForm((current) => ({ ...current, qty: event.target.value }))} required /></label>
+          <label className="tag-job-field"><span>Job *</span><input value={stockTagForm.jobNo} onChange={(event) => setStockTagForm((current) => ({ ...current, jobNo: event.target.value.toUpperCase() }))} placeholder="กรอก Job" required /></label>
+          <div className="tag-auto-photo">{selectedStockPart ? <PartImage materialCode={selectedStockPart.materialCode} version={selectedPartImage?.updatedAt} /> : <div className="tag-auto-photo-empty"><span>▧</span><b>รูปชิ้นงาน</b><small>ดึงจากทะเบียน Part อัตโนมัติ</small></div>}</div>
+          <div className="tag-create-note">
+            <span>{selectedStockPart ? "✓" : "ⓘ"}</span>
+            <div>{selectedStockPart ? <><b>{selectedStockPart.materialCode} · {selectedStockPart.partName}</b><small>{plannedBoxCount > 0 ? `ระบบจะสร้าง ${fmt(plannedBoxCount)} Tag · กล่องละสูงสุด ${fmt(selectedStockPart.standardQty)} ชิ้น` : "กรอกจำนวนงานรวมเพื่อคำนวณจำนวน Tag"}</small></> : <><b>{stockTagForm.materialCode ? "ไม่พบ Part นี้ในทะเบียน" : "เลือกรายการ Part เพื่อเริ่มสร้าง Tag"}</b><small>รูปและจำนวนต่อกล่องจะดึงจากทะเบียน Part</small></>}</div>
+          </div>
+          <button className="button primary tag-create-submit" disabled={stockSaving || !selectedStockPart || selectedStockPart.standardQty <= 0}>▣ สร้าง Tag ตามจำนวนกล่อง</button>
+        </form>
+        {createdStockTags.length > 0 && <div className="tag-created-banner"><PartImage materialCode={createdStockTags[0].materialCode} compact /><div><small>สร้างสำเร็จ · Tag ขนาด 10 × 5.5 ซม. · A4 สูงสุด 10 Tag</small><b>{fmt(createdStockTags.length)} Tag / {fmt(createdStockTags.reduce((sum, item) => sum + item.qty, 0))} ชิ้น</b><p>{createdStockTags[0].materialCode} · Job {createdStockTags[0].jobNo}</p></div><button className="button primary" onClick={() => void printStockTags(createdStockTags)}>▤ พิมพ์ Tag</button></div>}
+      </Card>}
+
+      {canPrintTags && <Card className="tag-list-card" title="Tag ที่สร้างแล้ว" action={<button className="button secondary" onClick={() => void loadStock()}>↻ รีเฟรช</button>}>
+        <div className="tag-list-toolbar"><input value={tagSearch} onChange={(event) => { setTagSearch(event.target.value); setTagPage(1); }} placeholder="⌕ ค้นหา Tag ID, Part No., Job, ลูกค้า หรือวันที่ออก Tag" />{tagSearch && <button type="button" className="button secondary" onClick={() => { setTagSearch(""); setTagPage(1); }}>ล้าง</button>}</div>
+        <p className="tag-list-help">พบ {fmt(visibleTags.length)} จาก {fmt(stock.tags.length)} Tag · Tag ที่สร้างแล้วแก้ไขไม่ได้ · หากออก Tag แบ่งแล้ว ระบบจะล็อกการพิมพ์ Tag ต้นฉบับและให้พิมพ์ซ้ำจาก Tag แบ่งเท่านั้น</p>
+        {stockLoading ? <div className="inline-loading">กำลังโหลด Tag…</div> : visibleTags.length ? <div className="tag-modern-table">
+          <div className="tag-modern-head"><span>Tag ID</span><span>Part / รูปชิ้นงาน</span><span>จำนวน/กล่อง</span><span>Job</span><span>วันที่ออก Tag / รับเข้า Stock</span><span>สถานะ</span><span>จัดการ</span></div>
+          <div className="tag-modern-body">{paginatedTags.map((item) => {
+            const image = partImages.find((entry) => entry.materialCode === item.materialCode);
+            const boxMatch = item.tagId.match(/-B(\d+)OF(\d+)$/);
+            const statusText = item.status === "cancelled" ? "ยกเลิกแล้ว" : item.status === "ng" ? "NG / ปิดรับเข้า" : item.status === "depleted" ? "ขายออกหมด" : item.status === "printed" ? "รอรับเข้า" : item.reservedQty ? "รอขายออก" : "รับเข้าแล้ว";
+            const statusClass = item.status === "cancelled" || item.status === "ng" || item.status === "depleted" ? "over" : item.status === "printed" || item.reservedQty ? "partial" : "completed";
+            return <div className="tag-modern-row" key={item.id}>
+              <span className="tag-id-cell"><b>{item.tagId}</b><small>{item.splitLabelId ? "ถูกแบ่งแล้ว · ล็อก Tag ต้นฉบับ" : boxMatch ? `กล่อง ${Number(boxMatch[1])} / ${Number(boxMatch[2])}` : "Tag งาน"}</small></span>
+              <span className="tag-product-cell"><PartImage materialCode={item.materialCode} compact version={image?.updatedAt} /><span><b>{item.materialCode}</b><small>{item.partName}</small><small>{item.customer || "ไม่ระบุลูกค้า"}</small></span></span>
+              <span><b>{fmt(item.qty)} ชิ้น</b></span>
+              <span><b>{item.jobNo}</b></span>
+              <span><b>ออก Tag: {formatDateOnly(item.createdAt)}</b><small>{item.receivedAt ? `รับเข้า Stock: ${formatDateTime(item.receivedAt)}` : "วันที่ผลิต: รอรับเข้า Stock"}</small></span>
+              <span><em className={`status ${statusClass}`}>{statusText}</em></span>
+              <span className="tag-row-actions">{item.status === "cancelled" ? <small>ห้ามใช้ Tag ใบนี้</small> : item.splitLabelId ? <button className="tiny-button" type="button" onClick={() => setSplitTagRequest({ labelId: item.splitLabelId })}>▤ ดู Tag แบ่ง</button> : <button className="tiny-button" onClick={() => void printStockTags(item)}>▤ พิมพ์</button>}{user.role === "admin" && item.status === "printed" && <button type="button" className="tiny-button danger-outline" disabled={Boolean(deletingStockTagId)} onClick={() => void deleteStockTag(item)}>{deletingStockTagId === item.tagId ? "กำลังลบ…" : "♲ ลบ"}</button>}</span>
+            </div>;
+          })}</div>
+          <footer>
+            <span>แสดง {fmt(tagStartIndex + 1)} - {fmt(Math.min(tagStartIndex + tagPageSize, visibleTags.length))} จาก {fmt(visibleTags.length)} รายการ</span>
+            <nav className="part-pagination" aria-label="หน้ารายการ Tag"><button className="part-page-button" disabled={safeTagPage === 1} onClick={() => setTagPage(Math.max(1, safeTagPage - 1))}>‹</button>{tagPageButtons.map((item, index) => item === "…" ? <span className="part-page-dots" key={"tag-dots-" + index}>…</span> : <button className={"part-page-button " + (item === safeTagPage ? "active" : "")} key={item} onClick={() => setTagPage(item)}>{item}</button>)}<button className="part-page-button" disabled={safeTagPage === tagTotalPages} onClick={() => setTagPage(Math.min(tagTotalPages, safeTagPage + 1))}>›</button></nav>
+            <label className="part-page-size">แสดงต่อหน้า <select value={tagPageSize} onChange={(event) => { setTagPageSize(Number(event.target.value)); setTagPage(1); }}><option value={10}>10</option><option value={20}>20</option><option value={50}>50</option></select></label>
+          </footer>
+        </div> : <Empty title={tagNeedle ? "ไม่พบ Tag ที่ค้นหา" : "ยังไม่มี Tag"} text={tagNeedle ? "ลองเปลี่ยนคำค้นหา" : "เลือก Part และสร้าง Tag สำหรับนำงานเข้า Stock"} />}
+      </Card>}
+      {canEditPage("stock") && <Card className="stock-job-close-card" title="ปิดรับเข้า Job / จัดการงาน NG">
+        <p className="stock-job-close-help">ก่อนปิด Job สามารถกด “ปรับจำนวนผลิตจริง” ได้: ผลิตเกินระบบจะสร้าง Tag เพิ่ม ส่วนผลิตไม่ถึงระบบจะยกเลิกเฉพาะ Tag ที่ยังไม่รับเข้าและออก Tag เศษใหม่ โดยไม่แก้ Tag เดิม</p>
+        <div className="stock-job-close-search"><span>⌕</span><input value={jobCloseSearch} onChange={(event) => { setJobCloseSearch(event.target.value); setJobClosePage(1); }} placeholder="ค้นหา Job, Part No. หรือชื่อชิ้นงาน..." />{jobCloseSearch && <button type="button" onClick={() => { setJobCloseSearch(""); setJobClosePage(1); }}>×</button>}</div>
+        {filteredStockJobGroups.length ? <><div className="stock-job-close-summary">{paginatedStockJobGroups.map((group) => {
+          const key = group.jobNo + "|" + group.materialCode;
+          return <div className="stock-job-close-row" key={key}>
+            <span><b>{group.jobNo}</b><small>{fmt(group.tagCount)} Tag</small></span>
+            <span><b>{group.materialCode}</b><small>{group.partName}</small></span>
+            <span className="job-metric"><small>ทั้งหมด</small><b>{fmt(group.totalQty)}</b></span>
+            <span className="job-metric received"><small>รับเข้าแล้ว</small><b>{fmt(group.receivedQty)}</b></span>
+            <span className="job-metric waiting"><small>รอรับเข้า</small><b>{fmt(group.pendingQty)}</b></span>
+            <span className="job-metric ng"><small>NG</small><b>{fmt(group.ngQty)}</b></span>
+            <span className="job-actions">{group.ngQty === 0 && !closedJobKeys.has(key) && <button className="button secondary" disabled={Boolean(jobClosingKey)} onClick={() => openJobQuantityAdjustment({ jobNo: group.jobNo, materialCode: group.materialCode, partName: group.partName, currentQty: group.totalQty })}>± ปรับจำนวนผลิตจริง</button>}{group.pendingQty > 0 && <button className="button danger" disabled={Boolean(jobClosingKey)} onClick={() => void closeStockJob(group.jobNo, group.materialCode, group.totalQty, group.receivedQty, group.pendingQty)}>{jobClosingKey === key ? "กำลังปิด…" : "ปิดรับเข้า Job"}</button>}{group.ngQty > 0 && user.role === "admin" && <button className="button secondary" disabled={Boolean(jobClosingKey)} onClick={() => void reopenNgStockJob(group.jobNo, group.materialCode, group.ngQty)}>เปิด Job คืน</button>}{group.pendingQty === 0 && group.ngQty === 0 && <em className="stock-job-complete">✓ รับเข้าครบแล้ว</em>}</span>
+          </div>;
+        })}</div><footer className="stock-job-close-pagination"><span>แสดง {fmt(jobCloseStartIndex + 1)} - {fmt(Math.min(jobCloseStartIndex + jobClosePageSize, filteredStockJobGroups.length))} จาก {fmt(filteredStockJobGroups.length)} Job</span><nav aria-label="หน้ารายการปิดรับเข้า Job"><button disabled={safeJobClosePage === 1} onClick={() => setJobClosePage(Math.max(1, safeJobClosePage - 1))}>‹</button>{jobClosePageButtons.map((item, index) => item === "…" ? <span key={"job-dots-" + index}>…</span> : <button className={item === safeJobClosePage ? "active" : ""} key={item} onClick={() => setJobClosePage(item)}>{item}</button>)}<button disabled={safeJobClosePage === jobCloseTotalPages} onClick={() => setJobClosePage(Math.min(jobCloseTotalPages, safeJobClosePage + 1))}>›</button></nav><b>10 Job / หน้า</b></footer></> : <Empty title={jobCloseSearch ? "ไม่พบ Job ที่ค้นหา" : "ยังไม่มี Job"} text={jobCloseSearch ? "ลองค้นหาด้วย Job, Part No. หรือชื่อชิ้นงาน" : "เมื่อสร้าง Tag แล้ว Job จะแสดงในส่วนนี้"} />}
+        {stock.jobClosures.length > 0 && <div className="stock-job-close-history"><b>ประวัติปิดรับเข้าล่าสุด</b><ul>{stock.jobClosures.slice(0, 5).map((item) => <li key={item.id}><b>{item.jobNo}</b><span>{item.materialCode}</span><em>NG {fmt(item.ngQty)} ชิ้น</em><span>{item.reason}</span><span>{item.closedByName} · {formatDateTime(item.closedAt)}</span></li>)}</ul></div>}
+      </Card>}
+    </div>;
+  }
+
+  function renderManualStock() {
+    const activeStockParts = stock.parts.filter((part) => part.active).sort((left, right) => left.materialCode.localeCompare(right.materialCode));
+    const selectedPart = activeStockParts.find((part) => part.materialCode === manualStockForm.materialCode.trim().toUpperCase());
+    const totalQty = Number(manualStockForm.qty || 0);
+    const packQty = Number(selectedPart?.standardQty || 0);
+    const tagCount = packQty > 0 && totalQty > 0 ? Math.ceil(totalQty / packQty) : 0;
+    const tagQtys = tagCount ? Array.from({ length: tagCount }, (_, index) => index < tagCount - 1 ? packQty : totalQty - (packQty * (tagCount - 1))) : [];
+    const tagTotal = tagQtys.reduce((sum, qty) => sum + qty, 0);
+    const canSubmit = Boolean(selectedPart && packQty > 0 && totalQty > 0 && manualStockForm.jobNo.trim() && manualStockForm.productionDate && tagTotal === totalQty);
+
+    const transactions = Array.from(stock.manualReceipts.reduce((map, item) => {
+      const key = item.transactionNo || `legacy-${item.id}`;
+      const current = map.get(key);
+      if (current) current.items.push(item);
+      else map.set(key, { key, items: [item] });
+      return map;
+    }, new Map<string, { key: string; items: StockManualReceipt[] }>()).values()).slice(0, 20);
+    const openedTransaction = transactions.find((item) => item.key === manualTransactionOpen);
+
+    return <div className="stock-home manual-stock-page">
+      <Card className="stock-management-card manual-stock-card" title="รับเข้า Stock แบบคีย์เอง">
+        {canEditPage("manual-stock") && <form onSubmit={saveManualStockReceipt}>
+          <div className="manual-stock-workspace">
+            <section className="manual-stock-entry">
+              <header><span>1</span><div><b>คีย์รับเข้าและสร้าง KIT Tag</b><small>เลือก Part ระบุจำนวนรับเข้า และระบบจะแบ่ง Tag ตามจำนวนบรรจุต่อกล่อง</small></div></header>
+              <div className="stock-management-fields">
+                <label className="wide"><span>Part / Material *</span><input required list="manual-stock-part-options" value={manualStockForm.materialCode} onChange={(event) => setManualStockForm((current) => ({ ...current, materialCode: event.target.value.toUpperCase() }))} placeholder="ค้นหา Part No. / Material Code / Description" autoComplete="off" spellCheck={false} /><datalist id="manual-stock-part-options">{activeStockParts.map((part) => <option key={part.materialCode} value={part.materialCode}>{part.partName}{part.customer ? ` · ${part.customer}` : ""}</option>)}</datalist></label>
+                {selectedPart && <div className="manual-part-summary wide"><PartImage materialCode={selectedPart.materialCode} compact /><span><b>{selectedPart.materialCode}</b><small>{selectedPart.partName}</small><em>จำนวนบรรจุต่อกล่อง: {packQty > 0 ? `${fmt(packQty)} ชิ้น` : "ยังไม่ได้กำหนด"}</em></span></div>}
+                {selectedPart && packQty <= 0 && <p className="manual-stock-error wide">Part นี้ยังไม่ได้กำหนดจำนวนบรรจุต่อกล่อง กรุณาตั้งค่าในทะเบียน Part ก่อน</p>}
+                <label><span>จำนวนรับเข้า *</span><input required type="number" min={1} step={1} inputMode="numeric" value={manualStockForm.qty} onChange={(event) => setManualStockForm((current) => ({ ...current, qty: event.target.value.replace(/[^0-9]/g, "") }))} placeholder="จำนวนชิ้น" /></label>
+                <label><span>Job / เอกสารอ้างอิง *</span><input required value={manualStockForm.jobNo} onChange={(event) => setManualStockForm((current) => ({ ...current, jobNo: event.target.value.toUpperCase() }))} placeholder="เช่น JOB-260918-001" /></label>
+                <label><span>วันที่ผลิต *</span><input required type="date" value={manualStockForm.productionDate} onChange={(event) => setManualStockForm((current) => ({ ...current, productionDate: event.target.value }))} /></label>
+                <label><span>เลขที่ใบรับ / อ้างอิง</span><input value={manualStockForm.referenceNo} onChange={(event) => setManualStockForm((current) => ({ ...current, referenceNo: event.target.value }))} placeholder="ไม่บังคับ" /></label>
+                <label className="wide"><span>หมายเหตุ</span><input value={manualStockForm.note} onChange={(event) => setManualStockForm((current) => ({ ...current, note: event.target.value }))} placeholder="ระบุหมายเหตุ (ถ้ามี)" /></label>
+              </div>
+            </section>
+
+            <section className="manual-tag-preview">
+              <header><span>2</span><div><b>สรุปการสร้าง Tag</b><small>Preview คำนวณจาก Part Master และจำนวนรับเข้าจริง</small></div></header>
+              <div className="manual-preview-kpis">
+                <span><small>จำนวนรับเข้า</small><b>{fmt(totalQty)}</b><em>ชิ้น</em></span>
+                <span><small>บรรจุต่อกล่อง</small><b>{fmt(packQty)}</b><em>ชิ้น/กล่อง</em></span>
+                <span><small>สร้างทั้งหมด</small><b>{fmt(tagCount)}</b><em>Tag</em></span>
+              </div>
+              <div className="manual-preview-list">
+                <b>รายละเอียด Tag ที่จะสร้าง</b>
+                {tagQtys.length ? <div className="manual-preview-scroll"><table><thead><tr><th>ลำดับ</th><th>จำนวนต่อ Tag</th><th>หมายเหตุ</th></tr></thead><tbody>{tagQtys.map((qty, index) => <tr key={index}><td>{index + 1}</td><td>{fmt(qty)} ชิ้น</td><td>{qty === packQty ? "เต็มกล่อง" : "กล่องไม่เต็ม (ส่วนที่เหลือ)"}</td></tr>)}</tbody></table></div> : <p>เลือก Part และกรอกจำนวนรับเข้าเพื่อดู Preview</p>}
+              </div>
+              {tagQtys.length > 0 && <div className={tagTotal === totalQty ? "manual-total-ok" : "manual-stock-error"}>{tagTotal === totalQty ? "✓" : "!"} ผลรวมจำนวนทุก Tag = {fmt(tagTotal)} ชิ้น</div>}
+            </section>
+          </div>
+          <button className="button primary stock-management-submit manual-stock-submit" disabled={!canSubmit || stockManagementSaving}>{stockManagementSaving ? "กำลังบันทึก…" : canSubmit ? `✓ รับเข้า Stock ${fmt(totalQty)} ชิ้น และสร้าง ${fmt(tagCount)} Tag` : !selectedPart ? "กรุณาเลือก Part" : packQty <= 0 ? "Part ยังไม่มี Packing Qty" : totalQty <= 0 ? "กรุณากรอกจำนวนรับเข้า" : !manualStockForm.jobNo.trim() ? "กรุณากรอก Job" : "กรุณากรอกข้อมูลให้ครบ"}</button>
+        </form>}
+
+        <section className="manual-receipt-history">
+          <header><b>รับเข้าแบบคีย์ล่าสุด</b><small>แสดงล่าสุด {Math.min(transactions.length, 20)} รายการ</small></header>
+          <div className="manual-history-scroll"><table><thead><tr><th>เวลา</th><th>Part / Description</th><th>Job</th><th>จำนวนรับเข้า</th><th>บรรจุต่อกล่อง</th><th>Tag ที่สร้าง</th><th>วันที่ผลิต</th><th>ผู้ทำรายการ</th><th>จัดการ</th></tr></thead><tbody>{transactions.map((transaction) => { const first = transaction.items[0]; return <tr key={transaction.key}><td>{formatTime(first.receivedAt)}</td><td><b>{first.materialCode}</b><small>{first.partName}</small></td><td>{first.jobNo}{first.duplicateConfirmed ? <small className="duplicate-badge">ยืนยัน Job ซ้ำ</small> : null}</td><td>{fmt(first.transactionTotalQty || transaction.items.reduce((sum, item) => sum + Number(item.qty), 0))}</td><td>{fmt(first.packQty)}</td><td><button type="button" className="link-button" onClick={() => setManualTransactionOpen(transaction.key)}>{fmt(first.tagCount || transaction.items.length)} Tag</button></td><td>{formatDate(first.productionDate)}</td><td>{first.receivedByName}</td><td><button type="button" className="icon-button" onClick={() => setManualTransactionOpen(transaction.key)}>•••</button></td></tr>; })}</tbody></table>{!transactions.length && <p className="manual-empty">ยังไม่มีรายการรับเข้าแบบคีย์</p>}</div>
+        </section>
+      </Card>
+
+      {manualDuplicateJob && <div className="modal-backdrop"><section className="manual-confirm-modal"><header><span>!</span><div><b>พบ Job ซ้ำ</b><small>กรุณาตรวจสอบก่อนรับเข้าเพิ่ม</small></div></header><p>Job <b>{manualDuplicateJob.jobNo}</b> ของ Part <b>{manualDuplicateJob.materialCode}</b> เคยรับเข้าแล้ว</p><div className="duplicate-summary"><span>รับแล้ว<b>{fmt(manualDuplicateJob.previousQty)} ชิ้น</b><small>{fmt(manualDuplicateJob.previousTagCount)} Tag</small></span><span>ครั้งนี้<b>+{fmt(manualDuplicateJob.incomingQty)} ชิ้น</b><small>{fmt(manualDuplicateJob.incomingTagCount)} Tag</small></span><span>หลังยืนยัน<b>{fmt(manualDuplicateJob.totalAfter)} ชิ้น</b></span></div><footer><button type="button" className="button secondary" disabled={stockManagementSaving} onClick={() => setManualDuplicateJob(null)}>ยกเลิก</button><button type="button" className="button primary" disabled={stockManagementSaving} onClick={() => void submitManualStockReceipt(true)}>{stockManagementSaving ? "กำลังบันทึก…" : "ยืนยันรับเข้าเพิ่ม"}</button></footer></section></div>}
+
+      {manualReceiptSuccess && <div className="modal-backdrop"><section className="manual-success-modal"><header><span>✓</span><div><b>รับเข้า Stock สำเร็จ</b><small>{manualReceiptSuccess.transactionNo}</small></div></header><dl><div><dt>Part</dt><dd>{manualReceiptSuccess.tags[0]?.materialCode}</dd></div><div><dt>จำนวนรับเข้า</dt><dd>{fmt(manualReceiptSuccess.totalQty)} ชิ้น</dd></div><div><dt>สร้าง KIT Tag</dt><dd>{fmt(manualReceiptSuccess.boxCount)} Tag</dd></div></dl><footer><button type="button" className="button primary" onClick={() => void printStockTags(manualReceiptSuccess.tags)}>พิมพ์ Tag ทั้งหมด</button><button type="button" className="button secondary" onClick={() => { setManualTransactionOpen(manualReceiptSuccess.transactionNo); setManualReceiptSuccess(null); }}>ดู Tag</button><button type="button" className="button secondary" onClick={() => setManualReceiptSuccess(null)}>รับเข้ารายการใหม่</button></footer></section></div>}
+
+      {openedTransaction && <div className="modal-backdrop" onMouseDown={() => setManualTransactionOpen("")}><section className="manual-tags-modal" onMouseDown={(event) => event.stopPropagation()}><header><div><b>Tag จากรายการ {openedTransaction.items[0].transactionNo || "เดิม"}</b><small>{openedTransaction.items[0].materialCode} · Job {openedTransaction.items[0].jobNo}</small></div><button type="button" onClick={() => setManualTransactionOpen("")}>×</button></header><div>{openedTransaction.items.map((item) => <article key={item.id}><b>{item.tagId}</b><span>{fmt(item.qty)} ชิ้น</span></article>)}</div><footer><button type="button" className="button primary" onClick={() => { const ids = new Set(openedTransaction.items.map((item) => item.tagId)); void printStockTags(stock.tags.filter((tag) => ids.has(tag.tagId))); }}>พิมพ์ Tag ทั้งหมด</button></footer></section></div>}
+    </div>;
+  }
+
+  function renderStockCount() {
+    const preview = stockCountPreview;
+    return <div className="stock-home">
+      <Card className="stock-management-card" title="ตรวจนับและปรับยอดสิ้นเดือน">
+        {canEditPage("stock-count") && <form className="stock-management-panel count" onSubmit={previewStockCount}>
+          <header><span>≋</span><div><b>สแกนตรวจนับทีละ KIT Stock Tag</b><small>ยอดของ Tag และยอด Stock รวมจะเพิ่มหรือลดพร้อมกัน พร้อมเก็บประวัติผู้แก้ไข</small></div></header>
+          <button type="button" className="stock-camera-zone" onClick={() => { setCameraPurpose("stock-count"); setCameraOpen(true); }}><span>⌗</span><b>สแกน Tag ที่ต้องการตรวจนับ</b><small>สแกนและบันทึกให้เสร็จทีละ Tag</small></button>
+          <div className="stock-management-fields">
+            <label className="wide"><span>KIT Stock Tag *</span><div className="stock-receive-form"><input ref={stockCountInputRef} required value={stockCountForm.rawPayload} onChange={(event) => { setStockCountPreview(null); setStockCountForm((current) => ({ ...current, rawPayload: event.target.value.toUpperCase() })); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void loadStockCountTag(value); } }} placeholder="สแกนหรือพิมพ์รหัส KIT Stock Tag" autoComplete="off" /><button type="button" className="button secondary" disabled={!stockCountForm.rawPayload.trim() || stockManagementSaving} onClick={() => void loadStockCountTag()}>{stockManagementSaving ? "กำลังตรวจสอบ…" : "ตรวจสอบ Tag"}</button></div></label>
+            {preview && <><label><span>Part / Material</span><input value={`${preview.materialCode} · ${preview.partName}`} readOnly /></label><label><span>Job</span><input value={preview.jobNo || "—"} readOnly /></label><label><span>ควรอยู่ในพื้นที่ Stock</span><input value={`${fmt(preview.stockAreaSystemQty)} ชิ้น`} readOnly /></label><label><span>นำไปจัดงาน/จองไว้</span><input value={`${fmt(preview.reservedQty)} ชิ้น`} readOnly /></label><label><span>ยอดรวมในระบบก่อนปรับ</span><input value={`${fmt(preview.systemQty)} ชิ้น`} readOnly /></label><label><span>ยอด Stock รวมทุก Tag</span><input value={`${fmt(preview.materialTotalQty)} ชิ้น`} readOnly /></label></>}
+            <label><span>ยอดที่นับได้ในพื้นที่ Stock *</span><input required disabled={!preview} type="number" min={0} step={1} inputMode="numeric" value={stockCountForm.countedQty} onChange={(event) => { const countedQty = event.target.value.replace(/[^0-9]/g, ""); const difference = Number(countedQty || 0) - Number(preview?.stockAreaSystemQty || 0); setStockCountForm((current) => ({ ...current, countedQty, reason: defaultStockCountReason(difference) })); }} placeholder="นับเฉพาะสินค้าที่อยู่ในพื้นที่ Stock" /></label>
+            <label><span>วันที่ตรวจนับ *</span><input required type="date" value={stockCountForm.countDate} onChange={(event) => setStockCountForm((current) => ({ ...current, countDate: event.target.value }))} /></label>
+            <label className="wide"><span>สาเหตุการปรับยอด *</span><input required value={stockCountForm.reason} onChange={(event) => setStockCountForm((current) => ({ ...current, reason: event.target.value }))} /></label>
+          </div>
+          {preview && <div className="stock-count-safety"><b>Tag นี้นำออกไปจัดงาน/จองแล้ว {fmt(preview.reservedQty)} ชิ้น</b><span>กรอกเฉพาะยอดที่พบในพื้นที่ Stock ระบบจะนำยอดจัดงาน/จองมารวมให้อัตโนมัติ และไม่อนุญาตให้แก้ยอดจองจากหน้านี้</span></div>}
+          <button className="button stock-count-preview-button" disabled={!preview || stockManagementSaving || stockCountForm.countedQty === ""}>{stockManagementSaving ? "กำลังตรวจสอบ…" : "ตรวจสอบยอดก่อนบันทึก →"}</button>
+        </form>}
+        <div className="stock-management-history"><div><b>ประวัติปรับยอดทีละ Tag ล่าสุด</b>{stock.countAdjustments.slice(0, 10).map((item) => { const line = stock.countAdjustmentLines.find((entry) => entry.adjustmentId === item.id); return <article key={item.id}><span><b>{line?.stockTagCode || item.materialCode}</b><small>{item.adjustmentNo} · {item.reason}</small></span><em className={item.difference < 0 ? "minus" : item.difference > 0 ? "plus" : "equal"}>{item.difference > 0 ? "+" : ""}{fmt(item.difference)}</em><small>{item.adjustedByName} · {formatDateTime(item.adjustedAt)}</small></article>; })}{!stock.countAdjustments.length && <p>ยังไม่มีรายการ</p>}</div></div>
+      </Card>
+    </div>;
+  }
+
+  async function exportStockExcel() {
+    try {
+      const xlsx = await import("xlsx");
+      const stockTags = stock.tags.filter((item) => item.status === "in_stock" || item.status === "depleted");
+      const summaryByPart = new Map<string, {
+        materialCode: string; partName: string; customer: string; location: string;
+        tagCount: number; totalQty: number; reservedQty: number; stockAreaQty: number;
+      }>();
+      for (const tag of stockTags) {
+        const totalQty = Number(tag.remainingQty || 0);
+        const reservedQty = Number(tag.reservedQty || 0);
+        const current = summaryByPart.get(tag.materialCode) || {
+          materialCode: tag.materialCode, partName: tag.partName || "", customer: tag.customer || "",
+          location: tag.location || "", tagCount: 0, totalQty: 0, reservedQty: 0, stockAreaQty: 0,
+        };
+        current.tagCount += 1;
+        current.totalQty += totalQty;
+        current.reservedQty += reservedQty;
+        current.stockAreaQty += Math.max(totalQty - reservedQty, 0);
+        if (!current.location && tag.location) current.location = tag.location;
+        summaryByPart.set(tag.materialCode, current);
+      }
+      const generatedAt = new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date());
+      const summaryRows = [
+        ["Control Stock KIT — สรุปยอด Stock"],
+        ["วันที่และเวลาส่งออก", generatedAt],
+        ["จำนวน Part", summaryByPart.size],
+        ["จำนวน Tag", stockTags.length],
+        ["ยอดคงเหลือรวม (ชิ้น)", stockTags.reduce((sum, tag) => sum + Number(tag.remainingQty || 0), 0)],
+        [],
+        ["Material Code", "ชื่อชิ้นงาน", "ลูกค้า", "Location", "จำนวน Tag", "ยอดคงเหลือรวม", "จัดงาน/จองไว้", "อยู่ในพื้นที่ Stock"],
+        ...[...summaryByPart.values()]
+          .sort((left, right) => left.materialCode.localeCompare(right.materialCode))
+          .map((item) => [item.materialCode, item.partName, item.customer, item.location, item.tagCount, item.totalQty, item.reservedQty, item.stockAreaQty]),
+      ];
+      const detailRows = [
+        ["KIT Stock Tag", "Material Code", "ชื่อชิ้นงาน", "ลูกค้า", "Location", "Job", "วันที่ผลิต", "วันที่รับเข้า", "จำนวนเริ่มต้น", "ยอดคงเหลือรวม", "จัดงาน/จองไว้", "อยู่ในพื้นที่ Stock", "สถานะ"],
+        ...stockTags.map((tag) => {
+          const totalQty = Number(tag.remainingQty || 0);
+          const reservedQty = Number(tag.reservedQty || 0);
+          return [
+            tag.tagId, tag.materialCode, tag.partName || "", tag.customer || "", tag.location || "",
+            tag.jobNo, tag.productionDate, tag.receivedAt || "", Number(tag.qty || 0), totalQty,
+            reservedQty, Math.max(totalQty - reservedQty, 0),
+            tag.status === "depleted" ? "ขายออกหมด" : reservedQty > 0 ? "จัดงาน/จองบางส่วน" : "พร้อมใช้",
+          ];
+        }),
+      ];
+      const workbook = xlsx.utils.book_new();
+      const summarySheet = xlsx.utils.aoa_to_sheet(summaryRows);
+      const detailSheet = xlsx.utils.aoa_to_sheet(detailRows);
+      summarySheet["!cols"] = [22, 34, 22, 18, 14, 18, 18, 20].map((wch) => ({ wch }));
+      detailSheet["!cols"] = [30, 22, 34, 22, 18, 20, 14, 22, 16, 18, 18, 20, 20].map((wch) => ({ wch }));
+      xlsx.utils.book_append_sheet(workbook, summarySheet, "สรุปตาม Part");
+      xlsx.utils.book_append_sheet(workbook, detailSheet, "รายละเอียดตาม Tag");
+      const dateKey = new Date().toISOString().slice(0, 10);
+      xlsx.writeFile(workbook, `KIT_Stock_${dateKey}.xlsx`);
+      void recordClientAudit("export_stock_excel", `ดาวน์โหลด Excel ยอด Stock ${stockTags.length} Tag`, {
+        partCount: summaryByPart.size, tagCount: stockTags.length,
+        totalQty: stockTags.reduce((sum, tag) => sum + Number(tag.remainingQty || 0), 0),
+      });
+      setNotice({ type: "success", text: `ดาวน์โหลด Excel ยอด Stock แล้ว ${fmt(summaryByPart.size)} Part · ${fmt(stockTags.length)} Tag` });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ดาวน์โหลด Excel ยอด Stock ไม่สำเร็จ" });
+    }
+  }
+
+  function renderStock() {
+    const receivedStockTags = stock.tags.filter((item) => item.status === "in_stock" || item.status === "depleted");
+    const reserved = receivedStockTags.reduce((sum, item) => sum + Number(item.reservedQty), 0);
+    const available = receivedStockTags.reduce((sum, item) => sum + Math.max(Number(item.remainingQty) - Number(item.reservedQty), 0), 0);
+    const awaitingReceipt = stock.tags.filter((item) => item.status === "printed").length;
+    const abnormalTags = stock.tags.filter((item) => item.status === "ng"
+      || Number(item.remainingQty) < 0 || Number(item.remainingQty) > Number(item.qty)
+      || Number(item.reservedQty) < 0 || Number(item.reservedQty) > Number(item.remainingQty));
+    const ngQty = stock.tags.reduce((sum, item) => sum + Number(item.ngQty || 0), 0);
+    const todayKey = bangkokDateTimeKey().slice(0, 10);
+    const todayMovement = stock.movementDays.find((item) => item.date === todayKey) || { date: todayKey, receivedQty: 0, arrangedQty: 0, adjustedQty: 0 };
+    const stockNeedle = tagSearch.trim().toLowerCase();
+    const matchingStock = stock.tags.filter((item) => !stockNeedle || [item.tagId, item.materialCode, item.partName, item.jobNo].some((value) => String(value || "").toLowerCase().includes(stockNeedle)));
+    const recentStock = matchingStock.slice(0, stockListExpanded || stockNeedle ? 50 : 6);
+    const totalForChart = Math.max(available + reserved + ngQty, 1);
+    const readyPercent = Math.round((available / totalForChart) * 100);
+    const reservedPercent = Math.round((reserved / totalForChart) * 100);
+    const ngPercent = Math.max(100 - readyPercent - reservedPercent, 0);
+    const trendDays = stock.movementDays.map((item) => ({ ...item,
+      receivedQty: Number(item.receivedQty || 0), arrangedQty: Number(item.arrangedQty || 0), adjustedQty: Number(item.adjustedQty || 0),
+      label: formatDate(item.date).replace(/\s/g, ""),
+    }));
+    const trendMax = Math.max(...trendDays.flatMap((item) => [item.receivedQty, item.arrangedQty, Math.abs(item.adjustedQty)]), 1);
+    return <div className="stock-home">
+      <div className="stock-stat-row page-summary">
+        <article className="stock-stat blue"><span>▦</span><div><small>Tag รอรับเข้า</small><b>{fmt(awaitingReceipt)}</b><em>ใบ</em></div><button onClick={() => { setTagSearch(""); setStockListExpanded(true); }}>ดูรายการ →</button></article>
+        <article className="stock-stat green"><span>▣</span><div><small>Stock พร้อมใช้</small><b>{fmt(available)}</b><em>ชิ้น · อยู่ในพื้นที่ Stock จริง</em></div><button onClick={() => { setTagSearch(""); setStockListExpanded(true); }}>ดูรายการ →</button></article>
+        <article className="stock-stat orange"><span>⇥</span><div><small>ถูกจัดงานแล้ว</small><b>{fmt(reserved)}</b><em>ชิ้น · ออกจากพื้นที่ Stock แล้ว</em></div><button onClick={() => go("arrange")}>ดูรายการ →</button></article>
+        <article className="stock-stat red"><span>!</span><div><small>Stock ผิดปกติ</small><b>{fmt(abnormalTags.length)}</b><em>รายการ</em></div><button onClick={() => { setTagSearch(""); setStockListExpanded(true); }}>ตรวจสอบ →</button></article>
+      </div>
+      <div className="stock-main-grid">
+        {canEditPage("stock") && <Card className="stock-receive-card" title={<span className="stock-card-title"><i>⌗</i> รับเข้า Stock (ชั้นวาง + Tag)</span>} action={<span className="stock-scanner-ready"><i /> {stockLocation ? `ชั้น ${stockLocation.code}` : "รอสแกนชั้น"}</span>}>
+          {stockLocation ? <div className="stock-location-session"><div><small>ชั้นจัดเก็บที่กำลังรับเข้า</small><b>{stockLocation.code}</b><span>รองรับ {fmt(stockLocation.partCount)} Part · สแกน KIT Tag เพียง 1 ใบเพื่อรับทั้งพาเลท</span></div><button type="button" onClick={() => { setStockLocation(null); setStockLocationActivity(0); setStockScan(""); setLastStockReceipt(null); window.setTimeout(() => stockScanInputRef.current?.focus(), 50); }}>เปลี่ยนชั้นวาง</button></div> : <div className="stock-location-guide"><b>ขั้นตอนที่ 1 · สแกน QR หน้าชั้นวาง</b><span>เมื่อเลือกชั้นแล้ว ให้สแกน KIT Tag กล่องใดกล่องหนึ่งเพื่อรับ Part และ Job เดียวกันทั้งพาเลท</span><button type="button" onClick={() => void printStockLocationQrs()}>▦ พิมพ์ QR ชั้นวาง</button></div>}
+          <button type="button" className="stock-camera-zone" onClick={() => { setCameraPurpose("stock"); setCameraOpen(true); }}><span>▥</span><b>{stockSaving ? "กำลังตรวจสอบ…" : stockLocation ? "ขั้นตอนที่ 2 · สแกน KIT Tag 1 ใบ" : "ขั้นตอนที่ 1 · พร้อมสแกน QR ชั้นวาง"}</b><small>{stockLocation ? `รับเข้าชั้น ${stockLocation.code} · ระบบจะรวบรวมทั้งพาเลท` : "ยิง QR หน้าชั้น หรือแตะเพื่อเปิดกล้อง"}</small></button>
+          <div className="stock-scan-separator"><span>หรือ</span></div>
+          <form className="stock-receive-form" onSubmit={receiveStockTag}><input ref={stockScanInputRef} value={stockScan} inputMode={stockManualEntry ? "text" : "none"} onFocus={() => { if (!stockManualEntry && window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) stockScanInputRef.current?.blur(); }} onChange={(e) => updateStockScannerValue(e.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void receiveStockTag(value); } }} placeholder={stockLocation ? "ใส่รหัส KIT Tag ด้วยมือ" : "ใส่ QR ชั้น เช่น KITLOC|A-01"} autoComplete="off" /><button className="button primary" disabled={!stockScan.trim() || stockSaving}>{stockSaving ? "กำลังตรวจสอบ…" : stockLocation ? "ตรวจสอบและรับเข้า" : "เลือกชั้นวาง"}</button></form>
+          <button type="button" className="stock-manual-toggle" onClick={() => { setStockManualEntry((current) => !current); window.setTimeout(() => stockScanInputRef.current?.focus(), 50); }}>{stockManualEntry ? "ปิดแป้นพิมพ์ / ใช้ Scanner" : "⌨ กรอก Tag ด้วยมือ"}</button>
+          {lastStockReceipt ? <div className="stock-receive-success"><b>✓ รับเข้า Stock สำเร็จ · ชั้น {lastStockReceipt.locationCode}</b><span>Tag: {lastStockReceipt.tagId}</span><span>Material: {lastStockReceipt.materialCode}</span><span>Job: {lastStockReceipt.jobNo}</span><strong>จำนวน: {fmt(lastStockReceipt.qty)} ชิ้น</strong></div> : <div className="stock-guide"><b>ℹ {stockLocation ? `พร้อมยิง KIT Tag 1 ใบเพื่อรับทั้งพาเลทที่ชั้น ${stockLocation.code}` : "กรุณาสแกน QR ชั้นจัดเก็บก่อน"}</b><p>ระบบบล็อก Tag ที่ไม่ตรงกับ Location ในทะเบียน Part</p></div>}
+        </Card>}
+        <Card className="stock-latest-card" title="รายการ Stock ล่าสุด" action={<div className="stock-list-tools"><button type="button" className="button users-excel-button" onClick={() => void exportStockExcel()}>▦ Excel</button><input value={tagSearch} onChange={(e) => { setTagSearch(e.target.value); setStockListExpanded(Boolean(e.target.value)); }} placeholder="ค้นหา Tag / Part No. / Job..." /><button onClick={() => void loadStock()}>↻</button></div>}>
+          {stockLoading ? <div className="inline-loading">กำลังโหลด Stock…</div> : recentStock.length ? <><div className="stock-latest-head"><span>Tag / QR</span><span>รายการสินค้า</span><span>Job</span><span>วันที่รับเข้า</span><span>สถานะ</span><span>คงเหลือ</span></div><div className="stock-latest-list">{recentStock.map((item) => {
+            const itemAvailable = Math.max(Number(item.remainingQty) - Number(item.reservedQty), 0);
+            const isAbnormal = item.status === "ng" || Number(item.remainingQty) < 0 || Number(item.remainingQty) > Number(item.qty) || Number(item.reservedQty) > Number(item.remainingQty);
+            const statusClass = isAbnormal ? "abnormal" : item.status === "printed" ? "waiting" : item.status === "depleted" ? "depleted" : Number(item.reservedQty) ? "reserved" : "ready";
+            const statusText = isAbnormal ? "ผิดปกติ" : item.status === "printed" ? "รอรับเข้า" : item.status === "depleted" ? "ขายออกหมด" : Number(item.reservedQty) ? (itemAvailable ? "จัดบางส่วน" : "จัดงานแล้ว") : "พร้อมใช้";
+            return <button key={item.id} className="stock-latest-row" onClick={() => { setTagSearch(item.tagId); setStockListExpanded(true); }}><span className="tag-cell"><i>▦</i><b>{item.tagId}</b></span><span><b>{item.materialCode}</b><small>{item.partName}</small></span><span><b>{item.jobNo}</b></span><span><b>{item.receivedAt ? formatDateTime(item.receivedAt) : "—"}</b></span><span><em className={"stock-state " + statusClass}>{statusText}</em></span><span className="remain-cell"><b>{fmt(itemAvailable)}</b> ชิ้น <i>›</i></span></button>;
+          })}</div>{matchingStock.length > 6 && <button className="stock-view-all" onClick={() => { setTagSearch(""); setStockListExpanded((current) => !current); }}>{stockListExpanded ? "ย่อรายการ ↑" : `ดูทั้งหมด ${fmt(matchingStock.length)} Tag →`}</button>}</> : <Empty title="ยังไม่มี Stock" text={stockNeedle ? "ไม่พบรายการที่ค้นหา" : "ยิง Tag รับงานเข้า Stock แล้วรายการจะแสดงที่นี่"} />}
+        </Card>
+      </div>
+      <div className="stock-analytics-grid">
+        <Card className="stock-status-card" title="สรุปสถานะ Stock"><div className="stock-donut-wrap"><div className="stock-donut" style={{ "--ready-stock": String(readyPercent * 3.6) + "deg", "--reserved-stock": String((readyPercent + reservedPercent) * 3.6) + "deg" } as React.CSSProperties}><span><b>{fmt(available + reserved + ngQty)}</b><small>ยอดติดตามรวม</small></span></div><ul><li><i className="ready" /><span>พร้อมใช้</span><b>{fmt(available)} ชิ้น</b><em>{readyPercent}%</em></li><li><i className="reserved" /><span>ถูกจัดงานแล้ว</span><b>{fmt(reserved)} ชิ้น</b><em>{reservedPercent}%</em></li><li><i className="abnormal" /><span>งาน NG/ผิดปกติ</span><b>{fmt(ngQty)} ชิ้น</b><em>{ngPercent}%</em></li></ul></div></Card>
+        <Card className="stock-trend-card" title="Stock Movement (7 วันที่ผ่านมา)" action={<div className="stock-movement-legend"><span><i className="received" />รับเข้า</span><span><i className="arranged" />จัดออก</span><span><i className="adjusted" />ปรับยอด</span></div>}><div className="stock-trend-chart">{trendDays.map((item) => <div key={item.date} className="trend-column"><span className="movement-bars"><i className="received" style={{ height: String(Math.max((item.receivedQty / trendMax) * 100, item.receivedQty ? 5 : 0)) + "%" }} /><i className="arranged" style={{ height: String(Math.max((item.arrangedQty / trendMax) * 100, item.arrangedQty ? 5 : 0)) + "%" }} /><i className="adjusted" style={{ height: String(Math.max((Math.abs(item.adjustedQty) / trendMax) * 100, item.adjustedQty ? 5 : 0)) + "%" }} /></span><small>{item.label}</small></div>)}</div></Card>
+        <aside className="stock-today-card"><header>จำนวนตามสถานะ (วันนี้)</header><div><span className="green">⇩</span><p><small>รับเข้า (วันนี้)</small><b>{fmt(todayMovement.receivedQty)} ชิ้น</b></p></div><div><span className="orange">⇧</span><p><small>จัดออก (วันนี้)</small><b>{fmt(todayMovement.arrangedQty)} ชิ้น</b></p></div><div><span className="purple">⚙</span><p><small>ปรับยอด (วันนี้)</small><b>{todayMovement.adjustedQty > 0 ? "+" : ""}{fmt(todayMovement.adjustedQty)} ชิ้น</b></p></div></aside>
+      </div>
+      <Card title="Traceability: Tag ลูกค้า ↔ KIT Tag ↔ Job">
+        {stock.dispatchLinks.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>Tag ลูกค้า</th><th>KIT Tag / Job</th><th>Part / Due</th><th>ผลิต / รับเข้า</th><th className="num">จำนวน</th><th>ผู้จัด / ผู้ตรวจ</th></tr></thead><tbody>{stock.dispatchLinks.slice(0, 50).map((item) => <tr key={item.id}><td data-label="Tag ลูกค้า"><b>{item.customerTagId}</b></td><td data-label="KIT Tag / Job"><b>{item.stockTagCode}</b><small>Job {item.jobNo}</small></td><td data-label="Part / Due"><b>{item.materialCode}</b><small>{item.fact} / {item.line || "—"} · DO {item.doNo}</small></td><td data-label="ผลิต / รับเข้า"><b>{formatDate(item.productionDate)}</b><small>{item.receivedAt ? formatDateTime(item.receivedAt) : "—"}</small></td><td data-label="จำนวน" className="num"><b>{fmt(item.qty)}</b></td><td data-label="ผู้จัด / ผู้ตรวจ"><b>{item.pickedByName}</b><small>{item.dispatchedByName} · {formatDateTime(item.dispatchedAt)}</small></td></tr>)}</tbody></table></div> : <Empty title="ยังไม่มี Traceability ขายออก" text="เมื่อผู้ตรวจยิง Tag ลูกค้า ระบบจะแสดง KIT Tag, Job, วันที่ผลิต และวันที่รับเข้าที่ใช้จริง" />}
+      </Card>
+
+    </div>;
+  }
+
+  function openOverdueWindow() {
+    if (!allowedPages.has("overdue")) return;
+    const url = new URL("/overdue-monitor", window.location.origin);
+    const opened = window.open(url.toString(), "kit-overdue-work", "popup=yes,width=1280,height=800,resizable=yes,scrollbars=yes");
+    if (opened) opened.focus();
+    else go("overdue");
+  }
+
+  function renderOverdueWork() {
+    return <OverdueWorkPage dues={overdueDues} refreshing={loading} updatedAt={dueLoadedAt} onRefresh={() => void loadDue()} onBack={allowedPages.has("plan") ? () => go("plan") : undefined} onOpenWindow={openOverdueWindow} monitorMode={monitorMode} />;
+  }
+
+  function renderPlan() {
+    const prioritizedDues = filtered.slice().sort((left, right) =>
+      Number(isDeliveryOverdue(right)) - Number(isDeliveryOverdue(left))
+      || left.deliveryDate.localeCompare(right.deliveryDate)
+      || left.deliveryTime.localeCompare(right.deliveryTime),
+    );
+    const planTotalPages = Math.max(1, Math.ceil(prioritizedDues.length / planPageSize));
+    const safePlanPage = Math.min(planPage, planTotalPages);
+    const planStartIndex = (safePlanPage - 1) * planPageSize;
+    const paginatedDues = prioritizedDues.slice(planStartIndex, planStartIndex + planPageSize);
+    const planPageButtons: Array<number | "…"> = [];
+    for (let current = 1; current <= planTotalPages; current += 1) {
+      if (current === 1 || current === planTotalPages || Math.abs(current - safePlanPage) <= 1) planPageButtons.push(current);
+      else if (planPageButtons[planPageButtons.length - 1] !== "…") planPageButtons.push("…");
+    }
+    const latestImport = payload.imports[0];
+    const resetPlanFilters = () => {
+      setFilterDate(""); setFilterFact("ALL"); setFilterTime("ALL"); setQuery(""); setPlanPage(1);
+    };
+
+    return <div className="plan-home">
+      <input ref={fileInput} type="file" accept=".xlsx,.xls" hidden onChange={parseExcel} />
+      {allowedPages.has("overdue") && <div className="overdue-work-launch"><button className="button primary" type="button" onClick={openOverdueWindow}>↗ เปิดหน้าต่างงานติดลบ / ค้างส่ง · {fmt(overdueDues.length)} รายการ</button><small>รวมทุก Part ทุกรอบ ทุก FAC</small></div>}
+      {overdueDues.length > 0 && <div className="overdue-alert-group">
+        <button className="overdue-alert plan-overdue-alert" onClick={showOverduePlan}>
+          <span>!</span><div><b>แจ้งเตือนงานเกินดิวจัดส่ง {fmt(overdueDues.length)} รายการ</b><small>ระบบเรียงรายการที่เกินวันและเวลาจัดส่งไว้ด้านบน กดเพื่อล้างตัวกรองและดูทั้งหมด</small></div><strong>แสดงทั้งหมด →</strong>
+        </button>
+        {renderOverdueSoundControl()}
+      </div>}
+      <div className="plan-top-row page-summary">
+        <article className="plan-stat blue"><span>▤</span><div><small>แผนทั้งหมด</small><b>{fmt(summary.items)}</b><em>รายการ</em></div></article>
+        <article className="plan-stat green"><span>✓</span><div><small>ครบตามแผน</small><b>{fmt(summary.completed)}</b><em>รายการ</em></div></article>
+        <article className="plan-stat orange"><span>◷</span><div><small>คงเหลือ</small><b>{fmt(summary.partial + summary.pending)}</b><em>รายการ</em></div></article>
+        <article className="plan-stat red"><span>!</span><div><small>เกินดิวจัดส่ง</small><b>{fmt(overdueDues.length)}</b><em>รายการทั้งหมด</em></div></article>
+        {canEditPage("plan") && <button className="plan-import-button" onClick={() => fileInput.current?.click()}>⇧ นำเข้าแผนส่งงาน Excel</button>}
+      </div>
+
+      <Card className="plan-filter-card" title="ค้นหาแผนส่งงาน">
+        <button className="mobile-filter-toggle" type="button" onClick={() => setFiltersOpen((open) => !open)} aria-expanded={filtersOpen}><span>⌄</span>{filtersOpen ? "ซ่อนตัวกรอง" : "แสดงตัวกรอง"}</button>
+        <div className={`plan-filter-grid ${filtersOpen ? "mobile-open" : ""}`}>
+          <label><span>วันที่ส่งงาน</span><select value={filterDate} onChange={(event) => { setFilterDate(event.target.value); setPlanPage(1); }}><option value="">ทุกวันที่</option>{dates.map((date) => <option key={date} value={date}>{formatDate(date)}</option>)}</select></label>
+          <label><span>โรงงาน (FAC)</span><select value={filterFact} onChange={(event) => { setFilterFact(event.target.value); setPlanPage(1); }}><option value="ALL">ทั้งหมด</option>{facts.map((fact) => <option key={fact}>{fact}</option>)}</select></label>
+          <label><span>เวลา</span><select value={filterTime} onChange={(event) => { setFilterTime(event.target.value); setPlanPage(1); }}><option value="ALL">ทั้งหมด</option>{times.map((time) => <option key={time}>{time}</option>)}</select></label>
+          <label><span>ค้นหา</span><input value={query} onChange={(event) => { setQuery(event.target.value); setPlanPage(1); }} placeholder="Material / Part No. / DO" /></label>
+          <button className="button primary" onClick={() => setPlanPage(1)}>⌕ ค้นหา</button>
+          <button className="button secondary" onClick={resetPlanFilters}>↻ ล้างค่า</button>
+        </div>
+        {canEditPage("plan") && (file || parsing) && <div className="import-preview plan-import-preview"><div><span>XL</span><p><b>{file?.name}</b><small>{parsing ? "กำลังอ่านไฟล์…" : `${fmt(previewRows.length)} รายการ · ${fmt(previewRows.reduce((sum, row) => sum + row.reqQty, 0))} ชิ้น`}</small></p></div><button className="button primary" disabled={!previewRows.length || importing} onClick={importExcel}>{importing ? "กำลังนำเข้า…" : "ยืนยันนำเข้า"}</button></div>}
+      </Card>
+
+      <Card className="plan-list-card" title={<span className="plan-list-title">▦ รายการแผนส่งงาน <em>{fmt(filtered.length)} รายการ</em></span>} action={<span className="plan-last-import">{latestImport ? `อัปโหลดล่าสุด: ${formatDateTime(latestImport.createdAt)} โดย ${latestImport.importedByName}` : "ยังไม่มีประวัตินำเข้า"}</span>}>
+        {paginatedDues.length ? <div className="plan-modern-table">
+          <div className="plan-modern-head"><span>วันที่ส่งงาน</span><span>โรงงาน (FAC)</span><span>เวลา</span><span>Part / Material No.</span><span>ลูกค้า / Site</span><span>Job / DO</span><span>จำนวน (ชิ้น)</span><span>สถานะ</span><span>จัดการ</span></div>
+          <div className="plan-modern-body">{paginatedDues.map((due) => {
+            const image = partImages.find((item) => item.materialCode === due.materialCode);
+            const importRow = payload.imports.find((item) => item.id === due.importId);
+            return <div className={`plan-modern-row ${isDeliveryOverdue(due) ? "overdue" : ""}`} key={due.id}>
+              <span><b>{formatDate(due.deliveryDate)}</b><small>{due.shop || "—"}</small></span>
+              <span><b>{due.fact}</b><small>{due.line || due.shop || "—"}</small></span>
+              <span><b>{due.deliveryTime}</b></span>
+              <span className="plan-part-cell"><PartImage materialCode={due.materialCode} compact version={image?.updatedAt} /><span><b>{due.materialCode}</b><small>{due.materialDescription || "—"}</small></span></span>
+              <span><b>{due.site || "—"}</b></span>
+              <span><b>{due.doNo}</b><small>Seq {due.seq}</small></span>
+              <span><b>{fmt(due.reqQty)} ชิ้น</b></span>
+              <span><em className={`status ${Number(due.arrangedQty) > 0 && stateOf(due) === "pending" ? "partial" : stateOf(due)}`}>{stateLabel(due)}</em></span>
+              <span>{importRow && user.role === "admin" ? <button className="plan-delete-button" title="ลบชุด Excel ที่มีรายการนี้" disabled={deletingImportId === importRow.id} onClick={() => void deleteImport(importRow)}>{deletingImportId === importRow.id ? "…" : "♲"}</button> : "—"}</span>
+            </div>;
+          })}</div>
+          <footer>
+            <span>แสดง {fmt(planStartIndex + 1)} - {fmt(Math.min(planStartIndex + planPageSize, filtered.length))} จาก {fmt(filtered.length)} รายการ</span>
+            <nav className="part-pagination" aria-label="หน้ารายการแผนส่งงาน"><button className="part-page-button" disabled={safePlanPage === 1} onClick={() => setPlanPage(Math.max(1, safePlanPage - 1))}>«</button>{planPageButtons.map((item, index) => item === "…" ? <span className="part-page-dots" key={"plan-dots-" + index}>…</span> : <button className={"part-page-button " + (item === safePlanPage ? "active" : "")} key={item} onClick={() => setPlanPage(item)}>{item}</button>)}<button className="part-page-button" disabled={safePlanPage === planTotalPages} onClick={() => setPlanPage(Math.min(planTotalPages, safePlanPage + 1))}>»</button></nav>
+            <label className="part-page-size">แสดงต่อหน้า <select value={planPageSize} onChange={(event) => { setPlanPageSize(Number(event.target.value)); setPlanPage(1); }}><option value={10}>10</option><option value={20}>20</option><option value={50}>50</option></select></label>
+          </footer>
+        </div> : <Empty title="ไม่พบแผนส่งงาน" text="ลองเปลี่ยนวันที่ โรงงาน เวลา หรือคำค้นหา" />}
+      </Card>
+    </div>;
+  }
+
+  function renderScan(scanMode: "arrange" | "dispatch") {
+    const progress = tagPreview ? Math.min(100, Math.round((tagPreview.due.projectedQty / tagPreview.due.reqQty) * 100)) : 0;
+    const selectedDateDues = arrangeScopeDues;
+    const selectedDateRemaining = selectedDateDues.reduce((sum, due) => sum + Math.max(Number(due.reqQty) - Number(due.scannedQty) - Number(due.arrangedQty || 0), 0), 0);
+    if (scanMode === "arrange") {
+      const completedCount = payload.dues.filter((due) => Number(due.scannedQty) >= Number(due.reqQty)).length;
+      const overdueCount = payload.dues.filter((due) => isDeliveryOverdue(due) && Number(due.scannedQty) < Number(due.reqQty)).length;
+      const remainingCount = payload.dues.filter((due) => Number(due.scannedQty) < Number(due.reqQty)).length;
+      const needle = arrangeDueSearch.trim().toLowerCase();
+      const arrangeRows = arrangeScopeDues.filter((due) => (!needle || [due.materialCode, due.materialDescription, due.doNo, due.fact, due.line, due.site, formatDate(due.deliveryDate), due.deliveryTime].join(" ").toLowerCase().includes(needle)));
+      const arrangePageSize = 8;
+      const arrangePages = Math.max(1, Math.ceil(arrangeRows.length / arrangePageSize));
+      const safeArrangePage = Math.min(arrangeListPage, arrangePages);
+      const pageRows = arrangeRows.slice((safeArrangePage - 1) * arrangePageSize, safeArrangePage * arrangePageSize);
+      const pickedTotal = stock.picks.reduce((sum, item) => sum + Number(item.pickedQty || 0), 0);
+      const arrangedNeedle = arrangedSearch.trim().toLowerCase();
+      const arrangedRows = stock.picks.filter((item) => !arrangedNeedle || [
+        item.materialCode, item.jobNo, item.stockTagCode, item.doNo, item.fact,
+        item.line, item.shop, item.deliveryDate, item.deliveryTime, item.pickedByName,
+      ].join(" ").toLowerCase().includes(arrangedNeedle));
+      const arrangedPageSize = 10;
+      const arrangedPages = Math.max(1, Math.ceil(arrangedRows.length / arrangedPageSize));
+      const safeArrangedPage = Math.min(arrangedPage, arrangedPages);
+      const arrangedPageRows = arrangedRows.slice((safeArrangedPage - 1) * arrangedPageSize, safeArrangedPage * arrangedPageSize);
+      return <>
+        <div className="arrange-summary-grid page-summary">
+          <article className="arrange-color-card blue" style={{ background: "linear-gradient(135deg,#e4f1ff 0%,#b9d8ff 100%)", borderColor: "#8fbdff" }}><span style={{ background: "linear-gradient(145deg,#48aaff,#075fe0)" }}>▦</span><div><small>งานทั้งหมด</small><b>{fmt(payload.dues.length)}</b><em>รายการ</em></div></article>
+          <article className="arrange-color-card green" style={{ background: "linear-gradient(135deg,#e0faeb 0%,#abeac7 100%)", borderColor: "#7bd6a5" }}><span style={{ background: "linear-gradient(145deg,#50dc96,#08a455)" }}>✓</span><div><small>ครบตามแผน</small><b>{fmt(completedCount)}</b><em>รายการ</em></div></article>
+          <article className="arrange-color-card orange" style={{ background: "linear-gradient(135deg,#fff3d4 0%,#ffd58a 100%)", borderColor: "#f3b94f" }}><span style={{ background: "linear-gradient(145deg,#ffc653,#ee8200)" }}>◷</span><div><small>คงเหลือ</small><b>{fmt(remainingCount)}</b><em>รายการ</em></div></article>
+          <article className="arrange-color-card red" style={{ background: "linear-gradient(135deg,#ffe7eb 0%,#ffb5c1 100%)", borderColor: "#f28a9c" }}><span style={{ background: "linear-gradient(145deg,#ff7182,#df263f)" }}>!</span><div><small>เกินดิวจัดส่ง</small><b>{fmt(overdueCount)}</b><em>รายการ</em></div></article>
+          <article className="arrange-brand-card"><span>◇</span><div><b>จัดงานด้วย KIT Tag</b><small>เลือกวันที่ Due แล้วสแกน KIT Tag ใดก่อนก็ได้</small></div></article>
+        </div>
+
+        <div className="arrange-workspace">
+          {canEditPage("arrange") && <section className="arrange-scan-panel">
+            <header className="arrange-section-head"><span>⌗</span><div><h3>สแกน KIT Stock Tag</h3><p>เลือกวันที่ รอบ และ FAC แล้วสแกน KIT Tag ของ Part ใดก่อนก็ได้</p></div><button className="camera-button arrange-camera-button" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>▣ เปิดกล้อง</button></header>
+            <div className="arrange-scan-body">
+              <button type="button" className="arrange-camera-zone" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>
+                <span>⌗</span><b>{checkingTag ? "กำลังบันทึกงาน…" : "พร้อมสแกน KIT Tag"}</b><small>ยิงบาร์โค้ด หรือแตะเพื่อเปิดกล้องโทรศัพท์</small><i />
+              </button>
+              <div className="arrange-result-card">
+                {arrangementPreview ? <>
+                  <div className="arrange-success"><span>✓</span><b>จัดงานสำเร็จ!</b></div>
+                  <div className="arrange-part-result"><PartImage materialCode={arrangementPreview.due.materialCode} compact /><div><small>Part No.</small><b>{arrangementPreview.due.materialCode}</b><p>{arrangementPreview.due.materialDescription || "ไม่ระบุชื่อชิ้นงาน"}</p></div></div>
+                  <dl><div><dt>รอบ / FAC</dt><dd>{arrangementPreview.due.deliveryTime} / {arrangementPreview.due.fact}</dd></div><div><dt>Job</dt><dd>{arrangementPreview.tag.jobNo}</dd></div><div><dt>Due ทั้งหมด</dt><dd>{fmt(arrangementPreview.due.reqQty)} ชิ้น</dd></div><div><dt>จัดครั้งนี้</dt><dd>{fmt(arrangementPreview.pick.pickedQty)} ชิ้น</dd></div><div><dt>คงเหลือ</dt><dd>{fmt(arrangementPreview.due.remainingQty)} ชิ้น</dd></div></dl><button type="button" className="button primary" onClick={()=>setSplitTagRequest({pickId:arrangementPreview.pick.id})}>▤ พิมพ์ Tag ส่งงาน / คงเหลือ</button>
+                </> : effectiveArrangeDueDate ? <>
+                  <div className="arrange-waiting"><span>▦</span><b>Due ที่เลือก</b></div>
+                  <div className="arrange-part-result"><span className="arrange-date-icon">◷</span><div><small>วันที่ส่งงาน</small><b>{formatDate(effectiveArrangeDueDate)}</b><p>รอบ {arrangeDueTime || "ทั้งหมด"} · {arrangeDueFact || "ทุก FAC"} — ระบบจับคู่ Part เฉพาะ Due ตามที่เลือก</p></div></div>
+                  <dl><div><dt>Due ที่ยังจัดไม่ครบ</dt><dd>{fmt(selectedDateDues.length)} รายการ</dd></div><div><dt>จำนวนคงเหลือรวม</dt><dd>{fmt(selectedDateRemaining)} ชิ้น</dd></div></dl>
+                </> : <Empty title="กรุณาเลือกวันที่ Due" text="เลือกวันที่ส่งงานก่อนสแกน KIT Tag" />}
+              </div>
+            </div>
+            <form className="arrange-action-form" onSubmit={(event) => void stageStockTag(event)}>
+              <label><span>จำนวนที่จะจัด</span><input type="number" min="1" value={arrangeQty} onChange={(e) => setArrangeQty(e.target.value)} placeholder="อัตโนมัติตาม Due" /></label>
+              <label className="arrange-tag-field"><span>KIT Stock Tag *</span><input ref={tagInput} value={arrangeTag} onChange={(e) => { setArrangeTag(e.target.value); setArrangementPreview(null); }} placeholder="ยิง Tag แล้วเครื่องส่ง Enter" autoComplete="off" /></label>
+              <button className="button primary" disabled={!effectiveArrangeDueDate || !arrangeTag.trim() || checkingTag}>{checkingTag ? "กำลังจัดงาน…" : "ตรวจสอบก่อนจัดงาน"}</button>
+            </form>
+            <div className="arrange-help">ⓘ ขั้นตอนนี้ย้ายยอดจาก Stock พร้อมใช้ไปจัดงานรอส่ง คงเหลือรวมไม่ลดจนกว่าจะขายออก</div>
+          </section>}
+
+          <aside className="arrange-due-panel">
+            <header><span>▤</span><div><h3>เลือก Due ที่จะจัด</h3><p>เลือกวันที่ รอบส่งงาน และ FAC ก่อนสแกน Tag</p></div></header>
+            <label className="arrange-scope-label" htmlFor="arrange-scope-date">วันที่ส่งงาน</label>
+            <div className="arrange-due-search"><span>◷</span><select id="arrange-scope-date" aria-label="วันที่ส่งงานสำหรับจัดงาน" disabled={checkingTag} value={effectiveArrangeDueDate} onChange={(event) => { setArrangeDueDate(event.target.value); setArrangeDueTime(""); setArrangeDueFact(""); setArrangementPreview(null); setArrangeListPage(1); }}>
+              {[...new Set([...arrangeDueDates, ...(effectiveArrangeDueDate ? [effectiveArrangeDueDate] : [])])].sort().map((date) => <option key={date} value={date}>{formatDate(date)} · {fmt(arrangeableDues.filter((due) => due.deliveryDate === date).length)} รายการ</option>)}
+            </select></div>
+            <label className="arrange-scope-label" htmlFor="arrange-scope-time">รอบส่งงาน</label>
+            <div className="arrange-due-search"><span>◷</span><select id="arrange-scope-time" aria-label="รอบส่งงานสำหรับจัดงาน" disabled={checkingTag || !effectiveArrangeDueDate} value={arrangeDueTime} onChange={(event) => { setArrangeDueDate(effectiveArrangeDueDate); setArrangeDueTime(event.target.value); setArrangementPreview(null); setArrangeListPage(1); }}>
+              <option value="">ทุกรอบ</option>{[...new Set([...arrangeDueTimes, ...(arrangeDueTime ? [arrangeDueTime] : [])])].sort().map((time) => <option key={time} value={time}>{time}</option>)}
+            </select></div>
+            <label className="arrange-scope-label" htmlFor="arrange-scope-fact">FAC</label>
+            <div className="arrange-due-search"><span>▤</span><select id="arrange-scope-fact" aria-label="FAC สำหรับจัดงาน" disabled={checkingTag || !effectiveArrangeDueDate} value={arrangeDueFact} onChange={(event) => { setArrangeDueDate(effectiveArrangeDueDate); setArrangeDueFact(event.target.value); setArrangementPreview(null); setArrangeListPage(1); }}>
+              <option value="">ทุก FAC</option>{[...new Set([...arrangeDueFacts, ...(arrangeDueFact ? [arrangeDueFact] : [])])].sort().map((fact) => <option key={fact} value={fact}>{fact}</option>)}
+            </select></div>
+            <div className="arrange-due-cards">
+              {arrangeDueDates.slice(0, 6).map((date) => {
+                const selected = date === effectiveArrangeDueDate;
+                const dateDues = arrangeableDues.filter((due) => due.deliveryDate === date);
+                const remaining = dateDues.reduce((sum, due) => sum + Math.max(Number(due.reqQty) - Number(due.scannedQty) - Number(due.arrangedQty || 0), 0), 0);
+                return <button key={date} className={selected ? "selected" : ""} disabled={checkingTag} onClick={() => { setArrangeDueDate(date); setArrangeDueTime(""); setArrangeDueFact(""); setArrangementPreview(null); setArrangeListPage(1); }}>
+                  <i>{selected ? "●" : "○"}</i><span>◷</span><div><b>{formatDate(date)}</b><small>{fmt(dateDues.length)} Due ที่ยังจัดไม่ครบ</small><em>เหลือจัดรวม {fmt(remaining)} ชิ้น</em></div><strong>›</strong>
+                </button>;
+              })}
+              {!arrangeDueDates.length && <Empty title="ไม่มีวันที่ Due ที่ต้องจัด" text="นำเข้าแผนส่งงานก่อนเลือก Due" />}
+            </div>
+          </aside>
+        </div>
+
+        <Card className="arrange-list-panel" title={<><span className="arrange-list-icon">▣</span> รายการงานตาม Due ที่เลือก <em>{fmt(arrangeRows.length)} รายการ</em></>} action={<span className="arrange-selected-label">{effectiveArrangeDueDate ? `${formatDate(effectiveArrangeDueDate)} · รอบ ${arrangeDueTime || "ทั้งหมด"} · ${arrangeDueFact || "ทุก FAC"}` : "ยังไม่ได้เลือกวันที่"}</span>}>
+          {pageRows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table arrange-table"><thead><tr><th>รูปภาพ</th><th>Part No.</th><th>Part Name</th><th>DO / Seq</th><th className="num">ต้องจัด</th><th className="num">จัดแล้ว</th><th className="num">คงเหลือ</th><th>สถานะ</th></tr></thead><tbody>
+            {pageRows.map((due) => {
+              const remaining = due.reqQty - due.scannedQty - (due.arrangedQty || 0);
+              return <tr key={due.id}>
+                <td data-label="รูปภาพ"><PartImage materialCode={due.materialCode} compact /></td>
+                <td data-label="Part No."><b>{due.materialCode}</b><small>{due.deliveryTime} · {due.fact} / {due.line || "—"}</small></td>
+                <td data-label="Part Name">{due.materialDescription || "—"}</td>
+                <td data-label="DO / Seq"><b>{due.doNo}</b><small>Seq {due.seq}</small></td>
+                <td data-label="ต้องจัด" className="num"><b>{fmt(due.reqQty)}</b></td>
+                <td data-label="จัดแล้ว" className="num"><b>{fmt(due.arrangedQty || 0)}</b></td>
+                <td data-label="คงเหลือ" className="num"><b>{fmt(remaining)}</b></td>
+                <td data-label="สถานะ"><span className={`status ${isDeliveryOverdue(due) ? "over" : Number(due.arrangedQty || 0) > 0 ? "partial" : "completed"}`}>{isDeliveryOverdue(due) ? "เกินดิวจัดส่ง" : Number(due.arrangedQty || 0) > 0 ? "จัดบางส่วน" : "พร้อมจัด"}</span></td>
+              </tr>;
+            })}
+          </tbody></table></div> : <Empty title="ไม่มีรายการที่ต้องจัด" text="ทุกรายการจัดครบแล้ว หรือไม่พบข้อมูลตามคำค้นหา" />}
+          <div className="arrange-pagination"><span>แสดง {pageRows.length ? (safeArrangePage - 1) * arrangePageSize + 1 : 0} - {Math.min(safeArrangePage * arrangePageSize, arrangeRows.length)} จาก {fmt(arrangeRows.length)} รายการ</span><div><button disabled={safeArrangePage <= 1} onClick={() => setArrangeListPage((page) => Math.max(1, page - 1))}>«</button>{Array.from({ length: Math.min(arrangePages, 5) }, (_, index) => index + 1).map((page) => <button key={page} className={safeArrangePage === page ? "active" : ""} onClick={() => setArrangeListPage(page)}>{page}</button>)}{arrangePages > 5 && <em>… {arrangePages}</em>}<button disabled={safeArrangePage >= arrangePages} onClick={() => setArrangeListPage((page) => Math.min(arrangePages, page + 1))}>»</button></div><strong>จัดสะสม {fmt(pickedTotal)} ชิ้น</strong></div>
+        </Card>
+
+        <Card className="arrange-list-panel arranged-history-panel" title={<><span className="arranged-list-icon">✓</span> รายการที่จัดงานแล้ว <em>{fmt(arrangedRows.length)} รายการ</em></>} action={<div className="arranged-search"><span>⌕</span><input type="search" value={arrangedSearch} onChange={(event) => { setArrangedSearch(event.target.value); setArrangedPage(1); }} placeholder="ค้นหา Due, Part, Job, KIT Tag หรือผู้จัด" /></div>}>
+          {arrangedPageRows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table arranged-table"><thead><tr><th>วันที่จัด</th><th>รูปภาพ</th><th>Due</th><th>Part No.</th><th>Job / KIT Tag</th><th className="num">จำนวนจัด</th><th className="num">ขายแล้ว</th><th className="num">รอขาย</th><th>ผู้จัด</th><th>สถานะ / Tag</th></tr></thead><tbody>
+            {arrangedPageRows.map((item) => {
+              const waitingQty = Math.max(Number(item.pickedQty || 0) - Number(item.dispatchedQty || 0), 0);
+              const dispatchState = waitingQty <= 0 ? "completed" : Number(item.dispatchedQty || 0) > 0 ? "partial" : "pending";
+              return <tr key={item.id}>
+                <td data-label="วันที่จัด"><b>{formatDateTime(item.pickedAt)}</b></td>
+                <td data-label="รูปภาพ"><PartImage materialCode={item.materialCode} compact /></td>
+                <td data-label="Due"><b>{formatDate(item.deliveryDate)} · {item.deliveryTime}</b><small>{item.fact} / {item.line || "—"} · {item.doNo} / Seq {item.seq}</small></td>
+                <td data-label="Part No."><b>{item.materialCode}</b></td>
+                <td data-label="Job / KIT Tag"><b>{item.jobNo || "—"}</b><small>{item.stockTagCode}</small></td>
+                <td data-label="จำนวนจัด" className="num"><b>{fmt(item.pickedQty)}</b></td>
+                <td data-label="ขายแล้ว" className="num"><b className="sent">{fmt(item.dispatchedQty || 0)}</b></td>
+                <td data-label="รอขาย" className="num"><b className={waitingQty > 0 ? "warning" : ""}>{fmt(waitingQty)}</b></td>
+                <td data-label="ผู้จัด"><b>{item.pickedByName || "—"}</b><small>{item.pickedByCode || ""}</small></td>
+                <td data-label="สถานะ"><span className={`status ${dispatchState}`}>{waitingQty <= 0 ? "ขายออกแล้ว" : Number(item.dispatchedQty || 0) > 0 ? "ขายออกบางส่วน" : "รอขายออก"}</span>{canEditPage("arrange")&&waitingQty>0&&<button className="tiny-button" type="button" onClick={()=>setSplitTagRequest({pickId:item.id})}>▤ พิมพ์ Tag</button>}</td>
+              </tr>;
+            })}
+          </tbody></table></div> : <Empty title="ยังไม่มีรายการที่จัดงานแล้ว" text={arrangedSearch ? "ไม่พบรายการตามคำค้นหา" : "เมื่อยิง KIT Tag จัดงาน รายการจะแสดงที่นี่"} />}
+          <div className="arrange-pagination"><span>แสดง {arrangedPageRows.length ? (safeArrangedPage - 1) * arrangedPageSize + 1 : 0} - {Math.min(safeArrangedPage * arrangedPageSize, arrangedRows.length)} จาก {fmt(arrangedRows.length)} รายการ</span><div><button disabled={safeArrangedPage <= 1} onClick={() => setArrangedPage((page) => Math.max(1, page - 1))}>«</button>{Array.from({ length: Math.min(arrangedPages, 5) }, (_, index) => index + 1).map((page) => <button key={page} className={safeArrangedPage === page ? "active" : ""} onClick={() => setArrangedPage(page)}>{page}</button>)}{arrangedPages > 5 && <em>… {arrangedPages}</em>}<button disabled={safeArrangedPage >= arrangedPages} onClick={() => setArrangedPage((page) => Math.min(arrangedPages, page + 1))}>»</button></div><strong>รอขายรวม {fmt(arrangedRows.reduce((sum, item) => sum + Math.max(Number(item.pickedQty || 0) - Number(item.dispatchedQty || 0), 0), 0))} ชิ้น</strong></div>
+        </Card>
+      </>;
+    }
+    const dispatchToday = payload.scans.filter((scan) => isToday(scan.createdAt));
+    const dispatchTodayQty = dispatchToday.reduce((sum, scan) => sum + Number(scan.qty || 0), 0);
+    const dispatchPending = stock.picks.filter((item) => Number(item.dispatchedQty || 0) < Number(item.pickedQty || 0));
+    const dispatchPendingQty = dispatchPending.reduce((sum, item) => sum + Math.max(Number(item.pickedQty || 0) - Number(item.dispatchedQty || 0), 0), 0);
+    const unmatchedCount = notice?.type === "error" ? 1 : 0;
+    return <>
+      <div className="dispatch-summary-grid page-summary">
+        <article className="dispatch-stat blue"><span>▥</span><div><small>สแกนวันนี้</small><b>{fmt(dispatchTodayQty)}</b><em>ชิ้น · {fmt(dispatchToday.length)} รายการ</em></div></article>
+        <article className="dispatch-stat green"><span>✓</span><div><small>ตัดสำเร็จ</small><b>{fmt(dispatchTodayQty)}</b><em>ชิ้น</em></div></article>
+        <article className="dispatch-stat orange"><span>◷</span><div><small>รอตัด</small><b>{fmt(dispatchPendingQty)}</b><em>ชิ้น · {fmt(dispatchPending.length)} รายการ</em></div></article>
+        <article className="dispatch-stat red"><span>!</span><div><small>สแกนไม่พบ</small><b>{fmt(unmatchedCount)}</b><em>รายการล่าสุด</em></div></article>
+      </div>
+      <section className="dispatch-scope-panel">
+        <header><span>▤</span><div><h3>เลือก Due ที่จะตรวจและขายออก</h3><p>เลือกวันที่ รอบส่งงาน และ FAC ก่อนสแกน Tag ลูกค้า ระบบจะตรวจเฉพาะงานในขอบเขตนี้</p></div></header>
+        <div className="dispatch-scope-grid">
+          <label><span>วันที่ส่งงาน *</span><select aria-label="วันที่ส่งงานสำหรับตรวจและขายออก" disabled={checkingTag} value={effectiveDispatchDueDate} onChange={(event) => { setDispatchDueDate(event.target.value); setDispatchDueTime(""); setDispatchDueFact(""); setRawTag(""); setDispatchKitSelection(null); setDispatchConfirmation(null); setTagPreview(null); }}><option value="">เลือกวันที่ส่งงาน</option>{dispatchDueDates.map((date) => <option key={date} value={date}>{formatDate(date)} · {fmt(dispatchableDues.filter((due) => due.deliveryDate === date).length)} รายการรอขาย</option>)}</select></label>
+          <label><span>รอบส่งงาน</span><select aria-label="รอบส่งงานสำหรับตรวจและขายออก" disabled={checkingTag || !effectiveDispatchDueDate} value={dispatchDueTime} onChange={(event) => { setDispatchDueDate(effectiveDispatchDueDate); setDispatchDueTime(event.target.value); setDispatchDueFact(""); setRawTag(""); setDispatchKitSelection(null); setDispatchConfirmation(null); setTagPreview(null); }}><option value="">ทุกรอบ</option>{dispatchDueTimes.map((time) => <option key={time} value={time}>{time}</option>)}</select></label>
+          <label><span>FAC</span><select aria-label="FAC สำหรับตรวจและขายออก" disabled={checkingTag || !effectiveDispatchDueDate} value={dispatchDueFact} onChange={(event) => { setDispatchDueDate(effectiveDispatchDueDate); setDispatchDueFact(event.target.value); setRawTag(""); setDispatchKitSelection(null); setDispatchConfirmation(null); setTagPreview(null); }}><option value="">ทุก FAC</option>{dispatchDueFacts.map((fact) => <option key={fact} value={fact}>{fact}</option>)}</select></label>
+          <div className="dispatch-scope-summary"><small>ขอบเขตที่เลือก</small><b>{effectiveDispatchDueDate ? `${formatDate(effectiveDispatchDueDate)} · รอบ ${dispatchDueTime || "ทั้งหมด"} · ${dispatchDueFact || "ทุก FAC"}` : "ยังไม่มีงานจัดรอขาย"}</b><span>{fmt(dispatchScopeDues.length)} รายการ · รอขาย {fmt(dispatchScopeDues.reduce((sum, due) => sum + Number(due.arrangedQty || 0), 0))} ชิ้น</span></div>
+        </div>
+      </section>
+      {canEditPage("dispatch") && <div className="scan-layout">
+        <section className="scanner-card">
+          <div className="scanner-title"><div><h3>{dispatchKitSelection ? "ขั้นตอนที่ 2: สแกน Tag ลูกค้า" : "ขั้นตอนที่ 1: สแกน KIT Tag ที่จัดงานแล้ว"}</h3><p>{dispatchKitSelection ? "ระบบจะตรวจ Part จำนวน Due รอบ และ FAC ให้ตรงกับ KIT Tag ก่อนขายออก" : "ต้องเป็น KIT Tag ที่เคยสแกนในหน้าจัดงานและยังมีจำนวนรอขาย"}</p></div><button className="camera-button" disabled={!effectiveDispatchDueDate || checkingTag} onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>▣ เปิดกล้อง</button></div>
+          {dispatchKitSelection && <div className="dispatch-staged-note"><b>✓ KIT Tag: {dispatchKitSelection.stockTagCode}</b> · Part {dispatchKitSelection.materialCode} · Job {dispatchKitSelection.jobNo || "—"} · รอขาย {fmt(dispatchKitSelection.waitingQty)} ชิ้น <button type="button" className="text-button" onClick={() => { setDispatchKitSelection(null); setRawTag(""); setDispatchConfirmation(null); window.setTimeout(() => tagInput.current?.focus(), 50); }}>เปลี่ยน KIT Tag</button></div>}
+          <button type="button" className="scanner-visual" aria-label={dispatchKitSelection ? "เปิดกล้องสแกน Tag ลูกค้า" : "เปิดกล้องสแกน KIT Tag"} disabled={!effectiveDispatchDueDate || checkingTag} onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}><span className="scan-frame"><span className="qr-symbol">▦</span><b>{checkingTag ? "กำลังตรวจสอบ…" : effectiveDispatchDueDate ? dispatchKitSelection ? "พร้อมรับ Tag ลูกค้า" : "พร้อมรับ KIT Tag" : "กรุณาเลือกวันที่ส่งงาน"}</b><small>{dispatchKitSelection ? "สแกน Tag ลูกค้าที่ติดกับงานกล่องเดียวกัน" : "สแกน KIT Tag ที่จัดงานไว้ก่อน"}</small><i /></span></button>
+          <form className="manual-scan" onSubmit={handleDispatchScan}><label><span>{dispatchKitSelection ? "Tag ลูกค้า / ข้อมูลจาก QR" : "KIT Tag / ข้อมูลจาก QR"}</span><input ref={tagInput} value={rawTag} disabled={!effectiveDispatchDueDate} onChange={(e) => updateDispatchScannerValue(e.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void handleDispatchScan(value); } }} placeholder={effectiveDispatchDueDate ? dispatchKitSelection ? "ยิง Tag ลูกค้า" : "ยิง KIT Tag ที่จัดงานแล้ว" : "เลือกวันที่ส่งงานก่อน"} autoComplete="off" /></label><button className="button primary" disabled={!effectiveDispatchDueDate || !rawTag.trim() || checkingTag}>{checkingTag ? "กำลังตรวจสอบ…" : dispatchKitSelection ? "ตรวจสอบคู่ Tag" : "ตรวจสอบ KIT Tag"}</button></form>
+        </section>
+        <section className="tag-result" ref={tagResultRef}>
+          <header><div><p>Customer Tag / Due</p><h3>{tagPreview?.due.materialCode || "รอการสแกน"}</h3></div><span className={`status ${tagPreview ? "completed" : "pending"}`}>{tagPreview ? "ขายออกสำเร็จ" : "ยังไม่มี Tag"}</span></header>
+          {tagPreview ? <>
+            <div className="tag-main" style={{ flexWrap: "wrap" }}><PartImagePair materialCode={tagPreview.due.materialCode} masterVersion={partImages.find((item) => item.materialCode === tagPreview.due.materialCode)?.updatedAt} actualVersion={partActualImages.find((item) => item.materialCode === tagPreview.due.materialCode)?.updatedAt} /><div><small>PART / MATERIAL</small><b>{tagPreview.due.materialCode}</b><p>{tagPreview.due.materialDescription || "ไม่ระบุรายละเอียด"}</p></div></div>
+            <div className="detail-grid"><div><small>FAC / Line</small><b>{tagPreview.due.fact} / {tagPreview.due.line || "—"}</b></div><div><small>DO / Seq</small><b>{tagPreview.due.doNo} / {tagPreview.due.seq}</b></div><div><small>แผนส่งวัน / เวลา</small><b>{formatDate(tagPreview.due.deliveryDate)} {tagPreview.due.deliveryTime}</b></div><div><small>Tag ID</small><b>{tagPreview.tag.tagId}</b></div><div><small>Location</small><b>{tagPreview.tag.location || "—"}</b></div><div><small>จำนวนใน Tag</small><b>{fmt(tagPreview.tag.qty)} {tagPreview.tag.unit}</b></div></div>
+            <div className="cut-summary"><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><span><b>{progress}%</b>หลังขายออก</span></div><div className="cut-numbers"><p><span>Due ทั้งหมด</span><b>{fmt(tagPreview.due.reqQty)}</b></p><p><span>ขายออกแล้ว</span><b>{fmt(tagPreview.due.projectedQty)}</b></p><p className="current"><span>จำนวน Tag ลูกค้า</span><b>{fmt(tagPreview.tag.qty)}</b></p><p><span>Due คงเหลือ</span><b>{fmt(tagPreview.due.remainingAfter)}</b></p></div></div>
+            {tagPreview.stockAllocations?.length ? <div className="linked-stock-tags"><b>Traceability: Tag ลูกค้า ↔ KIT Tag / Job</b>{tagPreview.stockAllocations.map((item, index) => <span key={`${item.stockTagId}-${index}`}><strong>{item.stockTagCode || `Stock #${item.stockTagId}`}</strong> · Job {item.jobNo || "—"} · ผลิต {item.productionDate ? formatDate(item.productionDate) : "—"} · รับเข้า {item.receivedAt ? formatDateTime(item.receivedAt) : "—"} · {fmt(item.qty)} ชิ้น</span>)}</div> : null}
+            <div className="scan-saved">✓ ขายออกแล้ว ลด Stock และตัด Due พร้อมบันทึก Job ที่ใช้จริง</div>
+          </> : <Empty title={dispatchKitSelection ? "รอสแกน Tag ลูกค้า" : "รอสแกน KIT Tag"} text="ระบบจะขายออกได้เมื่อสแกน KIT Tag ที่จัดงานแล้วและ Tag ลูกค้าตรงกันเท่านั้น" />}
+        </section>
+      </div>}
+      <Card title="รายการขายออกและตัดยอดล่าสุด" action={allowedPages.has("history") ? <button className="text-button" onClick={() => go("history")}>ดูประวัติทั้งหมด →</button> : undefined}>
+        {payload.scans.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>วัน / เวลา</th><th>FAC</th><th>Part No.</th><th>Tag ลูกค้า</th><th className="num">จำนวนที่ตัด</th><th>ผู้ตรวจ</th></tr></thead><tbody>{payload.scans.slice(0, 8).map((scan) => <tr key={scan.id}><td data-label="วัน / เวลา">{formatDateTime(scan.createdAt)}</td><td data-label="FAC"><b>{scan.fact}</b></td><td data-label="Part No."><b>{scan.materialCode}</b></td><td data-label="Tag ลูกค้า">{scan.tagId}</td><td data-label="จำนวนที่ตัด" className="num sent"><b>{fmt(scan.qty)} {scan.unit}</b></td><td data-label="ผู้ตรวจ">{scan.scannedByName}</td></tr>)}</tbody></table></div> : <Empty text="เมื่อผู้ตรวจสแกน Tag ลูกค้า รายการจะแสดงที่นี่" />}
+      </Card>
+    </>;
+  }
+
+  function renderVerify() {
+    const r = verifyResult;
+    const TONE: Record<VerifyVerdict, { tone: "pass" | "warn" | "fail"; icon: string; title: string }> = {
+      ready: { tone: "pass", icon: "✓", title: "ตรงกับงานที่ต้องส่งออก" },
+      ready_noimg: { tone: "pass", icon: "✓", title: "ตรงกับงาน (ยังไม่มีรูป master)" },
+      short: { tone: "warn", icon: "!", title: "งานที่จัดรอไว้ไม่พอ" },
+      over: { tone: "warn", icon: "!", title: "จำนวนเกินแผน Due" },
+      no_due: { tone: "fail", icon: "✕", title: "ไม่พบงานที่ตรงกับ Tag นี้" },
+      ambiguous: { tone: "fail", icon: "✕", title: "พบ Due ซ้ำมากกว่า 1 รายการ" },
+      already: { tone: "fail", icon: "✕", title: "Tag นี้ขายออกไปแล้ว" },
+      bad_tag: { tone: "fail", icon: "✕", title: "อ่าน Tag ไม่ได้" },
+      pair_mismatch: { tone: "fail", icon: "✕", title: "KIT Tag และ Tag ลูกค้าไม่ตรงกัน" },
+    };
+    const PALETTE = {
+      pass: { bg: "#e0faeb", border: "#7bd6a5", fg: "#08863f" },
+      warn: { bg: "#fff3d4", border: "#f3b94f", fg: "#b9720a" },
+      fail: { bg: "#ffe7eb", border: "#f28a9c", fg: "#d61f38" },
+    };
+    const meta = r ? TONE[r.verdict] : null;
+    const palette = meta ? PALETTE[meta.tone] : null;
+    const canDispatch = allowedPages.has("dispatch");
+    const isReady = r?.verdict === "ready" || r?.verdict === "ready_noimg";
+    return <>
+      <div className="scan-layout">
+        <section className="scanner-card">
+          <div className="scanner-title"><div><h3>ตรวจชิ้นงานก่อนส่งออก</h3><p>สแกน Tag ที่กล่อง ระบบจะแสดงรูป master และงานที่ต้องส่ง เพื่อเทียบว่าตรงกันก่อนขายออก — ขั้นตอนนี้ยังไม่ตัด Stock และ Due</p></div><button className="camera-button" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>▣ เปิดกล้อง</button></div>
+          <button type="button" className="scanner-visual" aria-label="เปิดกล้องสแกน QR Tag เพื่อตรวจชิ้นงาน" disabled={verifyLoading} onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}><span className="scan-frame"><span className="qr-symbol">◉</span><b>{verifyLoading ? "กำลังตรวจ…" : "พร้อมสแกนเพื่อตรวจ"}</b><small>วาง QR ให้อยู่ในกรอบ ยิง Tag หรือแตะเพื่อเปิดกล้อง</small><i /></span></button>
+          <form className="manual-scan" onSubmit={verifyTag}><label><span>Tag ลูกค้า / ข้อมูลจาก QR</span><input ref={verifyInput} value={verifyRaw} onChange={(e) => { setVerifyRaw(e.target.value); setVerifyResult(null); }} placeholder="ยิง Tag ที่กล่อง แล้วเครื่องส่ง Enter" autoComplete="off" /></label><button className="button primary" disabled={!verifyRaw.trim() || verifyLoading}>{verifyLoading ? "กำลังตรวจ…" : "◉ ตรวจสอบชิ้นงาน"}</button></form>
+          <div className="arrange-help">ⓘ ใช้เทียบด้วยสายตา: ดูรูป master คู่กับของจริงในกล่องว่าเป็นงานเดียวกันก่อนกดขายออก</div>
+        </section>
+        <section className="tag-result" ref={verifyResultRef}>
+          <header><div><p>ผลการตรวจ</p><h3>{r?.tag?.materialCode || r?.master?.materialCode || "รอการสแกน"}</h3></div>{meta && palette ? <span className="status" style={{ background: palette.bg, color: palette.fg, borderColor: palette.border }}>{meta.icon} {meta.tone === "pass" ? "พร้อมส่งออก" : meta.tone === "warn" ? "ตรวจซ้ำ" : "หยุด"}</span> : <span className="status pending">ยังไม่มี Tag</span>}</header>
+          {r && meta && palette ? <>
+            <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "14px 16px", borderRadius: 12, background: palette.bg, border: `1px solid ${palette.border}`, marginBottom: 14 }}>
+              <span style={{ width: 40, height: 40, borderRadius: 10, background: palette.fg, color: "#fff", display: "grid", placeItems: "center", fontSize: 20, flex: "0 0 auto" }}>{meta.icon}</span>
+              <div><b style={{ color: palette.fg, fontSize: 16, display: "block" }}>{meta.title}</b><small style={{ color: "#4a5568" }}>{r.message}</small></div>
+            </div>
+            {(r.tag || r.master) ? <div className="tag-main"><PartImage materialCode={(r.tag?.materialCode || r.master?.materialCode)!} /><div><small>PART / MATERIAL</small><b>{r.tag?.materialCode || r.master?.materialCode}</b><p>{r.master?.partName || r.due?.materialDescription || "ไม่ระบุชื่อชิ้นงาน"}</p></div></div> : null}
+            {r.due ? <>
+              <div className="detail-grid">
+                <div><small>ต้องส่งไปที่ (FAC / Line)</small><b>{r.due.fact} / {r.due.line || "—"}</b></div>
+                <div><small>DO / Seq</small><b>{r.due.doNo} / {r.due.seq}</b></div>
+                <div><small>แผนส่งวัน / เวลา</small><b>{formatDate(r.due.deliveryDate)} {r.due.deliveryTime}</b></div>
+                <div><small>Tag ID</small><b>{r.tag?.tagId || "—"}</b></div>
+                <div><small>จำนวนใน Tag</small><b>{fmt(r.tag?.qty || 0)} {r.tag?.unit || "PC"}</b></div>
+                <div><small>งานที่จัดรอขาย</small><b>{fmt(r.stagedAvail || 0)} ชิ้น</b></div>
+                <div><small>Due ทั้งหมด</small><b>{fmt(r.due.reqQty)} ชิ้น</b></div>
+                <div><small>ขายออกแล้ว</small><b>{fmt(r.due.alreadyQty)} ชิ้น</b></div>
+                <div><small>Due คงเหลือ</small><b>{fmt(r.due.remainingDue)} ชิ้น</b></div>
+              </div>
+            </> : null}
+            {isReady && canDispatch ? <div className="save-row" style={{ marginTop: 16 }}><button className="button primary" onClick={goDispatchFromVerify}>ตรงแล้ว → ไปหน้าขายออก</button></div>
+              : isReady ? <div className="scan-saved">✓ ตรงกับงานที่ต้องส่งออก — ให้ผู้ตรวจ (inspector) ดำเนินการขายออกในหน้า “ตรวจและขายออก”</div>
+              : null}
+          </> : <Empty title="รอสแกนชิ้นงาน" text="สแกน Tag ที่กล่อง ระบบจะแสดงรูป master, Item No. และงานที่ต้องส่งออกให้เทียบก่อนขายออก" />}
+        </section>
+      </div>
+    </>;
+  }
+
+  function renderReplacement() {
+    const openRequests = replacement.requests.filter((item) => item.status === "pending" || item.status === "partial");
+    const completedRequests = replacement.requests.filter((item) => item.status === "completed");
+    const selected = replacement.requests.find((item) => String(item.id) === replacementSelectedId) || openRequests[0];
+    const needle = replacementSearch.trim().toLowerCase();
+    const requestRows = replacement.requests.filter((item) => !needle || [
+      item.requestNo, item.materialCode, item.partName, item.customer, item.reasonDetail,
+      item.requestedByName, item.neededDate,
+    ].join(" ").toLowerCase().includes(needle));
+    const issueRows = replacement.issues.filter((issue) => {
+      const item = replacement.requests.find((request) => request.id === issue.requestId);
+      return !needle || [issue.noticeNo, issue.stockTagCode, issue.jobNo, issue.issuedByName,
+        item?.requestNo, item?.materialCode, item?.customer].join(" ").toLowerCase().includes(needle);
+    });
+    const totalRequested = replacement.requests.filter((item) => item.status !== "cancelled").reduce((sum, item) => sum + Number(item.requestedQty), 0);
+    const totalIssued = replacement.issues.reduce((sum, item) => sum + Number(item.qty), 0);
+    const reasonLabel = (value: string) => value === "defect" ? "งานเสีย" : value === "shortage" ? "งานขาด" : "อื่น ๆ";
+    const statusLabel = (value: string) => value === "completed" ? "เบิกครบแล้ว" : value === "partial" ? "เบิกบางส่วน" : value === "cancelled" ? "ยกเลิก" : "รอจัดงาน";
+
+    return <div className="replacement-page">
+      <div className="metrics four compact replacement-metrics page-summary">
+        <MetricCard tone="blue" icon="↺" label="ใบขอทั้งหมด" value={fmt(replacement.requests.length)} suffix="ใบ" />
+        <MetricCard tone="orange" icon="◷" label="รอจัดงาน" value={fmt(openRequests.length)} suffix="ใบ" />
+        <MetricCard tone="green" icon="✓" label="จัดครบแล้ว" value={fmt(completedRequests.length)} suffix="ใบ" />
+        <MetricCard tone="purple" icon="▦" label="เบิกออกสะสม" value={fmt(totalIssued)} suffix="ชิ้น" />
+      </div>
+
+      <div className="replacement-work-grid" style={canCreateReplacement && canIssueReplacement ? undefined : { gridTemplateColumns: "1fr" }}>
+        {canCreateReplacement && <Card className="replacement-request-card" title={<><span className="replacement-step">1</span> QC แจ้งขอเบิกงานทดแทน</>}>
+          <form className="replacement-form" onSubmit={createReplacementRequest}>
+            <label className="wide"><span>Part / Material No. *</span><input list="replacement-parts" value={replacementForm.materialCode} onChange={(event) => {
+              const value = event.target.value.toUpperCase();
+              const part = stock.parts.find((item) => item.materialCode === value);
+              setReplacementForm((current) => ({ ...current, materialCode: value, customer: part?.customer || current.customer }));
+            }} placeholder="เลือกหรือค้นหา Part No." required /><datalist id="replacement-parts">{stock.parts.filter((part) => part.active).map((part) => <option key={part.materialCode} value={part.materialCode}>{part.partName}</option>)}</datalist></label>
+            <label><span>ลูกค้า / Site</span><input value={replacementForm.customer} onChange={(event) => setReplacementForm((current) => ({ ...current, customer: event.target.value }))} placeholder="เช่น MCP / STE1" /></label>
+            <label><span>จำนวนที่ขอเบิก *</span><input type="number" inputMode="numeric" min={1} step={1} value={replacementForm.requestedQty} onChange={(event) => setReplacementForm((current) => ({ ...current, requestedQty: event.target.value }))} placeholder="0" required /></label>
+            <label><span>สาเหตุ *</span><select value={replacementForm.reasonType} onChange={(event) => setReplacementForm((current) => ({ ...current, reasonType: event.target.value }))}><option value="shortage">งานขาดของลูกค้า</option><option value="defect">ทดแทนงานเสีย</option><option value="other">อื่น ๆ</option></select></label>
+            <label><span>วันที่ต้องการ</span><input type="date" value={replacementForm.neededDate} onChange={(event) => setReplacementForm((current) => ({ ...current, neededDate: event.target.value }))} /></label>
+            <label className="wide"><span>รายละเอียด / เลขที่เอกสารอ้างอิง</span><textarea rows={3} value={replacementForm.reasonDetail} onChange={(event) => setReplacementForm((current) => ({ ...current, reasonDetail: event.target.value }))} placeholder="ระบุอาการเสีย จำนวนขาด หรือข้อมูลที่ทีมจัดงานต้องทราบ" /></label>
+            <button className="button primary full" disabled={replacementSaving}>{replacementSaving ? "กำลังสร้างใบขอ…" : "＋ สร้างใบขอเบิกให้ทีมจัดงาน"}</button>
+          </form>
+        </Card>}
+
+        {canIssueReplacement && <Card className="replacement-scan-card" title={<><span className="replacement-step green">2</span> Delivery สแกน KIT Tag งานทดแทน</>} action={selected ? <span className="replacement-selected">{selected.requestNo}</span> : undefined}>
+          {selected ? <>
+            <div className="replacement-selected-request">
+              <PartImage materialCode={selected.materialCode} compact />
+              <div><small>ใบขอที่เลือก</small><b>{selected.materialCode}</b><p>{selected.partName || "—"} · {selected.customer || "ไม่ระบุลูกค้า"}</p></div>
+              <dl><div><dt>QC ขอ</dt><dd>{fmt(selected.requestedQty)}</dd></div><div><dt>เบิกแล้ว</dt><dd>{fmt(selected.issuedQty)}</dd></div><div><dt>คงเหลือ</dt><dd>{fmt(selected.remainingQty)}</dd></div></dl>
+            </div>
+            <form className="replacement-scan-form" onSubmit={(event) => { event.preventDefault(); void previewReplacementIssue(); }}>
+              <button type="button" className="replacement-scan-zone" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}><span>⌗</span><b>พร้อมสแกน KIT Stock Tag</b><small>ยิงบาร์โค้ด หรือแตะเพื่อเปิดกล้อง แล้วตรวจจำนวนก่อนยืนยันเบิก</small></button>
+              <label><span>KIT Stock Tag *</span><input ref={replacementInputRef} value={replacementTag} onChange={(event) => setReplacementTag(event.target.value)} onKeyDown={(event) => {
+                if ((event.key === "Enter" || event.key === "Tab") && replacementTag.trim()) {
+                  event.preventDefault(); void previewReplacementIssue();
+                }
+              }} placeholder="ยิง Tag แล้วเครื่องส่ง Enter" autoComplete="off" /></label>
+              <button className="button primary" disabled={!replacementTag.trim() || replacementSaving}>{replacementSaving ? "กำลังตรวจ Tag…" : "ตรวจ Tag และจำนวน"}</button>
+            </form>
+            <p className="replacement-help">ระบบจะตัด Stock และตัดยอดคงเหลือของใบขอเมื่อกด “ยืนยันเบิกงานทดแทน” เท่านั้น</p>
+          </> : <Empty title="ยังไม่มีใบขอรอจัดงาน" text="เมื่อ QC สร้างใบขอ รายการจะขึ้นให้เลือกและสแกน KIT Tag ที่นี่" />}
+        </Card>}
+      </div>
+
+      <Card className="replacement-list-card" title={<><span className="replacement-list-icon">↺</span> ใบขอเบิกงานทดแทน <em>{fmt(requestRows.length)} ใบ</em></>} action={<div className="arranged-search"><span>⌕</span><input type="search" value={replacementSearch} onChange={(event) => setReplacementSearch(event.target.value)} placeholder="ค้นหาเลขที่ใบขอ, Part, ลูกค้า, ผู้ขอ" /></div>}>
+        {replacementLoading ? <div className="loading-state"><span /><p>กำลังโหลดใบขอเบิก…</p></div> : requestRows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table replacement-table"><thead><tr><th>เลขที่ / วันที่ขอ</th><th>Part / ลูกค้า</th><th>สาเหตุ</th><th className="num">ขอเบิก</th><th className="num">เบิกแล้ว</th><th className="num">คงเหลือ</th><th>ผู้ขอ</th><th>สถานะ</th><th>จัดการ</th></tr></thead><tbody>
+          {requestRows.map((item) => <tr key={item.id} className={String(item.id) === replacementSelectedId ? "selected-row" : ""}>
+            <td data-label="เลขที่ / วันที่ขอ"><b>{item.requestNo}</b><small>{formatDateTime(item.requestedAt)}{item.neededDate ? ` · ต้องการ ${formatDate(item.neededDate)}` : ""}</small></td>
+            <td data-label="Part / ลูกค้า"><b>{item.materialCode}</b><small>{item.partName || "—"} · {item.customer || "—"}</small></td>
+            <td data-label="สาเหตุ"><b>{reasonLabel(item.reasonType)}</b><small>{item.reasonDetail || "—"}</small></td>
+            <td data-label="ขอเบิก" className="num"><b>{fmt(item.requestedQty)}</b></td>
+            <td data-label="เบิกแล้ว" className="num"><b className="green-text">{fmt(item.issuedQty)}</b></td>
+            <td data-label="คงเหลือ" className="num"><b className={item.remainingQty ? "red-text" : "green-text"}>{fmt(item.remainingQty)}</b></td>
+            <td data-label="ผู้ขอ"><b>{item.requestedByName}</b><small>{item.requestedByCode}</small></td>
+            <td data-label="สถานะ"><span className={`status ${item.status === "completed" ? "completed" : item.status === "partial" ? "partial" : item.status === "cancelled" ? "over" : "pending"}`}>{statusLabel(item.status)}</span></td>
+            <td data-label="จัดการ"><div className="user-actions">{canIssueReplacement && (item.status === "pending" || item.status === "partial") && <button className="tiny-button" onClick={() => { setReplacementSelectedId(String(item.id)); setReplacementPreview(null); setReplacementTag(""); if (!window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) window.setTimeout(() => replacementInputRef.current?.focus(), 100); }}>เลือกจัดงาน</button>}{canCreateReplacement && item.status === "pending" && item.issuedQty === 0 && <button className="tiny-button danger-outline" onClick={() => void cancelReplacementRequest(item)}>ยกเลิก</button>}</div></td>
+          </tr>)}
+        </tbody></table></div> : <Empty title="ยังไม่มีใบขอเบิก" text="QC สามารถสร้างใบขอสำหรับงานเสียหรืองานขาดได้จากแบบฟอร์มด้านบน" />}
+        <footer className="replacement-list-footer"><span>ยอดขอเบิกทั้งหมด {fmt(totalRequested)} ชิ้น</span><b>เบิกออกแล้ว {fmt(totalIssued)} ชิ้น</b></footer>
+      </Card>
+
+      <Card className="replacement-list-card" title={<><span className="replacement-list-icon green">▤</span> ประวัติเบิกและใบแจ้งออก <em>{fmt(issueRows.length)} รายการ</em></>} action={<button className="button secondary" onClick={() => void loadReplacements()}>↻ รีเฟรช</button>}>
+        {issueRows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table replacement-issue-table"><thead><tr><th>ใบแจ้งออก</th><th>ใบขอ QC</th><th>KIT Stock Tag / Job</th><th>Part / ลูกค้า</th><th className="num">จำนวน</th><th>ผู้จัดงาน</th><th>พิมพ์ใบ</th></tr></thead><tbody>
+          {issueRows.map((issue) => {
+            const item = replacement.requests.find((request) => request.id === issue.requestId);
+            return <tr key={issue.id}><td data-label="ใบแจ้งออก"><b>{issue.noticeNo}</b><small>{formatDateTime(issue.issuedAt)}</small></td><td data-label="ใบขอ QC">{item?.requestNo || "—"}</td><td data-label="KIT Tag / Job"><b>{issue.stockTagCode}</b><small>{issue.jobNo || "—"}</small></td><td data-label="Part / ลูกค้า"><b>{item?.materialCode || "—"}</b><small>{item?.customer || "—"}</small></td><td data-label="จำนวน" className="num"><b>{fmt(issue.qty)}</b></td><td data-label="ผู้จัดงาน"><b>{issue.issuedByName}</b><small>{issue.issuedByCode}</small></td><td data-label="พิมพ์ใบ">{canEditPage("replacement") && <button className="tiny-button print-replacement-button" onClick={() => void printReplacementIssue(issue)}>▤ พิมพ์ใบแจ้งออก</button>}{issue.printedAt && <small>พิมพ์แล้ว {formatDateTime(issue.printedAt)}</small>}</td></tr>;
+          })}
+        </tbody></table></div> : <Empty title="ยังไม่มีประวัติการเบิก" text="ประวัติจะบันทึกเมื่อทีมจัดงานยืนยันเบิกจาก KIT Tag" />}
+      </Card>
+    </div>;
+  }
+
+  async function exportForecastExcel() {
+    if (forecastExporting) return;
+    setForecastExporting(true);
+    try {
+      const response = await fetch("/api/forecast?export=1", { cache: "no-store" });
+      const snapshot = await response.json() as ForecastPayload;
+      if (!response.ok) throw new Error(snapshot.error || "โหลด Forecast เพื่อส่งออกไม่สำเร็จ");
+      if (!snapshot.activeImport || !snapshot.coverage.length) throw new Error("ยังไม่มีข้อมูล Forecast สำหรับส่งออก");
+      const xlsx = await import("xlsx");
+      const workbook = createForecastExportWorkbook(xlsx, snapshot.coverage, {
+        fileName: snapshot.activeImport.fileName,
+        cutoff: formatDateTime(snapshot.activeImport.sourceCalculatedAt),
+        calculatedAt: formatDateTime(snapshot.calculatedAt || new Date().toISOString()),
+        exportedBy: `${user.displayName} (${user.employeeCode})`,
+      });
+      const binary = createForecastExportBinary(xlsx, workbook);
+      const url = URL.createObjectURL(new Blob([new Uint8Array(binary).buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+      const download = document.createElement("a");
+      download.href = url;
+      download.download = `KIT_Forecast_Stock_${bangkokDateTimeKey().replace(/[-:]/g, "").replace("T", "_")}.xlsx`;
+      document.body.appendChild(download);
+      download.click();
+      download.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      setForecast(snapshot);
+      setNotice({ type: "success", text: `ส่งออก Forecast ทุก Part สำเร็จ ${fmt(snapshot.coverage.length)} รายการ` });
+      void recordClientAudit("export_forecast_excel", `ส่งออก Forecast Excel ทุก Part ${snapshot.coverage.length} รายการ`, {
+        itemCount: snapshot.coverage.length, forecastImportId: snapshot.activeImport.id,
+        fileName: snapshot.activeImport.fileName, calculatedAt: snapshot.calculatedAt,
+      });
+    } catch (caught) {
+      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ส่งออก Forecast ไม่สำเร็จ" });
+    } finally { setForecastExporting(false); }
+  }
+
+  function renderForecast() {
+    const emptyRisk = { overdue: 0, within3: 0, within7: 0, within14: 0, over14: 0 };
+    const summaryData = forecast.summary || { materialCount: 0, stockQty: 0, outstandingQty: 0, overdueQty: 0, totalShortage: 0, coveredMaterials: 0, shortageMaterials: 0, riskGroups: emptyRisk };
+    const risk = summaryData.riskGroups || emptyRisk;
+    const needle = forecastSearch.trim().toLowerCase();
+    const factories = [...new Set(forecast.coverage.flatMap((item) => item.factories || []).filter(Boolean))].sort();
+    const rows = forecast.coverage.filter((item) => {
+      const matchesSearch = !needle || [item.materialCode, item.description, ...(item.factories || [])].some((value) => value.toLowerCase().includes(needle));
+      const matchesStatus = forecastStatus === "all"
+        || (["overdue", "within3", "within7", "within14", "over14"].includes(forecastStatus) ? item.riskGroup === forecastStatus
+          : forecastStatus === "covered" ? item.status === "covered" : item.status !== "covered");
+      const matchesFactory = forecastFactory === "ALL" || (item.factories || []).includes(forecastFactory);
+      return matchesSearch && matchesStatus && matchesFactory;
+    }).sort((a, b) => {
+      const rank = { overdue: 0, within3: 1, within7: 2, within14: 3, over14: 4 };
+      return rank[a.riskGroup] - rank[b.riskGroup] || (a.shortageDate || "9999").localeCompare(b.shortageDate || "9999") || a.materialCode.localeCompare(b.materialCode);
+    });
+    const statusLabel = (item: ForecastCoverage) => item.status === "covered" ? "Stock เพียงพอ" : item.status === "no_stock" ? "ไม่มี Stock" : "Stock ไม่พอ";
+    const priorityLabel = (item: ForecastCoverage) => item.riskGroup === "overdue" ? "ขาดแล้ว" : item.riskGroup === "within3" ? "ขาดภายใน 3 วัน" : item.riskGroup === "within7" ? "ขาดภายใน 7 วัน" : item.riskGroup === "within14" ? "รองรับภายใน 14 วัน" : "เพียงพอ";
+    const trend = (forecast.trend || []).slice(0, forecastRange);
+    const trendMax = Math.max(...trend.flatMap((item) => [item.cumulativeDemand, item.projectedStock]), 1);
+    const setFilter = (next: typeof forecastStatus) => setForecastStatus((current) => current === next ? "all" : next);
+    const riskCards: Array<{ key: typeof forecastStatus; label: string; value: number; tone: string; icon: string }> = [
+      { key: "overdue", label: "ขาดแล้ว", value: risk.overdue, tone: "red", icon: "!" },
+      { key: "within3", label: "จะขาดภายใน 3 วัน", value: risk.within3, tone: "orange", icon: "◷" },
+      { key: "within7", label: "จะขาดภายใน 7 วัน", value: risk.within7, tone: "yellow", icon: "⌛" },
+      { key: "within14", label: "รองรับได้ภายใน 14 วัน", value: risk.within14, tone: "green", icon: "✓" },
+      { key: "over14", label: "เพียงพอมากกว่า 14 วัน", value: risk.over14, tone: "mint", icon: "✓" },
+    ];
+    return <div className="forecast-page">
+      <section className="forecast-hero">
+        <div><span className="forecast-hero-icon">▥</span><div><h2>Forecast Stock</h2><p>วางแผนการผลิตล่วงหน้า ป้องกันปัญหา Stock ไม่เพียงพอ</p></div></div>
+        <div className="forecast-export-actions"><button className="button secondary" disabled={forecastLoading} onClick={() => void loadForecast()}>↻ รีเฟรชข้อมูล</button><button className="button primary" disabled={!forecast.activeImport || forecastLoading || forecastExporting} onClick={() => void exportForecastExcel()}>{forecastExporting ? "กำลังส่งออก…" : "⇩ Export Excel (ทุก Part)"}</button></div>
+      </section>
+      <div className="metrics five forecast-metrics page-summary">
+        <button className={`forecast-metric-button ${forecastStatus === "all" ? "active" : ""}`} onClick={() => setForecastStatus("all")}><MetricCard tone="blue" icon="▧" label="จำนวน Part ใน Forecast" value={fmt(summaryData.materialCount)} suffix="Part" /></button>
+        <button className={`forecast-metric-button ${forecastStatus === "covered" ? "active" : ""}`} onClick={() => setFilter("covered")}><MetricCard tone="green" icon="✓" label="Stock เพียงพอ" value={fmt(summaryData.coveredMaterials)} suffix="Part" /></button>
+        <button className={`forecast-metric-button ${forecastStatus === "shortage" ? "active" : ""}`} onClick={() => setFilter("shortage")}><MetricCard tone="red" icon="!" label="ต้องผลิตเพิ่ม" value={fmt(summaryData.shortageMaterials)} suffix="Part" /></button>
+        <button className={`forecast-metric-button ${forecastStatus === "within3" ? "active" : ""}`} onClick={() => setFilter("within3")}><MetricCard tone="orange" icon="◷" label="คาดว่าจะขาดภายใน 3 วัน" value={fmt(risk.within3)} suffix="Part" /></button>
+        <button className={`forecast-metric-button ${forecastStatus === "overdue" ? "active" : ""}`} onClick={() => setFilter("overdue")}><MetricCard tone="red" icon="▣" label="ขาดแล้ว" value={fmt(risk.overdue)} suffix="Part" /></button>
+      </div>
+
+      <div className="forecast-top-grid">
+      {canEditPage("forecast") && <Card className="forecast-import-card" title="▣ นำเข้า Forecast ใหม่">
+        <div className="forecast-import-layout">
+          <label className={`forecast-file-picker ${forecastDragActive ? "drag-active" : ""}`}
+            onDragOver={(event) => { event.preventDefault(); setForecastDragActive(true); }}
+            onDragLeave={() => setForecastDragActive(false)}
+            onDrop={(event) => { event.preventDefault(); setForecastDragActive(false); void prepareForecastFile(event.dataTransfer.files?.[0] || null); }}>
+            <span>▧</span>
+            <div><b>{forecastFile?.name || "ลากไฟล์มาวางที่นี่ หรือเลือกไฟล์"}</b><small>รองรับ Forecast .csv · ตรวจ Format, Column, Part, วันที่, Quantity ก่อนนำเข้า</small></div>
+            <input type="file" accept=".csv,text/csv" disabled={forecastImporting} onChange={(event) => void selectForecastFile(event)} />
+          </label>
+          {forecastParsing && <div className="forecast-parsing">กำลังอ่านและรวมรายการตาม Material / วันที่ / เวลา…</div>}
+          {forecastPreview && <div className="forecast-preview">
+            <div><small>เวลาที่ลูกค้าคำนวณ</small><b>{forecastPreview.sourceLabel}</b></div>
+            <div><small>แถวในไฟล์</small><b>{fmt(forecastPreview.sourceRowCount)}</b></div>
+            <div><small>รวมเป็นช่วงส่ง</small><b>{fmt(forecastPreview.rows.length)}</b></div>
+            <div><small>จำนวน Part</small><b>{fmt(forecastPreview.materialCount)}</b></div>
+            <div><small>ยอด Forecast</small><b>{fmt(forecastPreview.totalQty)} ชิ้น</b></div>
+            {forecastPreview.duplicateRowCount > 0 && <div><small>แถวซ้ำที่รวมยอดแล้ว</small><b>{fmt(forecastPreview.duplicateRowCount)} แถว</b></div>}
+          </div>}
+          {forecastImporting && <div className="forecast-progress"><span><i style={{ width: `${forecastProgress}%` }} /></span><b>{forecastProgress}%</b><small>กำลังนำเข้า กรุณาอย่าปิดหน้านี้</small></div>}
+          <div className="forecast-import-actions">
+            <p><b>Cut-off:</b> ยอดขายออกหลัง Last Calculate DO จะถูกหักจาก Forecast เก่าก่อน จึงไม่สร้าง Demand ซ้ำ</p>
+            <button className="button primary" disabled={!forecastPreview || forecastParsing || forecastImporting} onClick={() => void importForecast()}>{forecastImporting ? "กำลังนำเข้า…" : "⇧ ยืนยันใช้ Forecast ชุดนี้"}</button>
+          </div>
+        </div>
+      </Card>}
+
+      <Card className="forecast-current-card" title="▤ Forecast ชุดปัจจุบัน">
+        {forecastLoading ? <div className="loading-state"><span /><p>กำลังคำนวณ Forecast เทียบ Stock…</p></div>
+          : forecast.activeImport ? <div className="forecast-active">
+            <div><small>ชื่อไฟล์</small><b>{forecast.activeImport.fileName}</b></div>
+            <div><small>Last Calculate DO</small><b>{formatDateTime(forecast.activeImport.sourceCalculatedAt)}</b></div>
+            <div><small>ผู้นำเข้า</small><b>{forecast.activeImport.importedByName}</b></div>
+            <div><small>นำเข้าเมื่อ</small><b>{formatDateTime(forecast.activeImport.createdAt)}</b></div>
+            <span className="forecast-status covered">● ใช้งานอยู่</span>
+          </div> : <Empty title="ยังไม่มี Forecast ชุดปัจจุบัน" text={canEditPage("forecast") ? "เลือกไฟล์ CSV จากลูกค้าเพื่อนำเข้าข้อมูล" : "บัญชีนี้มีสิทธิ์ดูข้อมูลเท่านั้น กรุณาให้ผู้มีสิทธิ์นำเข้า Forecast"} />}
+      </Card>
+      </div>
+
+      {forecast.activeImport && <Card className="forecast-trend-card" title="แนวโน้ม Forecast เทียบ Stock พร้อมใช้" action={<div className="forecast-range">{([7, 14, 30] as const).map((range) => <button key={range} className={forecastRange === range ? "active" : ""} onClick={() => setForecastRange(range)}>{range} วัน</button>)}</div>}>
+        <div className="forecast-chart-legend"><span><i className="demand" />Forecast สะสม</span><span><i className="stock" />Stock พร้อมใช้</span><span><i className="shortage" />Part เริ่มขาด</span></div>
+        {trend.length ? <div className="forecast-chart">{trend.map((item) => <div className="forecast-chart-column" key={item.date}>
+          <div className="forecast-chart-bars"><i className="demand" style={{ height: `${Math.max(3, item.cumulativeDemand / trendMax * 100)}%` }} title={`Forecast ${fmt(item.cumulativeDemand)}`} /><i className="stock" style={{ height: `${Math.max(3, item.projectedStock / trendMax * 100)}%` }} title={`Stock ${fmt(item.projectedStock)}`} /></div>
+          <b className={item.shortageParts ? "danger" : ""}>{fmt(item.shortageParts)}</b><small>{formatDate(item.date).slice(0, 5)}</small>
+        </div>)}</div> : <Empty title="ยังไม่มีข้อมูลในช่วงเวลานี้" text="กราฟจะแสดงหลังมี Forecast ตั้งแต่วันปัจจุบันเป็นต้นไป" />}
+      </Card>}
+
+      {forecast.activeImport && <section className="forecast-risk-section"><h3>สรุปความเสี่ยงตามช่วงเวลา</h3><div className="forecast-risk-grid">{riskCards.map((item) => <button key={item.key} className={`forecast-risk-card ${item.tone} ${forecastStatus === item.key ? "active" : ""}`} onClick={() => setFilter(item.key)}><span>{item.icon}</span><div><small>{item.label}</small><b>{fmt(item.value)} <em>Part</em></b></div><i>›</i></button>)}</div></section>}
+
+      {forecast.activeImport && <Card className="forecast-coverage-card" title={`รายการ Part ตามความเสี่ยง · ${fmt(rows.length)} Part`} action={<div className="forecast-filters"><input value={forecastSearch} onChange={(event) => setForecastSearch(event.target.value)} placeholder="⌕ Part No. / Description / Job" /><select value={forecastStatus} onChange={(event) => setForecastStatus(event.target.value as typeof forecastStatus)}><option value="all">ทั้งหมด</option><option value="overdue">ขาดแล้ว</option><option value="within3">ขาดภายใน 3 วัน</option><option value="within7">ขาดภายใน 7 วัน</option><option value="covered">เพียงพอ</option></select>{factories.length > 0 && <select value={forecastFactory} onChange={(event) => setForecastFactory(event.target.value)}><option value="ALL">ทุก FAC</option>{factories.map((factory) => <option key={factory} value={factory}>{factory}</option>)}</select>}</div>}>
+        <div className="forecast-method-note">Available Stock = ของที่อยู่ในพื้นที่ Stock จริง − ยอดจัดงาน/จองค้าง · วันที่เริ่มขาดคำนวณจาก Forecast ตามลำดับวัน · อัปเดตจากข้อมูลจริงทุกครั้งที่รีเฟรช</div>
+        {rows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table forecast-table"><thead><tr><th>Priority</th><th>Part / Description</th><th>Job / FAC</th><th className="num">Forecast รวม</th><th className="num">Stock พร้อมใช้</th><th className="num">ขาด / เกิน</th><th>เริ่มขาดวันที่</th><th className="num">ต้องผลิตเพิ่ม</th><th>สถานะ</th></tr></thead><tbody>{rows.map((item) => <tr key={item.materialCode} className={item.riskGroup === "overdue" ? "forecast-overdue-row" : ""}>
+          <td data-label="Priority"><span className={`forecast-priority ${item.riskGroup}`}>{priorityLabel(item)}</span></td>
+          <td data-label="Part / Description"><b>{item.materialCode}</b><small>{item.description || "—"}</small>{item.dispatchedAfterImport > 0 && <em>ขายออกหลังไฟล์แล้ว {fmt(item.dispatchedAfterImport)} ชิ้น</em>}</td>
+          <td data-label="Job / FAC"><b>—</b><small>{(item.factories || []).join(", ") || "ไม่ระบุ FAC"}</small></td>
+          <td data-label="Forecast รวม" className="num"><b>{fmt(item.outstandingQty)}</b></td>
+          <td data-label="Stock พร้อมใช้" className="num"><b className="forecast-covered-text">{fmt(item.stockQty)}</b></td>
+          <td data-label="ขาด / เกิน" className={`num ${item.stockQty - item.outstandingQty < 0 ? "danger" : ""}`}><b>{fmt(item.stockQty - item.outstandingQty)}</b></td>
+          <td data-label="เริ่มขาดวันที่">{item.shortageDate ? <><b>{formatDate(item.shortageDate)}</b><small>{item.shortageTime} · ขาดครั้งแรก {fmt(item.firstShortageQty)} ชิ้น</small></> : "—"}</td>
+          <td data-label="ต้องผลิตเพิ่ม" className={`num ${item.totalShortage > 0 ? "danger" : ""}`}><b>{fmt(item.totalShortage)}</b></td>
+          <td data-label="สถานะ"><span className={`forecast-status ${item.status}`}>{statusLabel(item)}</span></td>
+        </tr>)}</tbody></table></div> : <Empty title="ไม่พบรายการตามตัวกรอง" text="ลองเปลี่ยนคำค้นหาหรือสถานะ" />}
+      </Card>}
+
+      {forecast.imports.length > 0 && <Card className="forecast-history-card" title="ประวัติไฟล์ Forecast">
+        <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>ชื่อไฟล์</th><th>วันที่นำเข้า</th><th>ผู้นำเข้า</th><th>Last Calculate DO</th><th className="num">จำนวน Part</th><th>สถานะ</th></tr></thead><tbody>{forecast.imports.map((item) => <tr key={item.id}><td data-label="ชื่อไฟล์"><b>{item.fileName}</b></td><td data-label="วันที่นำเข้า">{formatDateTime(item.createdAt)}</td><td data-label="ผู้นำเข้า">{item.importedByName}</td><td data-label="Last Calculate DO">{formatDateTime(item.sourceCalculatedAt)}</td><td data-label="จำนวน Part" className="num">{fmt(item.materialCount)}</td><td data-label="สถานะ"><span className={`forecast-status ${item.status === "active" ? "covered" : "archived"}`}>{item.status === "active" ? "ใช้งานอยู่" : "ประวัติ"}</span></td></tr>)}</tbody></table></div>
+      </Card>}
+    </div>;
+  }
+
+  function renderExports() {
+    const exported = filtered.filter((due) => Number(due.scannedQty) > 0);
+    const full = exported.filter((due) => stateOf(due) === "completed").length;
+    const part = exported.filter((due) => stateOf(due) === "partial").length;
+    const over = exported.filter((due) => stateOf(due) === "over").length;
+    return <div className="exports-page-redesign">
+      <Card className="exports-filter-card"><Filters /></Card>
+      <div className="metrics five reports-metrics exports-metrics page-summary"><MetricCard tone="blue" icon="▤" label="ส่งออกทั้งหมด" value={fmt(exported.length)} suffix="รายการ" /><MetricCard tone="green" icon="✓" label="ส่งออกครบ" value={fmt(full)} suffix="รายการ" /><MetricCard tone="orange" icon="◷" label="บางส่วน" value={fmt(part)} suffix="รายการ" /><MetricCard tone="red" icon="×" label="เกินดิวจัดส่ง" value={fmt(over)} suffix="รายการ" /><MetricCard tone="purple" icon="◇" label="รวมจำนวน" value={fmt(exported.reduce((sum, due) => sum + Number(due.scannedQty), 0))} suffix="ชิ้น" /></div>
+      <Card className="exports-list-card" title={<span className="exports-list-title"><i>≡</i><span>รายการส่งออก<small>รายการสินค้าที่ส่งออกจากคลังไปยังลูกค้าหรือสายการผลิต</small></span></span>} action={<div className="exports-list-actions"><button className="button success" onClick={() => void exportDeliveryExcel()}>▦ ส่งออก Excel</button><button className="button primary" onClick={exportCsv}>▤ ส่งออก CSV</button></div>}>
+        <DueTable rows={exported} />
+        <footer className="exports-list-footer"><span>แสดง {fmt(exported.length)} รายการ</span><span>{filterDate ? formatDate(filterDate) : "ทุกวันที่"} · {filterFact === "ALL" ? "ทุก FAC" : filterFact} · {filterTime === "ALL" ? "ทุกเวลา" : filterTime}</span></footer>
+      </Card>
+      <footer className="settings-footer"><span>© 2026 Control Stock KIT. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
+    </div>;
+  }
+
+  function renderReports() {
+    const maxFac = Math.max(...facStats.map((item) => item.items), 1);
+    const recentDays = dailyStats.slice(-7);
+    const maxDaily = Math.max(...recentDays.map((item) => item.items), 1);
+    return <div className="reports-page-redesign">
+      <Card className="reports-filter-card" action={<button className="button primary reports-refresh-button" onClick={() => void loadDue()}>↻ รีเฟรช</button>}><Filters /></Card>
+      <div className="metrics five reports-metrics page-summary"><MetricCard tone="blue" icon="▤" label="แผนทั้งหมด" value={fmt(summary.items)} suffix="รายการ" /><MetricCard tone="green" icon="✓" label="ครบตามแผน" value={fmt(summary.completed)} suffix="รายการ" /><MetricCard tone="orange" icon="◷" label="คงเหลือ" value={fmt(summary.partial + summary.pending)} suffix="รายการ" /><MetricCard tone="red" icon="!" label="เกินดิวจัดส่ง" value={fmt(summary.over)} suffix="รายการ" /><MetricCard tone="purple" icon="◇" label="ส่งแล้วรวม" value={fmt(summary.sent)} suffix="ชิ้น" /></div>
+      <div className="reports-dashboard-grid">
+        <Card className="reports-chart-card" title="สัดส่วนสถานะการส่งงาน"><div className="donut-layout"><div className="donut" style={{ "--complete": `${completePct * 3.6}deg` } as React.CSSProperties}><span><b>{summary.items}</b>รายการ</span></div><div className="legend"><p><i className="green" />ครบตามแผน <b>{summary.completed}</b></p><p><i className="orange" />คงเหลือ <b>{summary.partial + summary.pending}</b></p><p><i className="red" />เกินดิวจัดส่ง <b>{summary.over}</b></p><p><i className="purple" />ส่งแล้วรวม <b>{fmt(summary.sent)}</b></p></div></div></Card>
+        <Card className="reports-chart-card" title="ส่งออกตาม FAC / Line"><div className="bar-chart reports-fac-chart">{facStats.length ? facStats.slice(0, 7).map((item) => <div key={item.fact}><b>{item.fact}</b><span><i style={{ width: `${Math.max(4, item.items / maxFac * 100)}%` }} /></span><strong>{item.items}</strong></div>) : <Empty title="ยังไม่มีข้อมูล" text="ลองปรับช่วงวันที่หรือโรงงาน" />}</div></Card>
+        <Card className="reports-chart-card reports-trend-card" title="แนวโน้มการส่งงาน" action={<div className="reports-export-tools"><button className="export-button excel" onClick={() => void exportReportExcel()}><span>▦</span><b>Excel</b><small>.xlsx</small></button><button className="export-button pdf" onClick={exportReportPdf}><span>▤</span><b>PDF</b><small>พิมพ์ / บันทึก</small></button><button className="export-button csv" onClick={exportReportCsv}><span>≡</span><b>CSV</b><small>.csv</small></button></div>}>
+          {recentDays.length ? <><div className="reports-trend-chart">{recentDays.map((row) => <div key={row.date}><span><i className="planned" style={{ height: `${Math.max(5, row.items / maxDaily * 100)}%` }} /><i className="finished" style={{ height: `${Math.max(row.completed ? 5 : 0, row.completed / maxDaily * 100)}%` }} /></span><small>{formatDate(row.date).slice(0, 5)}</small></div>)}</div><div className="reports-chart-legend"><span><i className="planned" />ตามแผน</span><span><i className="finished" />ส่งแล้ว</span></div></> : <Empty title="ยังไม่มีข้อมูล" text="เลือกช่วงวันที่เพื่อแสดงแนวโน้ม" />}
+        </Card>
+      </div>
+      <div className="reports-tables-grid">
+        <Card className="reports-table-card" title="สรุปการส่งออกตามวัน" action={<span className="reports-current-filter">◉ {filterDate ? formatDate(filterDate) : "ดูทั้งหมด"}</span>}>{dailyStats.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>วันที่</th><th className="num">แผนทั้งหมด</th><th className="num">ส่งแล้ว</th><th className="num">คงเหลือ</th><th className="num">เกินคิว</th></tr></thead><tbody>{dailyStats.slice(0, 8).map((row) => <tr key={row.date}><td data-label="วันที่"><b>{formatDate(row.date)}</b></td><td data-label="แผนทั้งหมด" className="num">{row.items}</td><td data-label="ส่งแล้ว" className="num sent">{row.completed}</td><td data-label="คงเหลือ" className="num warning">{row.partial + row.pending}</td><td data-label="เกินคิว" className="num danger">{row.over}</td></tr>)}</tbody></table></div> : <Empty title="ยังไม่มีข้อมูล" text="ในช่วงวันที่ที่เลือก" />}</Card>
+        <Card className="reports-table-card" title="รายการที่ยังไม่ครบ (สูงสุด)" action={<span className="reports-current-filter">◉ {filterFact === "ALL" ? "ดูทั้งหมด" : filterFact}</span>}><DueTable rows={filtered.filter((due) => ["pending", "partial", "over"].includes(stateOf(due))).sort((a, b) => (b.reqQty - b.scannedQty) - (a.reqQty - a.scannedQty))} limit={5} /></Card>
+      </div>
+      <footer className="settings-footer"><span>© 2026 Control Stock KIT. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
+    </div>;
+  }
+
+  function renderHistory() {
+    const activities: Array<{ id: string; createdAt: string; action: string; detail: string; actor: string; tone: string; kind: string }> = [];
+    payload.imports.forEach((item) => activities.push({
+      id: "import-" + item.id, createdAt: item.createdAt, action: "นำเข้าแผนส่งงาน",
+      detail: item.fileName + " · " + fmt(item.rowCount) + " รายการ", actor: item.importedByName || "—", tone: "purple", kind: "import",
+    }));
+    stock.tags.forEach((item) => {
+      activities.push({
+        id: "tag-" + item.id, createdAt: item.createdAt, action: "ออกและพิมพ์ Tag",
+        detail: item.tagId + " · " + item.materialCode + " · Job " + item.jobNo + " · " + fmt(item.qty) + " ชิ้น",
+        actor: item.printedByName || "—", tone: "blue", kind: "tag",
+      });
+      if (item.receivedAt) activities.push({
+        id: "receive-" + item.id, createdAt: item.receivedAt, action: "รับงานเข้า Stock",
+        detail: item.tagId + " · " + item.materialCode + " · " + fmt(item.qty) + " ชิ้น",
+        actor: item.receivedByName || "—", tone: "green", kind: "receive",
+      });
+    });
+    stock.picks.forEach((item) => activities.push({
+      id: "pick-" + item.id, createdAt: item.pickedAt, action: "จัดงาน",
+      detail: item.stockTagCode + " · " + item.materialCode + " · Job " + item.jobNo + " · " + fmt(item.pickedQty) + " ชิ้น",
+      actor: item.pickedByName || "—", tone: "orange", kind: "arrange",
+    }));
+    payload.scans.forEach((item) => activities.push({
+      id: "dispatch-" + item.id, createdAt: item.createdAt, action: "ตรวจและขายออก",
+      detail: item.tagId + " · " + item.materialCode + " · " + fmt(item.qty) + " " + item.unit,
+      actor: item.scannedByName || "—", tone: "red", kind: "dispatch",
+    }));
+    const auditKind = (action: string) => {
+      if (/warning/.test(action)) return "warning";
+      if (/delete|remove|clear|cancel/.test(action)) return "delete";
+      if (/permission|role|user_access/.test(action)) return "permission";
+      if (/import/.test(action)) return "import";
+      if (/login|logout|pin/.test(action)) return "security";
+      if (/create|add|print|receive|stage|dispatch|issue/.test(action)) return "create";
+      return "update";
+    };
+    const auditTone = (kind: string) => kind === "warning" ? "orange" : kind === "delete" ? "red" : kind === "permission" ? "purple" : kind === "import" ? "blue" : kind === "security" ? "orange" : kind === "create" ? "green" : "blue";
+    const auditActivities = auditLogs.map((item) => {
+      const kind = auditKind(item.actionKey);
+      const identity = item.entityId ? ` · ${item.entityId}` : "";
+      return {
+        id: `audit-${item.id}`, createdAt: item.createdAt, action: item.actionLabel,
+        detail: `${item.moduleLabel}${identity} · ${item.summary}`,
+        actor: item.actorName ? `${item.actorName}${item.actorCode ? ` (${item.actorCode})` : ""}` : "ระบบ",
+        tone: auditTone(kind), kind,
+      };
+    });
+    if (auditActivities.length) {
+      const oldestAudit = auditActivities.reduce((oldest, item) => item.createdAt < oldest ? item.createdAt : oldest, auditActivities[0].createdAt);
+      const legacyActivities = activities.filter((item) => item.createdAt < oldestAudit);
+      legacyActivities.forEach((item) => { if (item.kind !== "import") item.kind = "create"; });
+      activities.length = 0;
+      activities.push(...auditActivities, ...legacyActivities);
+    } else activities.forEach((item) => { if (item.kind !== "import") item.kind = "create"; });
+    activities.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    const historyNeedle = historyQuery.trim().toLowerCase();
+    const activityLocalDate = (value: string) => {
+      const date = toLocalDate(value);
+      if (!date) return "";
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
+    const filteredActivities = activities.filter((item) =>
+      (historyType === "all" || item.kind === historyType)
+      && (!historyDate || activityLocalDate(item.createdAt) >= historyDate)
+      && (!historyDateTo || activityLocalDate(item.createdAt) <= historyDateTo)
+      && (!historyNeedle || [item.action, item.detail, item.actor, item.createdAt].some((value) => String(value || "").toLowerCase().includes(historyNeedle)))
+    );
+    const historyTabs = [
+      { key: "all", label: "ทั้งหมด", count: activities.length },
+      { key: "warning", label: "แจ้งเตือน", count: activities.filter((item) => item.kind === "warning").length },
+      { key: "create", label: "เพิ่ม / ทำรายการ", count: activities.filter((item) => item.kind === "create").length },
+      { key: "import", label: "นำเข้าไฟล์", count: activities.filter((item) => item.kind === "import").length },
+      { key: "update", label: "แก้ไขข้อมูล", count: activities.filter((item) => item.kind === "update").length },
+      { key: "delete", label: "ลบข้อมูล", count: activities.filter((item) => item.kind === "delete").length },
+      { key: "permission", label: "สิทธิ์ผู้ใช้", count: activities.filter((item) => item.kind === "permission").length },
+      { key: "security", label: "เข้าสู่ระบบ / PIN", count: activities.filter((item) => item.kind === "security").length },
+    ];
+    const shownActivities = filteredActivities.slice(0, 250);
+    async function exportHistoryExcel() {
+      try {
+        const xlsx = await import("xlsx");
+        const rows = [
+          ["วันและเวลา", "ประเภท", "รายละเอียด", "ผู้ดำเนินการ", "สถานะ"],
+          ...filteredActivities.map((item) => [formatDateTime(item.createdAt), item.action, item.detail, item.actor, "บันทึกแล้ว"]),
+        ];
+        const sheet = xlsx.utils.aoa_to_sheet(rows);
+        sheet["!cols"] = [22, 24, 70, 24, 16].map((wch) => ({ wch }));
+        const workbook = xlsx.utils.book_new();
+        xlsx.utils.book_append_sheet(workbook, sheet, "ประวัติการดำเนินการ");
+        xlsx.writeFile(workbook, `KIT-history-${new Date().toISOString().slice(0, 10)}.xlsx`);
+        void recordClientAudit("export_history", `ส่งออกประวัติ Excel ${filteredActivities.length} รายการ`, { itemCount: filteredActivities.length, historyType, historyDate, historyDateTo });
+        setNotice({ type: "success", text: `ส่งออกประวัติแล้ว ${fmt(filteredActivities.length)} รายการ` });
+      } catch (caught) {
+        setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ส่งออกประวัติไม่สำเร็จ" });
+      }
+    }
+    const summaryCards = [
+      { tone: "purple", icon: "◎", label: "ประวัติทั้งหมด", value: activities.length, suffix: "รายการ", art: "▤" },
+      { tone: "blue", icon: "⇧", label: "นำเข้าไฟล์", value: activities.filter((item) => item.kind === "import").length, suffix: "ครั้ง", art: "▥" },
+      { tone: "green", icon: "+", label: "เพิ่ม / ทำรายการ", value: activities.filter((item) => item.kind === "create").length, suffix: "รายการ", art: "□" },
+      { tone: "orange", icon: "✎", label: "แก้ไข / สิทธิ์", value: activities.filter((item) => item.kind === "update" || item.kind === "permission").length, suffix: "รายการ", art: "▣" },
+      { tone: "red", icon: "×", label: "ลบข้อมูล", value: activities.filter((item) => item.kind === "delete").length, suffix: "รายการ", art: "▰" },
+    ];
+    return <div className="history-page-redesign">
+      <div className="history-summary-grid page-summary">{summaryCards.map((item) => <article className={`history-summary-card ${item.tone}`} key={item.label}><span>{item.icon}</span><div><small>{item.label}</small><b>{fmt(item.value)}</b><em>{item.suffix}</em></div><i>{item.art}</i></article>)}</div>
+      <section className="history-log-card">
+        <header><div><span>▤</span><div><h3>ประวัติการดำเนินการ</h3><p>บันทึกการเพิ่ม แก้ไข ลบ นำเข้าไฟล์ เปลี่ยนสิทธิ์ และกิจกรรมสำคัญจากทุกหน้า</p></div></div><div><button className="button secondary" disabled={auditLogsLoading} onClick={() => void Promise.all([loadDue(), loadStock(), loadAuditLogs()])}>↻ {auditLogsLoading ? "กำลังโหลด" : "รีเฟรช"}</button><button className="button history-excel-button" onClick={() => void exportHistoryExcel()}>▦ ส่งออก Excel</button></div></header>
+        <div className="audit-history-controls history-redesign-controls">
+          <div className="audit-history-tabs">{historyTabs.map((tab) => <button type="button" key={tab.key} className={historyType === tab.key ? "active" : ""} onClick={() => setHistoryType(tab.key)}><span>{tab.label}</span><b>{fmt(tab.count)}</b></button>)}</div>
+          <div className="history-filter-line">
+            <div className="audit-history-search"><span>⌕</span><input value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder="ค้นหาชื่อผู้ทำรายการ, Tag ID, Part No., Job หรือชื่อไฟล์..." />{historyQuery && <button type="button" onClick={() => setHistoryQuery("")}>×</button>}</div>
+            <div className="history-date-range"><b>วันที่ทำรายการ</b><label><span>▦</span><input aria-label="วันที่เริ่มต้น" type="date" value={historyDate} onChange={(event) => setHistoryDate(event.target.value)} /><i>–</i><input aria-label="วันที่สิ้นสุด" type="date" value={historyDateTo} onChange={(event) => setHistoryDateTo(event.target.value)} />{(historyDate || historyDateTo) && <button type="button" onClick={() => { setHistoryDate(""); setHistoryDateTo(""); }} aria-label="ล้างช่วงวันที่">×</button>}</label></div>
+          </div>
+        </div>
+        {shownActivities.length ? <div className="table-wrap mobile-table-wrap history-table-wrap"><table className="mobile-card-table history-modern-table"><thead><tr><th>วันที่ / เวลา</th><th>ประเภท</th><th>รายละเอียด</th><th>ผู้ดำเนินการ</th><th>สถานะ</th></tr></thead><tbody>{shownActivities.map((item) => <tr key={item.id}><td data-label="วันที่ / เวลา"><b>{formatDateTime(item.createdAt)}</b></td><td data-label="ประเภท"><b>{item.action}</b></td><td data-label="รายละเอียด">{item.detail}</td><td data-label="ผู้ดำเนินการ"><b>{item.actor}</b></td><td data-label="สถานะ"><em className={"status completed audit-" + item.tone}>บันทึกแล้ว</em></td></tr>)}</tbody></table></div> : <div className="history-empty"><span>◇</span><b>{(historyQuery || historyDate || historyDateTo) ? "ไม่พบรายการที่ค้นหา" : "ยังไม่มีประวัติในขณะนี้"}</b><small>{(historyQuery || historyDate || historyDateTo) ? "ลองเปลี่ยนคำค้นหาหรือช่วงวันที่" : "เลือกเมนูด้านบนหรือปรับช่วงวันที่เพื่อดูข้อมูล"}</small></div>}
+        <footer><span>แสดง {fmt(Math.min(filteredActivities.length, 250))} จาก {fmt(filteredActivities.length)} รายการ</span></footer>
+      </section>
+      <footer className="settings-footer"><span>© 2026 Control Stock KIT. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
+    </div>;
+  }
+
+  function renderSettings() {
+    // ตัวแปรธรรมดา ไม่ใช่ useMemo เพราะ renderSettings() เป็นฟังก์ชันที่ถูกเรียก
+    // แบบมีเงื่อนไข ไม่ใช่คอมโพเนนต์ การเรียก hook ในนี้จะผิดกฎ Hooks
+    const Toggle = ({ keyName, title, text: description, icon }: { keyName: keyof typeof settings; title: string; text: string; icon: string }) => <label className="setting-row"><span className="setting-row-icon">{icon}</span><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => { const next={...current,[keyName]:e.target.checked}; if(keyName==='sound'){window.localStorage.setItem('kit-due-settings',JSON.stringify(next));if(e.target.checked)window.setTimeout(()=>speakThaiAlert('success','settings','เปิดเสียงพูดแล้ว',true),0);} return next; })} /><i /></label>;
+    return <div className="settings-page-redesign">
+      <section className="settings-block settings-system-block">
+        <header><span>▤</span><h3>ข้อมูลระบบ</h3></header>
+        <div className="system-card">
+          <div className="system-logo">KiT<small>CONTROL STOCK KIT</small></div>
+          <dl><div><dt>ชื่อระบบ</dt><dd>Control Stock KIT</dd></div><div><dt>เวอร์ชัน</dt><dd>v2.23.0</dd></div><div><dt>เขตเวลา</dt><dd>(GMT+07:00) Bangkok, Thailand</dd></div><div><dt>ที่ตั้ง</dt><dd>● Bangkok, Thailand</dd></div><div><dt>ผู้ดูแลระบบ</dt><dd>♟ {user.displayName}</dd></div></dl>
+          <div className="system-stats page-summary"><p className="blue"><span>▤</span><b>{fmt(payload.dues.length)}</b><strong>Due ทั้งหมด</strong><small>รายการ</small></p><p className="purple"><span>◇</span><b>{fmt(partImages.length)}</b><strong>รูปชิ้นงาน</strong><small>รายการ</small></p></div>
+        </div>
+      </section>
+
+      <div className="settings-grid settings-feature-grid">
+        <section className="settings-block settings-option-card teal">
+          <header><span>▤</span><h3>ตั้งค่าการตัดยอด</h3><i>▰▱▱▱▰</i></header>
+          <div><Toggle keyName="partial" icon="◆" title="อนุญาตให้ตัดยอดตามช่อง" text="Tag ที่ยังไม่สามารถตัดยอดในรอบ Due ได้" /><Toggle keyName="confirm" icon="⟳" title="ยืนยันก่อนตัดยอดทุกครั้ง" text="แสดงข้อความเตือนและให้ตรวจสอบก่อนบันทึก" /></div>
+        </section>
+        <section className="settings-block settings-option-card violet">
+          <header><span>▣</span><h3>ตั้งค่าการสแกน</h3><i>▥▥▥</i></header>
+          <div><Toggle keyName="autoFocus" icon="▥" title="โฟกัสช่องสแกนอัตโนมัติ" text="เหมาะสำหรับใช้งานร่วมกับเครื่องยิง Tag" /><Toggle keyName="sound" icon="🔊" title="เสียงพูดแจ้งเตือนภาษาไทย" text="พูดผลสำเร็จ และอ่านสาเหตุเมื่อ Tag ผิดหรือจำนวนไม่พอ" /></div>
+        </section>
+      </div>
+
+      <section className="settings-block settings-display-block">
+        <header><span>▣</span><h3>รูปแบบการแสดงผล</h3><div>Simple Setting<br /><b>Greater Productivity</b></div></header>
+        <div className="settings-display-form">
+          <label><span><i>●</i> ภาษา</span><select><option>ภาษาไทย</option></select></label>
+          <label><span><i>◷</i> เขตเวลา</span><select><option>(GMT+07:00) Bangkok, Thailand</option></select></label>
+          <label><span><i>▦</i> รูปแบบวันที่</span><select><option>DD/MM/YYYY</option></select></label>
+          <label><span><i>◇</i> หน่วยเริ่มต้น</span><select><option>ชิ้น (PC)</option></select></label>
+        </div>
+        <div className="save-row"><button className="button primary settings-save-button" onClick={saveSettings}>▣ บันทึกการตั้งค่า</button></div>
+      </section>
+
+      {user.role === "admin" && <section className="settings-danger-strip"><span>◆</span><div><b>ล้างข้อมูลทดลอง</b><p>ลบ Tag Stock และประวัติการเข้า/ออกที่ทดลอง โดยไม่กระทบข้อมูล Part รูปชิ้นงาน แผน Due และผู้ใช้งานจริง</p></div><button className="button danger" disabled={clearingTestStock || stock.tags.length === 0} onClick={() => void clearTestStock()}>{clearingTestStock ? "กำลังล้างข้อมูล…" : `▧ ล้าง Stock ทดลอง ${fmt(stock.tags.length)} Tag`}</button></section>}
+      <footer className="settings-footer"><span>© 2026 Control Stock KIT. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
+    </div>;
+  }
+
+  function renderUsers() {
+    const active = systemUsers.filter((item) => item.active).length;
+    const productionUsers = systemUsers.filter((item) => item.role === "production").length;
+    const stockUsers = systemUsers.filter((item) => item.role === "stock").length;
+    const qcUsers = systemUsers.filter((item) => item.role === "qc").length;
+    const deliveryUsers = systemUsers.filter((item) => item.role === "delivery").length;
+    const needle = userSearch.trim().toLowerCase();
+    const visibleUsers = systemUsers.filter((item) => !needle || [item.employeeCode, item.displayName, item.email, item.role, ROLE_LABELS[item.role], ...(item.permissions || [])].join(" ").toLowerCase().includes(needle));
+    async function exportUsersExcel() {
+      try {
+        const xlsx = await import("xlsx");
+        const rows = [
+          ["รหัสพนักงาน", "ชื่อผู้ใช้งาน", "อีเมล", "บทบาท", "สิทธิ์หน้า", "สถานะ"],
+          ...visibleUsers.map((item) => [item.employeeCode, item.displayName, item.email || "", ROLE_LABELS[item.role] || item.role, (item.role === "admin" ? NAV.map((nav) => nav.label) : (item.permissions || []).map((key) => NAV.find((nav) => nav.key === key)?.label || STOCK_ACCESS_LABELS[key] || key)).join(", "), item.active ? "ใช้งานปกติ" : "ระงับ"]),
+        ];
+        const sheet = xlsx.utils.aoa_to_sheet(rows);
+        sheet["!cols"] = [16, 26, 30, 18, 70, 15].map((wch) => ({ wch }));
+        const workbook = xlsx.utils.book_new();
+        xlsx.utils.book_append_sheet(workbook, sheet, "ผู้ใช้งาน");
+        xlsx.writeFile(workbook, `KIT-users-${new Date().toISOString().slice(0, 10)}.xlsx`);
+        setNotice({ type: "success", text: `ส่งออกข้อมูลผู้ใช้งานแล้ว ${fmt(visibleUsers.length)} รายการ` });
+      } catch (caught) {
+        setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ส่งออกข้อมูลผู้ใช้งานไม่สำเร็จ" });
+      }
+    }
+    const stats = [
+      { tone: "blue", icon: "♟", label: "ผู้ใช้งานทั้งหมด", value: systemUsers.length, art: "♟" },
+      { tone: "green", icon: "✓", label: "ใช้งานปกติ", value: active, art: "▥" },
+      { tone: "purple", icon: "▤", label: "Production", value: productionUsers, art: "▦" },
+      { tone: "orange", icon: "◇", label: "Stock", value: stockUsers, art: "□" },
+      { tone: "pink", icon: "◈", label: "QC", value: qcUsers, art: "◆" },
+      { tone: "teal", icon: "▣", label: "Delivery", value: deliveryUsers, art: "▰" },
+    ];
+    return <div className="users-page-redesign">
+      <section className="users-overview-card">
+        <header><div><span>▥</span><div><h3>ภาพรวมผู้ใช้งาน</h3><p>จำนวนผู้ใช้งานในแต่ละหน่วยงาน</p></div></div><div className="users-overview-actions"><small>▦ อัปเดตล่าสุด<br />{new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date())}</small><button className="button primary" onClick={() => { setUserForm({ ...EMPTY_USER, permissions: [...EMPTY_USER.permissions] }); setUserEditorOpen(true); }}>＋ เพิ่มผู้ใช้งาน</button></div></header>
+        <div className="users-stat-grid page-summary">{stats.map((item) => <article className={`users-stat ${item.tone}`} key={item.label}><span>{item.icon}</span><div><small>{item.label}</small><b>{fmt(item.value)}</b><em>คน</em></div><i>{item.art}</i></article>)}</div>
+      </section>
+
+      <section className="users-list-card">
+        <header><div><span>♟</span><div><h3>ผู้ใช้งานระบบ</h3><p>จัดการบัญชีผู้ใช้งาน กำหนดสิทธิ์ และสถานะการใช้งาน</p></div></div><div className="users-list-tools"><label><span>⌕</span><input value={userSearch} onChange={(event) => setUserSearch(event.target.value)} placeholder="ค้นหาชื่อ, รหัส, อีเมล หรือบทบาท..." /></label><button className="button secondary" onClick={() => void loadUsers()}>↻ รีเฟรช</button><button className="button users-excel-button" onClick={() => void exportUsersExcel()}>▦ ส่งออก Excel</button></div></header>
+        {usersLoading ? <div className="loading-state"><span /><p>กำลังโหลดผู้ใช้งาน…</p></div> : visibleUsers.length ? <div className="table-wrap mobile-table-wrap users-table-wrap">
+          <table className="mobile-card-table users-modern-table"><thead><tr><th>รหัส / ผู้ใช้งาน</th><th>ชื่อ–นามสกุล / อีเมล</th><th>บทบาท</th><th>สิทธิ์หน้า</th><th>สถานะ</th><th>จัดการ</th></tr></thead>
+            <tbody>{visibleUsers.map((item) => <tr key={item.id}>
+              <td data-label="รหัส / ผู้ใช้งาน"><div className="user-cell"><span>{item.displayName.slice(0, 1).toUpperCase()}</span><div><b>{item.displayName}</b><small>{item.employeeCode}</small></div></div></td>
+              <td data-label="ชื่อ–นามสกุล / อีเมล"><b>{item.displayName}</b><small>{item.email || "—"}</small></td>
+              <td data-label="บทบาท"><span className={`role-pill role-${item.role}`}>{ROLE_LABELS[item.role] || item.role}</span></td>
+              <td data-label="สิทธิ์หน้า"><div className="permission-summary">{(item.role === "admin" ? NAV.map((nav) => nav.key) : item.permissions || []).map((key) => <span key={key}>{NAV.find((nav) => nav.key === key)?.label || STOCK_ACCESS_LABELS[key] || key}</span>)}</div></td>
+              <td data-label="สถานะ"><span className={`status ${item.active ? "completed" : "over"}`}>{item.active ? "ใช้งานปกติ" : "ระงับ"}</span></td>
+              <td data-label="จัดการ">{item.role === "admin" ? <span className="muted">บัญชีหลัก</span> : <div className="user-actions"><button className="tiny-button" onClick={() => editUser(item)}>✎ แก้ไข</button><button className="tiny-button" onClick={() => editUser(item)}>⚿ สิทธิ์ / PIN</button><button className={`tiny-button ${item.active ? "danger-outline" : ""}`} onClick={() => void toggleUser(item)}>{item.active ? "▧ ระงับ" : "✓ เปิดใช้"}</button></div>}</td>
+            </tr>)}</tbody>
+          </table>
+        </div> : <Empty title="ไม่พบผู้ใช้งาน" text="ลองเปลี่ยนคำค้นหา หรือกดเพิ่มผู้ใช้งานใหม่" />}
+        <footer><span>แสดง {fmt(visibleUsers.length)} จาก {fmt(systemUsers.length)} รายการ</span></footer>
+      </section>
+
+      <div className="users-security-grid">
+        <section><header><span>◇</span><div><h3>สิทธิ์รายบุคคล</h3><p>กำหนดสิทธิ์การเข้าถึงของแต่ละผู้ใช้งาน</p></div></header><div><span>⚙</span><p><b>Admin กำหนดสิทธิ์ทุกหน้า</b><small>บทบาทใช้ระบุทีมงาน ส่วนสิทธิ์หน้าแต่ละหน้าต้องเลือกให้ผู้ใช้แต่ละคนอย่างน้อย 1 หน้า</small></p></div></section>
+        <section><header><span>▣</span><div><h3>ความปลอดภัย</h3><p>ตั้งค่าความปลอดภัยของผู้ใช้งานและการเข้าถึงระบบ</p></div></header><div><span>◆</span><p><b>ป้องกันทั้งเมนูและ API</b><small>หน้าที่ไม่ได้รับสิทธิ์จะไม่แสดงในเมนู และระบบจะปฏิเสธการเปิดหรือเรียกใช้งานโดยตรง</small></p></div></section>
+      </div>
+      <footer className="settings-footer"><span>© 2026 Control Stock KIT. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; 🇹🇭</span></footer>
+    </div>;
+  }
+
+  const pageContent: Record<PageKey, () => ReactNode> = { "stock-all": () => <StockAllPage canDetails={user.role === "admin" || user.permissions.includes("stock-all-details")} canExport={user.role === "admin" || user.permissions.includes("stock-all-export")} />, overdue: renderOverdueWork, dashboard: renderDashboard, stock: renderStock, "manual-stock": renderManualStock, "stock-count": renderStockCount, forecast: renderForecast, parts: renderParts, tags: renderTags, plan: renderPlan, arrange: () => renderScan("arrange"), replacement: renderReplacement, verify: renderVerify, dispatch: () => renderScan("dispatch"), exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
+  const activeNav = (page === "overdue" ? { key: "overdue", label: "งานติดลบ / ค้างส่ง", icon: "!" } : NAV.find((item) => item.key === page)) || NAV.find((item) => item.key === firstAllowedPage) || NAV[0];
+
+  if (monitorMode) return <main className="overdue-monitor-shell">
+    {error && <div className="notice error">{error}</div>}
+    {renderOverdueWork()}
+    <OperationWarningPopup voiceEnabled={settings.sound}/>
+  </main>;
+
+  return <div onInvalidCapture={(event) => { event.preventDefault(); const field=event.target as HTMLInputElement; const label=field.closest("label")?.querySelector("span")?.textContent || field.getAttribute("aria-label") || "ข้อมูล"; reportOperationWarning({page,message:`${label}: ${field.validationMessage || "กรุณาตรวจสอบข้อมูล"}`}); }} className={`control-shell ${page === "stock-all" ? `stock-reference-shell ${stockMenuCollapsed ? "stock-sidebar-collapsed" : ""}` : ""}`}>
+    <aside className={`control-sidebar ${menuOpen ? "open" : ""}`}>
+      <button className="sidebar-close" onClick={() => setMenuOpen(false)}>×</button>
+      <div className="kit-logo">{page === "stock-all" ? <OverviewLogo/> : <b>KiT</b>}<span>CONTROL STOCK KIT</span></div>
+      <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{page === "stock-all" ? <OverviewIcon name={OVERVIEW_NAV_ICONS[item.key]}/> : item.icon}</span>{item.label}</button>)}</nav>
+      {page === "stock-all" && <OverviewFactory/>}
+      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>ต้องการความช่วยเหลือ?</b><button onClick={() => go("settings")}>◉ คู่มือและตั้งค่า</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>↪</span><b>ออกจากระบบ</b></a><div className="mini-brand"><b>KiT</b><span>Control Stock KIT<br />© 2026 · v2.23.0</span></div></div>
+    </aside>
+    {menuOpen && <button className="menu-backdrop" aria-label="ปิดเมนู" onClick={() => setMenuOpen(false)} />}
+    <main className="control-main">
+      <header className={`control-topbar settings-topbar ${page === "settings" || page === "users" || page === "history" || page === "reports" || page === "exports" ? "settings-banner-topbar" : ""} ${page === "users" ? "users-banner-topbar" : ""} ${page === "history" ? "history-banner-topbar" : ""} ${page === "reports" ? "reports-banner-topbar" : ""} ${page === "exports" ? "exports-banner-topbar" : ""}`}>
+        <button className="menu-button" aria-label="เปิด/ปิดเมนู" onClick={() => page === "stock-all" && window.innerWidth > 720 ? setStockMenuCollapsed(value=>!value) : setMenuOpen(true)}>{page === "stock-all" ? <OverviewIcon name="menu"/> : "☰"}</button>
+        {page === "stock-all" ? <div className="stock-reference-top-search"><OverviewIcon name="search"/><input type="search" aria-label="ค้นหา Stock จากแถบด้านบน" placeholder="ค้นหา Part No. / ชื่อชิ้นงาน / ลูกค้า / Job / Location ..." value={stockOverviewSearch} onChange={(event) => {setStockOverviewSearch(event.target.value);window.dispatchEvent(new CustomEvent("stock-overview-search", {detail:event.target.value}));}}/><kbd>Ctrl + K</kbd></div> : page === "settings" ? <div className="topbar-settings-banner">
+          <div className="settings-hero-title"><span>⚙</span><div><h2>ตั้งค่า</h2><p>หน้าหลัก <b>›</b> ตั้งค่า</p></div></div>
+          <div className="settings-hero-copy"><b>ตั้งค่าระบบให้ทำงานได้เต็มประสิทธิภาพ</b><span>เพื่อการส่งมอบที่ตรงเวลา</span><div><em>🚀 เร็วขึ้น</em><em>◎ แม่นยำ</em><em>◆ เชื่อถือได้</em></div></div>
+          <div className="settings-hero-art"><strong>Control Today</strong><strong>Deliver Tomorrow</strong></div>
+        </div> : page === "users" ? <div className="topbar-settings-banner topbar-users-banner">
+          <div className="users-hero-title"><span>♟</span><div><h2>ผู้ใช้งาน</h2><p>หน้าหลัก <b>›</b> ผู้ใช้งาน</p></div></div>
+          <div className="users-hero-copy"><b>People Drive</b><span>Better Operations</span></div>
+          <div className="users-hero-art"><strong>“ทีมที่ดี<br />สร้างงานที่ดีขึ้นได้เสมอ”</strong></div>
+        </div> : page === "history" ? <div className="topbar-settings-banner topbar-history-banner">
+          <div className="history-hero-title"><span>◷</span><div><h2>ประวัติ</h2><p>หน้าหลัก <b>›</b> ประวัติ</p></div></div>
+          <div className="history-hero-copy"><b>ตรวจสอบทุกการเคลื่อนไหว</b><span>ย้อนหลังได้อย่างชัดเจน</span></div>
+          <div className="history-hero-art"><strong>Track Today</strong><strong>Deliver Tomorrow</strong></div>
+        </div> : page === "reports" ? <div className="topbar-settings-banner topbar-reports-banner">
+          <div className="reports-hero-title"><span>▥</span><div><h2>รายงาน</h2><p>หน้าหลัก <b>›</b> รายงาน</p></div></div>
+          <div className="reports-hero-copy"><b>ข้อมูลชัดเจน</b><span>ช่วยให้การตัดสินใจแม่นยำขึ้น</span></div>
+          <div className="reports-hero-art"><strong>Data Today</strong><strong>Better Tomorrow</strong></div>
+        </div> : page === "exports" ? <div className="topbar-settings-banner topbar-exports-banner">
+          <div className="exports-hero-title"><span>▰</span><div><h2>รายการส่งออก</h2><p>หน้าหลัก <b>›</b> รายการส่งออก</p></div></div>
+          <div className="exports-hero-copy"><b>ควบคุมการส่งออก</b><span>ให้ถูกต้อง ตรงเวลา และตรวจสอบได้</span></div>
+          <div className="exports-hero-art"><strong>Deliver Right</strong><strong>Move Forward</strong></div>
+        </div> : <div><h1>{activeNav.label}</h1><p>หน้าหลัก <span>›</span> {PAGE_SUBTITLE[page]}</p></div>}
+        <div className="top-user"><button type="button" className={`notification overdue-sound-shortcut ${overdueSoundEnabled ? "enabled" : ""}`} onClick={() => void toggleOverdueSound()} aria-label={overdueSoundEnabled ? "ปิดเสียงแจ้งเตือนงานเกิน Due" : "เปิดเสียงแจ้งเตือนงานเกิน Due"} aria-pressed={overdueSoundEnabled}>{overdueSoundEnabled ? "🔔" : "🔕"}</button><button className="notification" onClick={showOverduePlan} disabled={!overdueDues.length || !allowedPages.has("plan")} aria-label={`งานเกินดิวจัดส่ง ${overdueDues.length} รายการ`}>♧<i>{fmt(overdueDues.length)}</i></button><span className="user-avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div><b>{user.displayName}</b><small>{ROLE_LABELS[user.role] || user.role}</small></div><a href={signOutPath} onClick={signOut}>ออกจากระบบ</a></div>
+      </header>
+      <div className="control-content">
+        <VoiceAlertControl enabled={settings.sound} onEnabledChange={changeVoiceEnabled}/>
+        {EDITABLE_PAGE_KEYS.includes(page as EditablePageKey) && !canEditPage(page as EditablePageKey) && <div className="read-only-permission-banner"><span>◉</span><div><b>สิทธิ์ดูข้อมูลเท่านั้น</b> — บัญชีนี้ค้นหาและตรวจสอบข้อมูลได้ แต่ไม่สามารถเพิ่มหรือแก้ไขรายการในหน้านี้</div></div>}
+        {notice && <div className={`toast ${notice.type} auto-dismiss`}><span>{notice.type === "success" ? "✓" : "!"}</span><p>{notice.text}</p><button onClick={() => setNotice(null)}>×</button></div>}
+        {error && <div className="toast error"><span>!</span><p>{error}</p><button onClick={() => void loadDue()}>ลองใหม่</button></div>}
+        {loading && page !== "overdue" ? <div className="loading-state"><span /><p>กำลังโหลดข้อมูล Due…</p></div> : pageContent[page]()}
+      </div>
+    </main>
+    <nav className="mobile-bottom-nav" aria-label="เมนูมือถือ">
+      {NAV.filter((item) => allowedPages.has(item.key)).slice(0, 4).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span><small>{item.label.replace("แผนส่งงาน (Due)", "แผนงาน").replace("ตรวจและขายออก", "ขายออก")}</small></button>)}
+      <button onClick={() => setMenuOpen(true)}><span>☰</span><small>เมนู</small></button>
+      <a className="bottom-logout" href={signOutPath} onClick={signOut}><span>↪</span><small>ออกระบบ</small></a>
+    </nav>
+    {arrangeWarning && <div className="modal-backdrop" role="alertdialog" aria-modal="true" aria-labelledby="arrange-warning-title" aria-describedby="arrange-warning-message"><section className="arrange-warning-modal" onKeyDown={(event) => { if (event.key === "Tab") event.preventDefault(); }}>
+      <header><span>!</span><h3 id="arrange-warning-title">แจ้งเตือนจัดงาน</h3></header>
+      <p id="arrange-warning-message">{arrangeWarning.message}</p>
+      <dl><div><dt>วันที่ส่งงาน</dt><dd>{formatDate(arrangeWarning.date) || "ยังไม่เลือก"}</dd></div><div><dt>รอบส่งงาน</dt><dd>{arrangeWarning.time || "ทุกรอบ"}</dd></div><div><dt>FAC</dt><dd>{arrangeWarning.fact || "ทุก FAC"}</dd></div></dl>
+      <small>ระบบคงวันที่ รอบ และ FAC ที่เลือกไว้ สามารถเปลี่ยนตัวเลือกก่อนสแกนต่อได้</small>
+      <button type="button" className="button primary full" autoFocus onClick={() => { setArrangeWarning(null); window.setTimeout(() => tagInput.current?.focus(), 0); }}>รับทราบ</button>
+    </section></div>}
+    {replacementPreview && <div className="modal-backdrop replacement-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="replacement-confirm-title"><div className="replacement-confirm-modal">
+      <header><div><span>↺</span><div><small>ตรวจพบ KIT Stock Tag</small><h3 id="replacement-confirm-title">ตรวจสอบก่อนเบิกงานทดแทน</h3></div></div><button type="button" onClick={() => { setReplacementPreview(null); setReplacementTag(""); setReplacementQty(""); }} aria-label="ปิด">×</button></header>
+      <div className="replacement-confirm-content">
+        <section className="replacement-confirm-photo dispatch-confirm-images"><PartImagePair materialCode={replacementPreview.request.materialCode} masterVersion={partImages.find((item) => item.materialCode === replacementPreview.request.materialCode)?.updatedAt} actualVersion={partActualImages.find((item) => item.materialCode === replacementPreview.request.materialCode)?.updatedAt} /></section>
+        <section className="replacement-confirm-info">
+          <div className="dispatch-confirm-part"><small>PART / MATERIAL</small><b>{replacementPreview.request.materialCode}</b><p>{replacementPreview.request.partName || replacementPreview.tag.partName || "ไม่ระบุชื่อชิ้นงาน"}</p></div>
+          <div className="replacement-confirm-details"><div><small>ใบขอ QC</small><b>{replacementPreview.request.requestNo}</b></div><div><small>ลูกค้า / Site</small><b>{replacementPreview.request.customer || "—"}</b></div><div><small>KIT Stock Tag</small><b>{replacementPreview.tag.tagId}</b></div><div><small>Job / Location</small><b>{replacementPreview.tag.jobNo || "—"} / {replacementPreview.tag.location || "—"}</b></div></div>
+          <div className="replacement-qty-compare"><div><small>QC ขอเบิก</small><b>{fmt(replacementPreview.request.requestedQty)}</b><em>ชิ้น</em></div><div><small>เบิกแล้ว</small><b>{fmt(replacementPreview.request.issuedQty)}</b><em>ชิ้น</em></div><label><small>เบิกครั้งนี้</small><input type="number" inputMode="numeric" min={1} max={Math.min(replacementPreview.request.remainingQty, replacementPreview.tag.availableQty)} value={replacementQty} onChange={(event) => setReplacementQty(event.target.value.replace(/[^0-9]/g, ""))} /><em>แก้ไขจำนวนได้</em></label><div><small>คงเหลือหลังเบิก</small><b>{fmt(Math.max(replacementPreview.request.remainingQty - Number(replacementQty || 0), 0))}</b><em>ชิ้น</em></div></div>
+          <p className="replacement-stock-note">Stock Tag นี้พร้อมใช้ {fmt(replacementPreview.tag.availableQty)} ชิ้น · ระบบจะตัด Stock เมื่อยืนยัน</p>
+        </section>
+      </div>
+      <footer><button type="button" className="button secondary" onClick={() => { setReplacementPreview(null); setReplacementTag(""); setReplacementQty(""); }}>ยกเลิก / สแกนใหม่</button><button type="button" className="button confirm-replacement-button" disabled={replacementSaving || !Number(replacementQty) || Number(replacementQty) > replacementPreview.request.remainingQty || Number(replacementQty) > replacementPreview.tag.availableQty} onClick={() => void confirmReplacementIssue()}>{replacementSaving ? "กำลังเบิกงาน…" : "✓ ยืนยันเบิกและตัดยอด"}</button></footer>
+    </div></div>}
+    {stockCountPreview && stockCountConfirmOpen && <div className="modal-backdrop stock-count-backdrop" role="dialog" aria-modal="true" aria-labelledby="stock-count-title"><div className="stock-count-modal">
+      <header><div><span>≋</span><div><small>ตรวจนับ Stock สิ้นเดือนทีละ Tag</small><h3 id="stock-count-title">ยืนยันการปรับยอด Tag</h3></div></div><button type="button" onClick={() => setStockCountConfirmOpen(false)} aria-label="ปิด">×</button></header>
+      <div className="stock-count-content">
+        <section><small>KIT STOCK TAG</small><h4>{stockCountPreview.tagId}</h4><p>{stockCountPreview.materialCode} · {stockCountPreview.partName} · Job {stockCountPreview.jobNo}</p></section>
+        <div className="stock-count-compare">
+          <article><small>ควรอยู่ในพื้นที่ Stock</small><b>{fmt(stockCountPreview.stockAreaSystemQty)}</b><em>ชิ้น</em></article><span>→</span>
+          <article><small>นับได้ในพื้นที่ Stock</small><b>{fmt(stockCountPreview.stockAreaCountedQty)}</b><em>ชิ้น</em></article>
+          <article className={stockCountPreview.difference < 0 ? "negative" : stockCountPreview.difference > 0 ? "positive" : "equal"}><small>ผลต่าง Stock</small><b>{stockCountPreview.difference > 0 ? "+" : ""}{fmt(stockCountPreview.difference)}</b><em>ชิ้น</em></article>
+        </div>
+        <div className="stock-count-safety"><b>ยอดรวมใหม่ของ Tag = {fmt(stockCountPreview.stockAreaCountedQty)} ใน Stock + {fmt(stockCountPreview.reservedQty)} จัดงาน/จอง = {fmt(stockCountPreview.newTotalQty)} ชิ้น</b><span>ยอด Stock รวมทุก Tag {fmt(stockCountPreview.materialTotalQty)} → {fmt(stockCountPreview.materialTotalAfter)} ชิ้น</span></div>
+        <p className="stock-count-reason"><b>สาเหตุ:</b> {stockCountForm.reason}</p>
+      </div>
+      <footer><button type="button" className="button secondary" onClick={() => setStockCountConfirmOpen(false)}>กลับไปแก้ไข</button><button type="button" className="button confirm-stock-count-button" disabled={stockManagementSaving || !stockCountForm.reason.trim()} onClick={() => void confirmStockCountAdjustment()}>{stockManagementSaving ? "กำลังบันทึก…" : "✓ ยืนยันปรับยอด Tag และ Stock"}</button></footer>
+    </div></div>}
+    {stockReceivePreview && <div className="modal-backdrop dispatch-confirm-backdrop stock-receive-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="stock-receive-confirm-title"><div className="dispatch-confirm-modal stock-receive-confirm-modal">
+      <header><div><span>✓</span><div><small>ตรวจพบ KIT Stock Tag</small><h3 id="stock-receive-confirm-title">{stockReceivePreview.pallet ? "ตรวจสอบก่อนรับเข้าทั้งพาเลท" : "ตรวจสอบก่อนรับเข้า Stock"}</h3></div></div><button type="button" onClick={() => { setStockReceivePreview(null); setStockReceiveQty(""); setStockReceiveProductionDate(""); setStockScan(""); }} aria-label="ปิด">×</button></header>
+      <div className="dispatch-confirm-content">
+        <section className="dispatch-confirm-images"><PartImagePair materialCode={stockReceivePreview.tag.materialCode} masterVersion={partImages.find((item) => item.materialCode === stockReceivePreview.tag.materialCode)?.updatedAt} actualVersion={partActualImages.find((item) => item.materialCode === stockReceivePreview.tag.materialCode)?.updatedAt} /></section>
+        <section className="dispatch-confirm-info">
+          <div className="dispatch-confirm-part"><small>PART / MATERIAL</small><b>{stockReceivePreview.tag.materialCode}</b><p>{stockReceivePreview.tag.partName || stockReceivePreview.master.partName || "ไม่ระบุชื่อชิ้นงาน"}</p></div>
+          <div className="dispatch-confirm-details"><div><small>Tag ที่ใช้สแกน</small><b>{stockReceivePreview.tag.tagId}</b></div><div><small>Job</small><b>{stockReceivePreview.tag.jobNo || "—"}</b></div><div><small>ลูกค้า</small><b>{stockReceivePreview.tag.customer || "—"}</b></div><div><small>ชั้นจัดเก็บที่สแกน</small><b>{stockReceivePreview.selectedLocation}</b></div></div>
+          <div className="stock-receive-qty-box">
+            <div><small>{stockReceivePreview.pallet ? "จำนวนกล่องในพาเลท" : "จำนวนตาม Tag"}</small><b>{fmt(stockReceivePreview.pallet?.tagCount || stockReceivePreview.tag.qty)}</b><em>{stockReceivePreview.pallet ? "Tag" : "ชิ้น"}</em></div>
+            {stockReceivePreview.pallet ? <div><small>ยอดรับเข้ารวม</small><b>{fmt(stockReceivePreview.pallet.totalQty)}</b><em>ชิ้น</em></div> : <label><small>จำนวนรับเข้าจริง</small><input type="number" inputMode="numeric" min={0} max={stockReceivePreview.tag.qty} step={1} value={stockReceiveQty} onChange={(event) => setStockReceiveQty(event.target.value.replace(/[^0-9]/g, ""))} /><em>แก้ไขได้เมื่อมีงานเสีย</em></label>}
+            {!stockReceivePreview.pallet && <div className={Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0) > 0 ? "has-ng" : ""}><small>จำนวน NG</small><b>{fmt(Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0))}</b><em>ชิ้น</em></div>}
+            <label className="production-date"><small>วันที่ผลิต</small><input type="date" value={stockReceiveProductionDate} onChange={(event) => setStockReceiveProductionDate(event.target.value)} required /><em>ค่าเริ่มต้นคือวันที่สแกนรับเข้า · แก้ไขได้</em></label>
+          </div>
+          {stockReceivePreview.pallet ? <p className="stock-receive-ng-note">ระบบจะรับ Tag ที่ยังรอรับเข้าของ Part และ Job นี้ทั้งหมด {fmt(stockReceivePreview.pallet.tagCount)} ใบพร้อมกัน</p> : Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0) > 0 && <p className="stock-receive-ng-note">! ระบบจะเพิ่มเข้า Stock เฉพาะ {fmt(Number(stockReceiveQty || 0))} ชิ้น และบันทึก NG {fmt(Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0))} ชิ้น</p>}
+        </section>
+      </div>
+      <footer><button type="button" className="button secondary" onClick={() => { setStockReceivePreview(null); setStockReceiveQty(""); setStockReceiveProductionDate(""); setStockScan(""); }}>ยกเลิก / สแกนใหม่</button><button type="button" className="button confirm-dispatch-button stock-confirm-receive-button" disabled={stockSaving || stockReceiveQty === "" || !stockReceiveProductionDate || Number(stockReceiveQty) < 0 || Number(stockReceiveQty) > Number(stockReceivePreview.pallet?.totalQty || stockReceivePreview.tag.qty)} onClick={() => void confirmReceiveStockTag()}>{stockSaving ? "กำลังรับเข้า…" : stockReceivePreview.pallet ? `✓ ยืนยันรับทั้งพาเลท ${stockReceivePreview.pallet.tagCount} Tag` : "✓ ยืนยันรับเข้า Stock"}</button></footer>
+    </div></div>}
+    {arrangeConfirmation && <div className="modal-backdrop dispatch-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="arrange-confirm-title" onKeyDown={(event) => { if (event.key === "Escape" && !checkingTag) { setArrangeConfirmation(null); tagInput.current?.focus(); } if (event.key === "Tab") { const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("button:not(:disabled),input:not(:disabled)")); const first = buttons[0], last = buttons[buttons.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); } } }}><div className="dispatch-confirm-modal">
+      <header><div><span>✓</span><div><small>ตรวจพบ KIT Stock Tag</small><h3 id="arrange-confirm-title">ตรวจสอบงานก่อนจัดงาน</h3></div></div><button type="button" disabled={checkingTag} onClick={() => { setArrangeConfirmation(null); tagInput.current?.focus(); }} aria-label="ปิด">×</button></header>
+      <div className="dispatch-confirm-content">
+        <section className="dispatch-confirm-images"><PartImagePair materialCode={arrangeConfirmation.tag.materialCode} masterVersion={partImages.find(item => item.materialCode === arrangeConfirmation.tag.materialCode)?.updatedAt} actualVersion={partActualImages.find(item => item.materialCode === arrangeConfirmation.tag.materialCode)?.updatedAt}/></section>
+        <section className="dispatch-confirm-info">
+          <div className="dispatch-confirm-part"><small>PART / MATERIAL</small><b>{arrangeConfirmation.tag.materialCode}</b><p>{arrangeConfirmation.due.materialDescription || "ไม่ระบุชื่อชิ้นงาน"}</p></div>
+          <div className="dispatch-confirm-details"><div><small>KIT Stock Tag</small><b>{arrangeConfirmation.tag.tagId}</b></div><div><small>Job</small><b>{arrangeConfirmation.tag.jobNo}</b></div><div><small>รอบ / FAC</small><b>{arrangeConfirmation.due.deliveryTime} / {arrangeConfirmation.due.fact}</b></div><div><small>วันที่ส่ง / DO</small><b>{formatDate(arrangeConfirmation.due.deliveryDate)} / {arrangeConfirmation.due.doNo}</b></div></div>
+          <div className="dispatch-confirm-qty"><div><small>Tag พร้อมจัด</small><b>{fmt(arrangeConfirmation.tagAvailableQty)}</b><em>ชิ้น</em></div><div><small>Due เหลือจัด</small><b>{fmt(arrangeConfirmation.dueOpenQty)}</b><em>ชิ้น</em></div><label className="current" style={{padding:16}}><small>จัดครั้งนี้ (แก้ไขได้)</small><input aria-label="จำนวนจัดงานครั้งนี้" type="number" inputMode="numeric" min="1" step="1" max={Math.min(arrangeConfirmation.tagAvailableQty,arrangeConfirmation.dueOpenQty)} value={arrangeConfirmQty} disabled={checkingTag} onChange={event=>setArrangeConfirmQty(event.target.value)} style={{width:"100%",fontSize:28,fontWeight:700,textAlign:"center"}}/><em>ชิ้น</em></label><div><small>Due เหลือหลังจัด</small><b>{fmt(Math.max(arrangeConfirmation.dueOpenQty-(Number(arrangeConfirmQty)||0),0))}</b><em>ชิ้น</em></div></div>
+          <p className="dispatch-staged-note">แก้จำนวนจัดครั้งนี้ได้ 1–{fmt(Math.min(arrangeConfirmation.tagAvailableQty,arrangeConfirmation.dueOpenQty))} ชิ้น · Stock พร้อมใช้หลังจัด {fmt(Math.max(arrangeConfirmation.tagAvailableQty-(Number(arrangeConfirmQty)||0),0))} ชิ้น · คงเหลือรวมยังเท่าเดิม</p>
+          {!validArrangementQuantity(arrangeConfirmQty,Math.min(arrangeConfirmation.tagAvailableQty,arrangeConfirmation.dueOpenQty))&&<p role="alert">กรุณาระบุจำนวนเต็ม 1–{fmt(Math.min(arrangeConfirmation.tagAvailableQty,arrangeConfirmation.dueOpenQty))} ชิ้นก่อนยืนยัน</p>}
+        </section>
+      </div>
+      <footer><button type="button" className="button secondary" disabled={checkingTag} onClick={() => { setArrangeConfirmation(null); tagInput.current?.focus(); }}>ยกเลิก / สแกนใหม่</button><button ref={arrangeConfirmButtonRef} type="button" className="button confirm-dispatch-button" disabled={checkingTag || !validArrangementQuantity(arrangeConfirmQty,Math.min(arrangeConfirmation.tagAvailableQty,arrangeConfirmation.dueOpenQty))} onClick={() => void stageStockTag(arrangeConfirmation.rawPayload, {...arrangeConfirmation,pickedQty:Number(arrangeConfirmQty)})}>{checkingTag ? "กำลังจัดงาน…" : "✓ ยืนยันจัดงาน"}</button></footer>
+    </div></div>}
+    {dispatchConfirmation && <div className="modal-backdrop dispatch-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="dispatch-confirm-title"><div className="dispatch-confirm-modal">
+      <header><div><span>✓</span><div><small>ตรวจพบ Tag ลูกค้า</small><h3 id="dispatch-confirm-title">ตรวจสอบงานก่อนขายออก</h3></div></div><button type="button" onClick={() => setDispatchConfirmation(null)} aria-label="ปิด">×</button></header>
+      <div className="dispatch-confirm-content">
+        <section className="dispatch-confirm-images"><PartImagePair materialCode={dispatchConfirmation.tag?.materialCode || dispatchConfirmation.master?.materialCode || ""} masterVersion={partImages.find((item) => item.materialCode === (dispatchConfirmation.tag?.materialCode || dispatchConfirmation.master?.materialCode))?.updatedAt} actualVersion={partActualImages.find((item) => item.materialCode === (dispatchConfirmation.tag?.materialCode || dispatchConfirmation.master?.materialCode))?.updatedAt} /></section>
+        <section className="dispatch-confirm-info">
+          <div className="dispatch-confirm-part"><small>PART / MATERIAL</small><b>{dispatchConfirmation.tag?.materialCode || dispatchConfirmation.master?.materialCode || "—"}</b><p>{dispatchConfirmation.master?.partName || dispatchConfirmation.due?.materialDescription || "ไม่ระบุชื่อชิ้นงาน"}</p></div>
+          <div className="dispatch-confirm-details"><div><small>KIT Tag</small><b>{dispatchKitSelection?.stockTagCode || "—"}</b></div><div><small>Tag ลูกค้า</small><b>{dispatchConfirmation.tag?.tagId || "—"}</b></div><div><small>FAC / Line</small><b>{dispatchConfirmation.due ? dispatchConfirmation.due.fact + " / " + (dispatchConfirmation.due.line || "—") : "—"}</b></div><div><small>DO / Seq</small><b>{dispatchConfirmation.due ? dispatchConfirmation.due.doNo + " / " + dispatchConfirmation.due.seq : "—"}</b></div><div><small>กำหนดส่ง</small><b>{dispatchConfirmation.due ? formatDate(dispatchConfirmation.due.deliveryDate) + " " + dispatchConfirmation.due.deliveryTime : "—"}</b></div><div><small>Job / จำนวน KIT</small><b>{dispatchKitSelection ? `${dispatchKitSelection.jobNo || "—"} / ${fmt(dispatchKitSelection.waitingQty)} ชิ้น` : "—"}</b></div></div>
+          <div className="dispatch-confirm-qty"><div><small>Due ทั้งหมด</small><b>{fmt(dispatchConfirmation.due?.reqQty || 0)}</b><em>ชิ้น</em></div><div><small>ขายออกแล้ว</small><b>{fmt(dispatchConfirmation.due?.alreadyQty || 0)}</b><em>ชิ้น</em></div><div className="current"><small>ขายครั้งนี้</small><b>{fmt(dispatchConfirmation.tag?.qty || 0)}</b><em>{dispatchConfirmation.tag?.unit || "ชิ้น"}</em></div><div><small>คงเหลือหลังขาย</small><b>{fmt(dispatchConfirmation.due?.remainingAfter || 0)}</b><em>ชิ้น</em></div></div>
+          {dispatchConfirmation.stagedAvail !== undefined && <p className="dispatch-staged-note">งานที่จัดรอขายไว้ {fmt(dispatchConfirmation.stagedAvail)} ชิ้น</p>}
+        </section>
+      </div>
+      {(dispatchConfirmation.verdict === "ready" || dispatchConfirmation.verdict === "ready_noimg") ? <footer><button type="button" className="button secondary" onClick={() => { setDispatchConfirmation(null); setRawTag(""); }}>ยกเลิก / สแกน Tag ลูกค้าใหม่</button><button type="button" className="button confirm-dispatch-button" disabled={checkingTag} onClick={() => void confirmDispatch()}>{checkingTag ? "กำลังขายออก…" : "✓ ยืนยันขายออกและตัดยอด"}</button></footer> : <footer className="dispatch-confirm-blocked"><p>ไม่สามารถขายออกได้: {dispatchConfirmation.message || "ข้อมูลไม่พร้อมขายออก"}</p><button type="button" className="button secondary" onClick={() => { setDispatchConfirmation(null); setRawTag(""); window.setTimeout(() => tagInput.current?.focus(), 50); }}>เก็บ KIT Tag / สแกนลูกค้าใหม่</button><button type="button" className="button secondary" onClick={() => { setDispatchConfirmation(null); setDispatchKitSelection(null); setRawTag(""); window.setTimeout(() => tagInput.current?.focus(), 50); }}>ล้างทั้งคู่ / เริ่มใหม่</button></footer>}
+    </div></div>}
+    {jobQtyAdjustment && <div className="modal-backdrop job-qty-adjust-backdrop" role="dialog" aria-modal="true" aria-labelledby="job-qty-adjust-title"><section className="job-qty-adjust-modal">
+      <header><div><span>±</span><div><small>ก่อนปิดรับเข้า Job</small><h3 id="job-qty-adjust-title">ปรับจำนวนผลิตจริง</h3></div></div><button type="button" disabled={jobQtySaving} onClick={closeJobQuantityAdjustment} aria-label="ปิด">×</button></header>
+      <div className="job-qty-adjust-content">
+        <section className="job-qty-adjust-job"><div><small>JOB</small><b>{jobQtyAdjustment.jobNo}</b></div><div><small>PART</small><b>{jobQtyAdjustment.materialCode}</b><span>{jobQtyAdjustment.partName}</span></div></section>
+        {!jobQtyPreview && !jobQtyAdjusted && <form id="job-qty-adjust-form" onSubmit={(event) => void previewJobQuantity(event)}>
+          <div className="job-qty-current"><small>จำนวน Tag ปัจจุบัน</small><b>{fmt(jobQtyAdjustment.currentQty)}</b><em>ชิ้น</em></div>
+          <label><span>จำนวนผลิตจริงทั้งหมด *</span><input type="number" min="0" step="1" inputMode="numeric" value={jobQtyTarget} onChange={(event) => setJobQtyTarget(event.target.value)} required /><small>กรอกยอดรวมที่ผลิตได้จริง ไม่ใช่จำนวนใบ Tag</small></label>
+          <label><span>สาเหตุ *</span><textarea value={jobQtyReason} onChange={(event) => setJobQtyReason(event.target.value)} maxLength={300} placeholder="เช่น ผลิตเกินแผน / ผลิตไม่ครบตาม Job" required /></label>
+        </form>}
+        {jobQtyPreview && <>
+          <div className="job-qty-compare"><article><small>Tag ปัจจุบัน</small><b>{fmt(jobQtyPreview.currentQty)}</b></article><span>→</span><article><small>ผลิตจริง</small><b>{fmt(jobQtyPreview.targetQty)}</b></article><article className={jobQtyPreview.difference > 0 ? "positive" : "negative"}><small>ผลต่าง</small><b>{jobQtyPreview.difference > 0 ? "+" : ""}{fmt(jobQtyPreview.difference)}</b></article></div>
+          <div className="job-qty-safety"><span>ยอดที่รับเข้า/นำไปใช้งานแล้ว <b>{fmt(jobQtyPreview.lockedQty)}</b> ชิ้น — ระบบจะไม่แก้ไข</span><span>ยกเลิก Tag เดิม <b>{fmt(jobQtyPreview.cancelledTags.length)}</b> ใบ / สร้าง Tag ใหม่ <b>{fmt(jobQtyPreview.newTagQtys.length)}</b> ใบ</span>{jobQtyPreview.difference > 0 && jobQtyPreview.cancelledTags.length > 0 && <span>ระบบนำ Tag เศษที่ยังไม่รับเข้ามารวมกับยอดเพิ่ม แล้วแบ่งใหม่ตาม Packing Qty — กรุณาทำลาย Tag ใบเก่า</span>}</div>
+          {jobQtyPreview.cancelledTags.length > 0 && <section className="job-qty-tag-list cancelled"><b>Tag ที่จะยกเลิก</b>{jobQtyPreview.cancelledTags.map((tag) => <span key={tag.id}><code>{tag.tagId}</code><em>{fmt(tag.qty)} ชิ้น</em></span>)}</section>}
+          {jobQtyPreview.newTagQtys.length > 0 && <section className="job-qty-tag-list created"><b>Tag ใหม่ที่จะสร้าง</b>{jobQtyPreview.newTagQtys.map((qty, index) => <span key={index}><code>ใบใหม่ {index + 1}</code><em>{fmt(qty)} ชิ้น</em></span>)}</section>}
+          <p className="job-qty-reason"><b>สาเหตุ:</b> {jobQtyReason}</p>
+          {jobQtyAdjusted && <div className="job-qty-success"><b>✓ ปรับจำนวนผลิตจริงเรียบร้อย</b><span>{jobQtyCreatedTags.length ? `สร้าง Tag ใหม่ ${fmt(jobQtyCreatedTags.length)} ใบ กรุณาพิมพ์และนำไปใช้แทน` : "ไม่มี Tag ใหม่ที่ต้องพิมพ์"}</span></div>}
+        </>}
+      </div>
+      <footer>{!jobQtyPreview && !jobQtyAdjusted ? <><button type="button" className="button secondary" onClick={closeJobQuantityAdjustment}>ยกเลิก</button><button type="submit" form="job-qty-adjust-form" className="button primary" disabled={jobQtySaving}>{jobQtySaving ? "กำลังตรวจสอบ…" : "ตรวจสอบ Tag ที่จะเปลี่ยน"}</button></> : jobQtyAdjusted ? <><button type="button" className="button secondary" onClick={closeJobQuantityAdjustment}>ปิด</button>{jobQtyCreatedTags.length > 0 && <button type="button" className="button primary" onClick={() => void printStockTags(jobQtyCreatedTags)}>▤ พิมพ์ Tag ใหม่</button>}</> : <><button type="button" className="button secondary" disabled={jobQtySaving} onClick={() => setJobQtyPreview(null)}>กลับไปแก้ไข</button><button type="button" className="button primary" disabled={jobQtySaving} onClick={() => void confirmJobQuantityAdjustment()}>{jobQtySaving ? "กำลังบันทึก…" : "✓ ยืนยันปรับจำนวนผลิตจริง"}</button></>}</footer>
+    </section></div>}
+    {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>{cameraPurpose === "stock" ? stockLocation ? `สแกน KIT Tag รับเข้าชั้น ${stockLocation.code}` : "สแกน QR หน้าชั้นจัดเก็บ" : cameraPurpose === "stock-count" ? "สแกน Tag ตรวจนับสิ้นเดือน" : page === "dispatch" && dispatchKitSelection ? "สแกน QR Tag ลูกค้า (โหมดละเอียด)" : "สแกน Tag ด้วยกล้อง"}</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className={`camera-view ${page === "dispatch" && dispatchKitSelection ? "customer-qr-camera" : ""}`}><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div>{page === "dispatch" && dispatchKitSelection ? <p className="camera-customer-hint"><b>นำเฉพาะช่อง QR เข้าในกรอบสีเขียว</b><span>ไม่ต้องให้ป้ายทั้งใบอยู่ในภาพ · ถือให้นิ่งประมาณ 1 วินาที</span></p> : <p className="camera-format-hint">รองรับ QR · Data Matrix · Code 128 · Code 39</p>}{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
+    {splitTagRequest&&<SplitTagPopup {...splitTagRequest} page={page} onClose={closeSplitTag}/>}
+    <OperationWarningPopup voiceEnabled={settings.sound}/>
+    {userEditorOpen && <div className="modal-backdrop"><form className="user-modal permission-modal" onSubmit={saveUser}>
+      <header><div><h3>{userForm.id ? "แก้ไขผู้ใช้งานและสิทธิ์" : "เพิ่มผู้ใช้งาน"}</h3><p>เลือกบทบาทและกำหนดหน้าที่แต่ละคนสามารถเปิดใช้งานได้</p></div><button type="button" onClick={() => setUserEditorOpen(false)}>×</button></header>
+      <div className="user-form-grid">
+        <label><span>รหัสพนักงาน *</span><input value={userForm.employeeCode} onChange={(e) => setUserForm((current) => ({ ...current, employeeCode: e.target.value.toUpperCase() }))} placeholder="เช่น DISP001" required /></label>
+        <label><span>ชื่อผู้ใช้งาน *</span><input value={userForm.displayName} onChange={(e) => setUserForm((current) => ({ ...current, displayName: e.target.value }))} placeholder="ชื่อ-นามสกุล" required /></label>
+        <label><span>บทบาท *</span><select value={userForm.role} onChange={(e) => { const role = e.target.value as UserRole; setUserForm((current) => ({ ...current, role })); }}><option value="production">Production</option><option value="stock">Stock</option><option value="qc">QC</option><option value="delivery">Delivery</option>{(userForm.role === "dispatcher" || userForm.role === "inspector") && <option value={userForm.role}>{ROLE_LABELS[userForm.role]}</option>}</select></label>
+        <label><span>{userForm.id ? "ตั้ง PIN ใหม่ (เว้นว่างหากไม่เปลี่ยน)" : "PIN 6 หลัก *"}</span><input type="password" inputMode="numeric" maxLength={6} pattern="[0-9]{6}" value={userForm.pin} onChange={(e) => setUserForm((current) => ({ ...current, pin: e.target.value.replace(/\D/g, "") }))} required={!userForm.id} placeholder="••••••" /></label>
+        <label className="wide"><span>อีเมล (ไม่บังคับ)</span><input type="email" value={userForm.email} onChange={(e) => setUserForm((current) => ({ ...current, email: e.target.value }))} /></label>
+      </div>
+      <section className="individual-permissions"><div className="permission-title"><div><b>สิทธิ์เข้าใช้งานรายบุคคล</b><p>เลือก “ดูข้อมูล” เพื่อเปิดหน้า และเลือก “เพิ่ม / แก้ไข” เฉพาะผู้ที่ทำรายการได้ การลบสงวนไว้สำหรับ Admin</p></div></div>
+        <div className="permission-grid">{NAV.map((item) => {
+          const checked = userForm.permissions.includes(item.key);
+          const editable = EDITABLE_PAGE_KEYS.includes(item.key as EditablePageKey);
+          const editKey = `${item.key}-edit` as EditPermission;
+          const canEdit = editable && userForm.permissions.includes(editKey);
+          return <div key={item.key} className={`permission-option permission-option-levels ${checked ? "checked" : ""}`}>
+            <span>{item.icon}</span><div className="permission-option-copy"><b>{item.label}</b><small>{PERMISSION_HELP[item.key]}</small></div>
+            <div className="permission-levels">
+              <label><input type="checkbox" checked={checked} onChange={(event) => setUserForm((current) => ({
+                ...current,
+                permissions: event.target.checked
+                  ? [...new Set([...current.permissions, item.key])]
+                  : current.permissions.filter((key) => key !== item.key && key !== editKey && (item.key !== "stock-all" || !["stock-all-details", "stock-all-export"].includes(key)) && (item.key !== "parts" || key !== "parts-add")),
+              }))} /> ดูข้อมูล</label>
+              {editable ? <label><input type="checkbox" checked={canEdit} onChange={(event) => setUserForm((current) => ({
+                ...current,
+                permissions: event.target.checked
+                  ? [...new Set([...current.permissions, item.key, editKey])]
+                  : current.permissions.filter((key) => key !== editKey && (item.key !== "parts" || key !== "parts-add")),
+              }))} /> เพิ่ม / แก้ไข</label> : <em>ดูข้อมูลเท่านั้น</em>}
+            </div>
+          </div>;
+        })}</div>
+        <div className="permission-grid">{([{key:"stock-all-details",label:"Stock ทั้งหมด: ดู Tag / Job / Movement"},{key:"stock-all-export",label:"Stock ทั้งหมด: ส่งออก Excel"}] as const).map((item) => <label key={item.key} className="permission-option"><input type="checkbox" disabled={!userForm.permissions.includes("stock-all")} checked={userForm.permissions.includes(item.key)} onChange={(event) => setUserForm((current) => ({...current,permissions:event.target.checked ? [...new Set([...current.permissions,item.key])] : current.permissions.filter((key) => key !== item.key)}))}/><div><b>{item.label}</b><small>ต้องมีสิทธิ์ดูหน้า Stock ทั้งหมดด้วย</small></div></label>)}</div>
+      </section>
+      <footer><button type="button" className="button secondary" onClick={() => setUserEditorOpen(false)}>ยกเลิก</button><button className="button primary" disabled={userSaving || !userForm.permissions.length}>{userSaving ? "กำลังบันทึก…" : "บันทึกผู้ใช้งานและสิทธิ์"}</button></footer>
+    </form></div>}
+  </div>;
+}
