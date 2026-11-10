@@ -937,6 +937,79 @@ export async function POST(request: Request) {
       const image = await runtimeDb.prepare("SELECT 1 AS ok FROM part_master_images WHERE material_code = ?1 LIMIT 1")
         .bind(tag.materialCode).first<{ ok: number }>();
 
+      if (clean(body.mode, 30) === "pallet_preview" || clean(body.mode, 30) === "pallet_confirm") {
+        const palletResult = await runtimeDb.prepare(`
+          SELECT id, tag_id AS tagId, qty
+          FROM stock_tags
+          WHERE material_code = ?1 AND job_no = ?2 AND status = 'printed'
+          ORDER BY id ASC
+        `).bind(tag.materialCode, tag.jobNo).all<{ id: number; tagId: string; qty: number }>();
+        const palletTags = palletResult.results || [];
+        if (!palletTags.length) return Response.json({ error: "ไม่พบ Tag ที่รอรับเข้าของพาเลทนี้" }, { status: 409 });
+        if (palletTags.length > 200) return Response.json({ error: `พาเลทนี้มี ${palletTags.length} Tag เกินขีดจำกัด 200 ใบ กรุณาแบ่งรับเข้า` }, { status: 400 });
+        const pallet = {
+          tagCount: palletTags.length,
+          totalQty: palletTags.reduce((sum, item) => sum + Number(item.qty || 0), 0),
+          tagIds: palletTags.map((item) => item.tagId),
+          jobNo: tag.jobNo,
+          materialCode: tag.materialCode,
+        };
+
+        if (clean(body.mode, 30) === "pallet_preview") {
+          return Response.json({
+            action: "pallet_receive_preview",
+            rawPayload: clean(body.rawPayload, 1000),
+            tag: { ...tag, partName: part?.partName || "", customer: part?.customer || "", location: part?.location || "" },
+            master: { materialCode: tag.materialCode, partName: part?.partName || "", customer: part?.customer || "", hasImage: !!image },
+            selectedLocation,
+            pallet,
+          });
+        }
+
+        const expectedTagIds = Array.isArray(body.tagIds)
+          ? body.tagIds.map((value: unknown) => clean(value, 160).toUpperCase()).filter(Boolean)
+          : [];
+        if (expectedTagIds.length !== pallet.tagIds.length || expectedTagIds.some((value: string, index: number) => value !== pallet.tagIds[index])) {
+          return Response.json({ error: "รายการ Tag ในพาเลทเปลี่ยนแปลง กรุณาสแกนใหม่เพื่อตรวจสอบอีกครั้ง" }, { status: 409 });
+        }
+        const productionDate = clean(body.productionDate, 10)
+          || new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(productionDate)) {
+          return Response.json({ error: "กรุณาระบุวันที่ผลิตให้ถูกต้อง" }, { status: 400 });
+        }
+        const operationAt = new Date().toISOString();
+        const ids = palletTags.map((item) => Number(item.id));
+        const updatePlaceholders = ids.map((_, index) => `?${index + 5}`).join(",");
+        const updateStatement = runtimeDb.prepare(`
+          UPDATE stock_tags
+          SET status = 'in_stock', remaining_qty = qty,
+            received_by_name = ?1, received_by_code = ?2,
+            production_date = ?3, received_at = ?4
+          WHERE id IN (${updatePlaceholders}) AND status = 'printed'
+            AND (SELECT count(*) FROM stock_tags WHERE id IN (${updatePlaceholders}) AND status = 'printed') = ?${ids.length + 5}
+        `).bind(user.displayName, user.employeeCode, productionDate, operationAt, ...ids, ids.length);
+        const insertPlaceholders = ids.map(() => "?").join(",");
+        const insertStatement = runtimeDb.prepare(`
+          INSERT INTO stock_receipt_adjustments
+            (stock_tag_id, tag_id, original_qty, received_qty, ng_qty,
+             received_by_name, received_by_code, received_at)
+          SELECT id, tag_id, qty, qty, 0, ?, ?, ?
+          FROM stock_tags
+          WHERE id IN (${insertPlaceholders}) AND received_by_code = ? AND received_at = ?
+        `).bind(user.displayName, user.employeeCode, operationAt, ...ids, user.employeeCode, operationAt);
+        const [updated, inserted] = await runtimeDb.batch([updateStatement, insertStatement]);
+        if (Number(updated.meta.changes || 0) !== ids.length || Number(inserted.meta.changes || 0) !== ids.length) {
+          return Response.json({ error: "Tag บางใบในพาเลทเพิ่งถูกรับเข้าไปแล้ว กรุณารีเฟรชและสแกนใหม่" }, { status: 409 });
+        }
+        await writeAuditLog(user, {
+          module: "stock", moduleLabel: "Stock", action: "receive_pallet", actionLabel: "รับงานเข้าทั้งพาเลท",
+          entityType: "stock_pallet", entityId: `${tag.jobNo}|${tag.materialCode}`,
+          summary: `รับพาเลท Job ${tag.jobNo} · ${tag.materialCode} จำนวน ${pallet.tagCount} Tag รวม ${pallet.totalQty} ชิ้น เข้าชั้น ${selectedLocation}`,
+          details: { ...pallet, locationCode: selectedLocation, productionDate, scannedTagId: tag.tagId },
+        }, request);
+        return Response.json({ action: "pallet_received", pallet, locationCode: selectedLocation, productionDate }, { status: 201 });
+      }
+
       if (clean(body.mode, 20) === "preview") {
         return Response.json({
           action: "receive_preview",

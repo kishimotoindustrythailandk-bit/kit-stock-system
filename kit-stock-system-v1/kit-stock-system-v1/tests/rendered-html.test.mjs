@@ -322,10 +322,10 @@ test("connects camera Stock receipt preview to explicit confirmation", async () 
   );
 
   assert.match(scannerFlow, /receiveStockTag\(value\)/);
-  assert.match(previewFlow, /JSON\.stringify\(\{ action: "receive", mode: "preview", rawPayload, locationCode: stockLocation\.code \}\)/);
+  assert.match(previewFlow, /JSON\.stringify\(\{ action: "receive", mode: "pallet_preview", rawPayload, locationCode: stockLocation\.code \}\)/);
   assert.match(previewFlow, /setStockReceivePreview\(data\)/);
   assert.match(confirmFlow, /locationCode: stockReceivePreview\.selectedLocation/);
-  assert.doesNotMatch(confirmFlow, /mode: "preview"/);
+  assert.match(confirmFlow, /mode: isPallet \? "pallet_confirm" : undefined/);
   assert.match(receiveModal, /onClick=\{\(\) => void confirmReceiveStockTag\(\)\}/);
 
   assertBefore(receiveAction, /hasPermission\(user, "stock"\)/, /db\.update\(stockTags\)/);
