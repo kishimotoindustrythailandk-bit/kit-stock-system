@@ -22,9 +22,10 @@ test("blocks a KIT tag when its Part master location differs from the scanned sh
   assert.match(api, /Part .* ยังไม่ได้กำหนด Location ในทะเบียน Part/);
 });
 
-test("keeps the shelf selected for consecutive pallets and records it", () => {
+test("keeps the shelf selected while every KIT tag is scanned and records it", () => {
   assert.match(app, /setStockLocationActivity\(Date\.now\(\)\)/);
-  assert.match(app, /สแกน KIT Tag เพียง 1 ใบเพื่อรับทั้งพาเลท/);
+  assert.match(app, /สแกน KIT Tag ทุกใบทีละใบ/);
+  assert.match(app, /รับเฉพาะ Tag ที่สแกน/);
   assert.match(app, /เปลี่ยนชั้นวาง/);
   assert.match(app, /5 \* 60 \* 1000/);
   assert.match(api, /locationCode: selectedLocation/);
@@ -32,18 +33,13 @@ test("keeps the shelf selected for consecutive pallets and records it", () => {
   assert.match(css, /\.stock-location-session/);
 });
 
-test("one scanned tag previews and atomically receives every pending tag in the same Part and Job", () => {
-  assert.match(api, /body\.mode, 30\) === "pallet_preview"/);
-  assert.match(api, /material_code = \?1 AND job_no = \?2 AND status = 'printed'/);
-  assert.match(api, /palletTags\.reduce/);
-  assert.match(api, /body\.mode, 30\) === "pallet_confirm"/);
-  assert.match(api, /AND \(SELECT count\(\*\) FROM stock_tags\s+WHERE material_code = \?5 AND job_no = \?6/);
-  assert.doesNotMatch(api, /WHERE id IN \(\$\{updatePlaceholders\}\)/);
-  assert.match(api, /toISOString\(\)\.slice\(0, 19\)\.replace\("T", " "\)/);
-  assert.match(api, /runtimeDb\.batch\(\[updateStatement, insertStatement\]\)/);
-  assert.match(app, /mode: "pallet_preview"/);
-  assert.match(app, /tagIds: stockReceivePreview\.pallet\?\.tagIds/);
-  assert.match(app, /ยืนยันรับทั้งพาเลท/);
+test("each scan previews and receives only that exact KIT tag", () => {
+  assert.match(app, /mode: "preview", rawPayload, locationCode: stockLocation\.code/);
+  assert.match(app, /ยืนยันรับ Tag ใบนี้/);
+  assert.doesNotMatch(app, /mode: "pallet_preview"|pallet_confirm|ยืนยันรับทั้งพาเลท/);
+  assert.doesNotMatch(api, /pallet_receive_preview|pallet_received|receive_pallet/);
+  assert.match(api, /eq\(stockTags\.id, tag\.id\), eq\(stockTags\.status, "printed"\)/);
+  assert.match(api, /Tag นี้เพิ่งถูกสแกนรับเข้า Stock ไปแล้ว/);
 });
 
 test("can print QR labels only from existing Part master locations", () => {

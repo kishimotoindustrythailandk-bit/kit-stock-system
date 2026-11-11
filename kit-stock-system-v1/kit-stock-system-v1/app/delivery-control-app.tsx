@@ -111,7 +111,7 @@ type PartBundlePreview = {
   duplicateImages: string[];
 };
 type StockTag = { id: number; tagId: string; materialCode: string; partName: string; customer: string; qty: number; remainingQty: number; reservedQty: number; receivedQty?: number; ngQty?: number; jobNo: string; productionDate: string; status: string; printedByName: string; receivedByName: string; receivedAt?: string; createdAt: string; payload?: string; boxNo?: number; boxCount?: number; deliveryQty?: number; location?: string; splitLabelId?: string; splitIssuedAt?: string };
-type StockReceivePreview = { action: "receive_preview" | "pallet_receive_preview"; rawPayload: string; tag: StockTag; master: { materialCode: string; partName: string; customer: string; hasImage: boolean }; selectedLocation: string; pallet?: { tagCount: number; totalQty: number; tagIds: string[]; jobNo: string; materialCode: string } };
+type StockReceivePreview = { action: "receive_preview"; rawPayload: string; tag: StockTag; master: { materialCode: string; partName: string; customer: string; hasImage: boolean }; selectedLocation: string };
 type StockLocationSelection = { code: string; partCount: number };
 type StockAllocation = { id: number; customerTagId: string; stockTagCode: string; materialCode: string; qty: number; status: string; reservedByName: string; reservedAt: string; dispatchedByName: string; dispatchedAt?: string };
 type StockPick = {
@@ -2592,7 +2592,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     try {
       const response = await fetch("/api/stock", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "receive", mode: "pallet_preview", rawPayload, locationCode: stockLocation.code }),
+        body: JSON.stringify({ action: "receive", mode: "preview", rawPayload, locationCode: stockLocation.code }),
         signal: controller.signal,
       });
       const contentType = response.headers.get("content-type") || "";
@@ -2601,7 +2601,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         : { error: response.redirected ? "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่" : "ระบบตอบกลับไม่ถูกต้อง กรุณาลองสแกนใหม่" };
       if (!response.ok || !("tag" in data) || !data.tag) throw new Error(data.error || "ตรวจสอบ Tag ไม่สำเร็จ");
       setStockScan(rawPayload);
-      setStockReceiveQty(String(data.pallet?.totalQty || data.tag.qty));
+      setStockReceiveQty(String(data.tag.qty));
       setStockReceiveProductionDate(bangkokDateTimeKey().slice(0, 10));
       setStockReceivePreview(data);
     } catch (caught) {
@@ -2621,15 +2621,14 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
 
   async function confirmReceiveStockTag() {
     if (!stockReceivePreview || stockSaving) return;
-    const isPallet = !!stockReceivePreview.pallet;
     const receivedQty = Number(stockReceiveQty);
-    const totalQty = Number(stockReceivePreview.pallet?.totalQty || stockReceivePreview.tag.qty);
+    const totalQty = Number(stockReceivePreview.tag.qty);
     const productionDate = stockReceiveProductionDate;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(productionDate)) {
       setNotice({ type: "error", text: "กรุณาเลือกวันที่ผลิต" });
       return;
     }
-    if (!Number.isInteger(receivedQty) || receivedQty < 0 || receivedQty > totalQty || (isPallet && receivedQty !== totalQty)) {
+    if (!Number.isInteger(receivedQty) || receivedQty < 0 || receivedQty > totalQty) {
       setNotice({ type: "error", text: `จำนวนรับเข้าต้องอยู่ระหว่าง 0 ถึง ${fmt(totalQty)} ชิ้น` });
       return;
     }
@@ -2637,9 +2636,9 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     try {
       const response = await fetch("/api/stock", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "receive", mode: isPallet ? "pallet_confirm" : undefined, rawPayload: stockReceivePreview.rawPayload, locationCode: stockReceivePreview.selectedLocation, tagIds: stockReceivePreview.pallet?.tagIds, receivedQty, productionDate }),
+        body: JSON.stringify({ action: "receive", rawPayload: stockReceivePreview.rawPayload, locationCode: stockReceivePreview.selectedLocation, receivedQty, productionDate }),
       });
-      const data = await response.json() as { tag?: StockTag; pallet?: { tagCount: number; totalQty: number; tagIds: string[] }; receivedQty?: number; ngQty?: number; error?: string };
+      const data = await response.json() as { tag?: StockTag; receivedQty?: number; ngQty?: number; error?: string };
       if (!response.ok) throw new Error(data.error || "รับเข้า Stock ไม่สำเร็จ");
       setStockScan("");
       setStockReceivePreview(null);
@@ -2648,15 +2647,13 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       setStockLocationActivity(Date.now());
       const ngQty = Number(data.ngQty || 0);
       setLastStockReceipt({
-        tagId: data.pallet ? `พาเลท ${data.pallet.tagCount} Tag` : data.tag?.tagId || stockReceivePreview.tag.tagId,
+        tagId: data.tag?.tagId || stockReceivePreview.tag.tagId,
         materialCode: data.tag?.materialCode || stockReceivePreview.tag.materialCode,
         jobNo: data.tag?.jobNo || stockReceivePreview.tag.jobNo,
-        qty: Number(data.pallet?.totalQty || data.receivedQty || receivedQty),
+        qty: Number(data.receivedQty || receivedQty),
         locationCode: stockReceivePreview.selectedLocation,
       });
-      setNotice({ type: "success", text: data.pallet
-        ? `รับเข้าทั้งพาเลทสำเร็จ ${fmt(data.pallet.tagCount)} Tag รวม ${fmt(data.pallet.totalQty)} ชิ้น`
-        : `รับ Tag ${data.tag?.tagId || ""} เข้า Stock ${fmt(Number(data.receivedQty || receivedQty))} ชิ้น${ngQty ? ` · NG ${fmt(ngQty)} ชิ้น` : ""}` });
+      setNotice({ type: "success", text: `รับ Tag ${data.tag?.tagId || ""} เข้า Stock ${fmt(Number(data.receivedQty || receivedQty))} ชิ้น${ngQty ? ` · NG ${fmt(ngQty)} ชิ้น` : ""} · สแกน Tag ใบถัดไปได้เลย` });
       void loadStock();
       if (!window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) {
         window.setTimeout(() => stockScanInputRef.current?.focus(), 120);
@@ -3860,12 +3857,12 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       </div>
       <div className="stock-main-grid">
         {canEditPage("stock") && <Card className="stock-receive-card" title={<span className="stock-card-title"><i>⌗</i> รับเข้า Stock (ชั้นวาง + Tag)</span>} action={<span className="stock-scanner-ready"><i /> {stockLocation ? `ชั้น ${stockLocation.code}` : "รอสแกนชั้น"}</span>}>
-          {stockLocation ? <div className="stock-location-session"><div><small>ชั้นจัดเก็บที่กำลังรับเข้า</small><b>{stockLocation.code}</b><span>รองรับ {fmt(stockLocation.partCount)} Part · สแกน KIT Tag เพียง 1 ใบเพื่อรับทั้งพาเลท</span></div><button type="button" onClick={() => { setStockLocation(null); setStockLocationActivity(0); setStockScan(""); setLastStockReceipt(null); window.setTimeout(() => stockScanInputRef.current?.focus(), 50); }}>เปลี่ยนชั้นวาง</button></div> : <div className="stock-location-guide"><b>ขั้นตอนที่ 1 · สแกน QR หน้าชั้นวาง</b><span>เมื่อเลือกชั้นแล้ว ให้สแกน KIT Tag กล่องใดกล่องหนึ่งเพื่อรับ Part และ Job เดียวกันทั้งพาเลท</span><button type="button" onClick={() => void printStockLocationQrs()}>▦ พิมพ์ QR ชั้นวาง</button></div>}
-          <button type="button" className="stock-camera-zone" onClick={() => { setCameraPurpose("stock"); setCameraOpen(true); }}><span>▥</span><b>{stockSaving ? "กำลังตรวจสอบ…" : stockLocation ? "ขั้นตอนที่ 2 · สแกน KIT Tag 1 ใบ" : "ขั้นตอนที่ 1 · พร้อมสแกน QR ชั้นวาง"}</b><small>{stockLocation ? `รับเข้าชั้น ${stockLocation.code} · ระบบจะรวบรวมทั้งพาเลท` : "ยิง QR หน้าชั้น หรือแตะเพื่อเปิดกล้อง"}</small></button>
+          {stockLocation ? <div className="stock-location-session"><div><small>ชั้นจัดเก็บที่กำลังรับเข้า</small><b>{stockLocation.code}</b><span>รองรับ {fmt(stockLocation.partCount)} Part · สแกน KIT Tag ทุกใบทีละใบ</span></div><button type="button" onClick={() => { setStockLocation(null); setStockLocationActivity(0); setStockScan(""); setLastStockReceipt(null); window.setTimeout(() => stockScanInputRef.current?.focus(), 50); }}>เปลี่ยนชั้นวาง</button></div> : <div className="stock-location-guide"><b>ขั้นตอนที่ 1 · สแกน QR หน้าชั้นวาง 1 ครั้ง</b><span>เมื่อเลือกชั้นแล้ว ให้สแกน KIT Tag ทุกกล่องทีละใบ ระบบจะรับเข้าเฉพาะ Tag ที่สแกนสำเร็จ</span><button type="button" onClick={() => void printStockLocationQrs()}>▦ พิมพ์ QR ชั้นวาง</button></div>}
+          <button type="button" className="stock-camera-zone" onClick={() => { setCameraPurpose("stock"); setCameraOpen(true); }}><span>▥</span><b>{stockSaving ? "กำลังตรวจสอบ…" : stockLocation ? "ขั้นตอนที่ 2 · สแกน KIT Tag ทุกใบ" : "ขั้นตอนที่ 1 · พร้อมสแกน QR ชั้นวาง"}</b><small>{stockLocation ? `รับเข้าชั้น ${stockLocation.code} · รับเฉพาะ Tag ที่สแกนทีละใบ` : "ยิง QR หน้าชั้น หรือแตะเพื่อเปิดกล้อง"}</small></button>
           <div className="stock-scan-separator"><span>หรือ</span></div>
           <form className="stock-receive-form" onSubmit={receiveStockTag}><input ref={stockScanInputRef} value={stockScan} inputMode={stockManualEntry ? "text" : "none"} onFocus={() => { if (!stockManualEntry && window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) stockScanInputRef.current?.blur(); }} onChange={(e) => updateStockScannerValue(e.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void receiveStockTag(value); } }} placeholder={stockLocation ? "ใส่รหัส KIT Tag ด้วยมือ" : "ใส่ QR ชั้น เช่น KITLOC|A-01"} autoComplete="off" /><button className="button primary" disabled={!stockScan.trim() || stockSaving}>{stockSaving ? "กำลังตรวจสอบ…" : stockLocation ? "ตรวจสอบและรับเข้า" : "เลือกชั้นวาง"}</button></form>
           <button type="button" className="stock-manual-toggle" onClick={() => { setStockManualEntry((current) => !current); window.setTimeout(() => stockScanInputRef.current?.focus(), 50); }}>{stockManualEntry ? "ปิดแป้นพิมพ์ / ใช้ Scanner" : "⌨ กรอก Tag ด้วยมือ"}</button>
-          {lastStockReceipt ? <div className="stock-receive-success"><b>✓ รับเข้า Stock สำเร็จ · ชั้น {lastStockReceipt.locationCode}</b><span>Tag: {lastStockReceipt.tagId}</span><span>Material: {lastStockReceipt.materialCode}</span><span>Job: {lastStockReceipt.jobNo}</span><strong>จำนวน: {fmt(lastStockReceipt.qty)} ชิ้น</strong></div> : <div className="stock-guide"><b>ℹ {stockLocation ? `พร้อมยิง KIT Tag 1 ใบเพื่อรับทั้งพาเลทที่ชั้น ${stockLocation.code}` : "กรุณาสแกน QR ชั้นจัดเก็บก่อน"}</b><p>ระบบบล็อก Tag ที่ไม่ตรงกับ Location ในทะเบียน Part</p></div>}
+          {lastStockReceipt ? <div className="stock-receive-success"><b>✓ รับเข้า Stock สำเร็จ · ชั้น {lastStockReceipt.locationCode}</b><span>Tag: {lastStockReceipt.tagId}</span><span>Material: {lastStockReceipt.materialCode}</span><span>Job: {lastStockReceipt.jobNo}</span><strong>จำนวน: {fmt(lastStockReceipt.qty)} ชิ้น · สแกนใบถัดไปได้</strong></div> : <div className="stock-guide"><b>ℹ {stockLocation ? `พร้อมสแกน KIT Tag ทุกใบเข้าชั้น ${stockLocation.code}` : "กรุณาสแกน QR ชั้นจัดเก็บก่อน"}</b><p>ระบบรับเข้าเฉพาะ Tag ที่สแกน และบล็อก Tag ซ้ำหรือ Location ไม่ตรงทะเบียน Part</p></div>}
         </Card>}
         <Card className="stock-latest-card" title="รายการ Stock ล่าสุด" action={<div className="stock-list-tools"><button type="button" className="button users-excel-button" onClick={() => void exportStockExcel()}>▦ Excel</button><input value={tagSearch} onChange={(e) => { setTagSearch(e.target.value); setStockListExpanded(Boolean(e.target.value)); }} placeholder="ค้นหา Tag / Part No. / Job..." /><button onClick={() => void loadStock()}>↻</button></div>}>
           {stockLoading ? <div className="inline-loading">กำลังโหลด Stock…</div> : recentStock.length ? <><div className="stock-latest-head"><span>Tag / QR</span><span>รายการสินค้า</span><span>Job</span><span>วันที่รับเข้า</span><span>สถานะ</span><span>คงเหลือ</span></div><div className="stock-latest-list">{recentStock.map((item) => {
@@ -4815,22 +4812,22 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       <footer><button type="button" className="button secondary" onClick={() => setStockCountConfirmOpen(false)}>กลับไปแก้ไข</button><button type="button" className="button confirm-stock-count-button" disabled={stockManagementSaving || !stockCountForm.reason.trim()} onClick={() => void confirmStockCountAdjustment()}>{stockManagementSaving ? "กำลังบันทึก…" : "✓ ยืนยันปรับยอด Tag และ Stock"}</button></footer>
     </div></div>}
     {stockReceivePreview && <div className="modal-backdrop dispatch-confirm-backdrop stock-receive-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="stock-receive-confirm-title"><div className="dispatch-confirm-modal stock-receive-confirm-modal">
-      <header><div><span>✓</span><div><small>ตรวจพบ KIT Stock Tag</small><h3 id="stock-receive-confirm-title">{stockReceivePreview.pallet ? "ตรวจสอบก่อนรับเข้าทั้งพาเลท" : "ตรวจสอบก่อนรับเข้า Stock"}</h3></div></div><button type="button" onClick={() => { setStockReceivePreview(null); setStockReceiveQty(""); setStockReceiveProductionDate(""); setStockScan(""); }} aria-label="ปิด">×</button></header>
+      <header><div><span>✓</span><div><small>ตรวจพบ KIT Stock Tag 1 ใบ</small><h3 id="stock-receive-confirm-title">ตรวจสอบก่อนรับเข้า Stock</h3></div></div><button type="button" onClick={() => { setStockReceivePreview(null); setStockReceiveQty(""); setStockReceiveProductionDate(""); setStockScan(""); }} aria-label="ปิด">×</button></header>
       <div className="dispatch-confirm-content">
         <section className="dispatch-confirm-images"><PartImagePair materialCode={stockReceivePreview.tag.materialCode} masterVersion={partImages.find((item) => item.materialCode === stockReceivePreview.tag.materialCode)?.updatedAt} actualVersion={partActualImages.find((item) => item.materialCode === stockReceivePreview.tag.materialCode)?.updatedAt} /></section>
         <section className="dispatch-confirm-info">
           <div className="dispatch-confirm-part"><small>PART / MATERIAL</small><b>{stockReceivePreview.tag.materialCode}</b><p>{stockReceivePreview.tag.partName || stockReceivePreview.master.partName || "ไม่ระบุชื่อชิ้นงาน"}</p></div>
           <div className="dispatch-confirm-details"><div><small>Tag ที่ใช้สแกน</small><b>{stockReceivePreview.tag.tagId}</b></div><div><small>Job</small><b>{stockReceivePreview.tag.jobNo || "—"}</b></div><div><small>ลูกค้า</small><b>{stockReceivePreview.tag.customer || "—"}</b></div><div><small>ชั้นจัดเก็บที่สแกน</small><b>{stockReceivePreview.selectedLocation}</b></div></div>
           <div className="stock-receive-qty-box">
-            <div><small>{stockReceivePreview.pallet ? "จำนวนกล่องในพาเลท" : "จำนวนตาม Tag"}</small><b>{fmt(stockReceivePreview.pallet?.tagCount || stockReceivePreview.tag.qty)}</b><em>{stockReceivePreview.pallet ? "Tag" : "ชิ้น"}</em></div>
-            {stockReceivePreview.pallet ? <div><small>ยอดรับเข้ารวม</small><b>{fmt(stockReceivePreview.pallet.totalQty)}</b><em>ชิ้น</em></div> : <label><small>จำนวนรับเข้าจริง</small><input type="number" inputMode="numeric" min={0} max={stockReceivePreview.tag.qty} step={1} value={stockReceiveQty} onChange={(event) => setStockReceiveQty(event.target.value.replace(/[^0-9]/g, ""))} /><em>แก้ไขได้เมื่อมีงานเสีย</em></label>}
-            {!stockReceivePreview.pallet && <div className={Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0) > 0 ? "has-ng" : ""}><small>จำนวน NG</small><b>{fmt(Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0))}</b><em>ชิ้น</em></div>}
+            <div><small>จำนวนตาม Tag ใบนี้</small><b>{fmt(stockReceivePreview.tag.qty)}</b><em>ชิ้น</em></div>
+            <label><small>จำนวนรับเข้าจริง</small><input type="number" inputMode="numeric" min={0} max={stockReceivePreview.tag.qty} step={1} value={stockReceiveQty} onChange={(event) => setStockReceiveQty(event.target.value.replace(/[^0-9]/g, ""))} /><em>แก้ไขได้เมื่อมีงานเสีย</em></label>
+            <div className={Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0) > 0 ? "has-ng" : ""}><small>จำนวน NG</small><b>{fmt(Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0))}</b><em>ชิ้น</em></div>
             <label className="production-date"><small>วันที่ผลิต</small><input type="date" value={stockReceiveProductionDate} onChange={(event) => setStockReceiveProductionDate(event.target.value)} required /><em>ค่าเริ่มต้นคือวันที่สแกนรับเข้า · แก้ไขได้</em></label>
           </div>
-          {stockReceivePreview.pallet ? <p className="stock-receive-ng-note">ระบบจะรับ Tag ที่ยังรอรับเข้าของ Part และ Job นี้ทั้งหมด {fmt(stockReceivePreview.pallet.tagCount)} ใบพร้อมกัน</p> : Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0) > 0 && <p className="stock-receive-ng-note">! ระบบจะเพิ่มเข้า Stock เฉพาะ {fmt(Number(stockReceiveQty || 0))} ชิ้น และบันทึก NG {fmt(Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0))} ชิ้น</p>}
+          {Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0) > 0 && <p className="stock-receive-ng-note">! ระบบจะเพิ่มเข้า Stock เฉพาะ {fmt(Number(stockReceiveQty || 0))} ชิ้น และบันทึก NG {fmt(Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0))} ชิ้น</p>}
         </section>
       </div>
-      <footer><button type="button" className="button secondary" onClick={() => { setStockReceivePreview(null); setStockReceiveQty(""); setStockReceiveProductionDate(""); setStockScan(""); }}>ยกเลิก / สแกนใหม่</button><button type="button" className="button confirm-dispatch-button stock-confirm-receive-button" disabled={stockSaving || stockReceiveQty === "" || !stockReceiveProductionDate || Number(stockReceiveQty) < 0 || Number(stockReceiveQty) > Number(stockReceivePreview.pallet?.totalQty || stockReceivePreview.tag.qty)} onClick={() => void confirmReceiveStockTag()}>{stockSaving ? "กำลังรับเข้า…" : stockReceivePreview.pallet ? `✓ ยืนยันรับทั้งพาเลท ${stockReceivePreview.pallet.tagCount} Tag` : "✓ ยืนยันรับเข้า Stock"}</button></footer>
+      <footer><button type="button" className="button secondary" onClick={() => { setStockReceivePreview(null); setStockReceiveQty(""); setStockReceiveProductionDate(""); setStockScan(""); }}>ยกเลิก / สแกนใหม่</button><button type="button" className="button confirm-dispatch-button stock-confirm-receive-button" disabled={stockSaving || stockReceiveQty === "" || !stockReceiveProductionDate || Number(stockReceiveQty) < 0 || Number(stockReceiveQty) > Number(stockReceivePreview.tag.qty)} onClick={() => void confirmReceiveStockTag()}>{stockSaving ? "กำลังรับเข้า…" : "✓ ยืนยันรับ Tag ใบนี้"}</button></footer>
     </div></div>}
     {arrangeConfirmation && <div className="modal-backdrop dispatch-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="arrange-confirm-title" onKeyDown={(event) => { if (event.key === "Escape" && !checkingTag) { setArrangeConfirmation(null); tagInput.current?.focus(); } if (event.key === "Tab") { const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("button:not(:disabled),input:not(:disabled)")); const first = buttons[0], last = buttons[buttons.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); } } }}><div className="dispatch-confirm-modal">
       <header><div><span>✓</span><div><small>ตรวจพบ KIT Stock Tag</small><h3 id="arrange-confirm-title">ตรวจสอบงานก่อนจัดงาน</h3></div></div><button type="button" disabled={checkingTag} onClick={() => { setArrangeConfirmation(null); tagInput.current?.focus(); }} aria-label="ปิด">×</button></header>
