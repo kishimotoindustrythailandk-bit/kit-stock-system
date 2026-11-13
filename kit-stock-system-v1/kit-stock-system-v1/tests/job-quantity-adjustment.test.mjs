@@ -155,8 +155,8 @@ test("the UI exposes preview, confirmation and printing only newly created Tags"
   assert.match(app, /ปรับจำนวนผลิตจริง/);
   assert.match(app, /preview_job_qty_adjustment/);
   assert.match(app, /adjust_job_qty/);
-  assert.match(app, /พิมพ์ Tag ใหม่/);
-  assert.match(app, /printStockTags\(jobQtyCreatedTags\)/);
+  assert.match(app, /printStockTags\(jobQtyCreatedTags, "a4"\)/);
+  assert.match(app, /printStockTags\(jobQtyCreatedTags, "100x55"\)/);
   assert.match(app, /ห้ามใช้ Tag ใบนี้/);
   assert.match(app, /นำ Tag เศษที่ยังไม่รับเข้ามารวมกับยอดเพิ่ม/);
 });

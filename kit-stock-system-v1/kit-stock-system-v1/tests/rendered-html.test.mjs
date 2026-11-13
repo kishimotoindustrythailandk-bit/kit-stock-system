@@ -118,11 +118,11 @@ test("prints up to ten unique Stock Tags per A4 page and safely deletes unused T
     source("../app/delivery-control-app.tsx"),
     source("../app/api/stock/route.ts"),
   ]);
-  assert.match(appSource, /const tagsPerPage = 10/);
+  assert.match(appSource, /const tagsPerPage = directLabel \? 1 : 10/);
   assert.match(appSource, /Math\.ceil\(tagMarkups\.length \/ tagsPerPage\)/);
-  assert.match(appSource, /grid-template-columns:repeat\(2,100mm\)/);
-  assert.match(appSource, /grid-template-rows:repeat\(5,55mm\)/);
-  assert.match(appSource, /Tag ขนาด 10 × 5\.5 ซม. · A4 สูงสุด 10 Tag/);
+  assert.match(appSource, /"repeat\(2,100mm\)"/);
+  assert.match(appSource, /"repeat\(5,55mm\)"/);
+  assert.match(appSource, /A4 \(10 Tag\)/);
   assert.match(appSource, /deleteStockTag/);
   assert.match(stockApi, /action === "delete_tag"/);
   assert.match(stockApi, /Tag นี้มีประวัติรับเข้า จัดงาน หรือขายออกแล้ว/);
@@ -130,13 +130,24 @@ test("prints up to ten unique Stock Tags per A4 page and safely deletes unused T
 
 test("prints ten high-contrast Tags with larger readable text", async () => {
   const appSource = await source("../app/delivery-control-app.tsx");
-  assert.match(appSource, /grid-template-rows:repeat\(5,55mm\)/);
+  assert.match(appSource, /"repeat\(5,55mm\)"/);
   assert.match(appSource, /\.tag\{width:100mm;height:55mm/);
   assert.match(appSource, /border:1\.6px solid #003f98/);
   assert.match(appSource, /\.main b\{[^}]*font-size:9px/);
   assert.match(appSource, /\.grid b\{[^}]*font-size:6\.2px/);
   assert.match(appSource, /\.qty,\.box-cell b\{font-size:10\.8px!important/);
   assert.match(appSource, /print-color-adjust:exact/);
+});
+
+test("prints stock Tags either ten-up on A4 or one-up for Rongta RPP04", async () => {
+  const appSource = await source("../app/delivery-control-app.tsx");
+  const stockPrint = sourceSection(appSource, "  async function printStockTags(", "  const dates = useMemo");
+  assert.match(stockPrint, /paper: "a4" \| "100x55" = "a4"/);
+  assert.match(stockPrint, /const directLabel = paper === "100x55"/);
+  assert.match(stockPrint, /const tagsPerPage = directLabel \? 1 : 10/);
+  assert.match(stockPrint, /"100mm 55mm"/);
+  assert.match(stockPrint, /"A4 portrait"/);
+  assert.match(appSource, /RPP04 \(100×55\)/);
 });
 
 test("prints replacement box labels at exactly 100 by 55 millimetres", async () => {
@@ -160,7 +171,7 @@ test("labels full and remainder boxes on every printed Tag", async () => {
   assert.match(appSource, /\.box-type strong\{font-size:7\.2px/);
   assert.match(appSource, /\.box-type\.full/);
   assert.match(appSource, /\.box-type\.remainder/);
-  assert.match(appSource, /const tagsPerPage = 10/);
+  assert.match(appSource, /const tagsPerPage = directLabel \? 1 : 10/);
 });
 
 test("searches created Tags and locks original printing after split labels are issued", async () => {
@@ -171,7 +182,8 @@ test("searches created Tags and locks original printing after split labels are i
   for (const field of ["tagId", "materialCode", "partName", "customer", "jobNo", "productionDate", "createdAt"]) {
     assert.match(appSource, new RegExp(`item\\.${field}`));
   }
-  assert.match(appSource, /printStockTags\(item\)/);
+  assert.match(appSource, /printStockTags\(item, "a4"\)/);
+  assert.match(appSource, /printStockTags\(item, "100x55"\)/);
   assert.match(appSource, /ล็อกการพิมพ์ Tag ต้นฉบับและให้พิมพ์ซ้ำจาก Tag แบ่งเท่านั้น/);
   const originalPrint = sourceSection(appSource, "  async function printStockTags(", "  const dates = useMemo");
   assert.match(originalPrint, /authorize_tag_print/);
