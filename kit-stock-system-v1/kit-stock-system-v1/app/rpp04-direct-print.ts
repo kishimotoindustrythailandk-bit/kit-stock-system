@@ -75,7 +75,7 @@ export async function prepareRpp04Bluetooth(): Promise<Rpp04Session> {
   }
   try {
     const device = await bluetooth.requestDevice({
-      filters: [{ namePrefix: "RPP04" }, { namePrefix: "RPP" }],
+      acceptAllDevices: true,
       optionalServices: [...SERVICE_UUIDS],
     });
     if (!device.gatt) throw new Error("เครื่องพิมพ์นี้ไม่มีช่องเชื่อมต่อ Bluetooth GATT");
