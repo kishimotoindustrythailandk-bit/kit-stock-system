@@ -28,7 +28,7 @@ type BluetoothServer = {
 
 type BluetoothDevice = {
   name?: string;
-  gatt?: { connect: () => Promise<BluetoothServer> };
+  gatt?: BluetoothServer & { connect: () => Promise<BluetoothServer> };
 };
 
 export type Rpp04Session = {
@@ -55,16 +55,21 @@ export type Rpp04Tag = {
 };
 
 let activeSession: Rpp04Session | null = null;
+let pendingSession: Promise<Rpp04Session> | null = null;
 
 function printerError(error: unknown) {
   const name = error instanceof Error ? error.name : "";
   if (name === "NotFoundError") return new Error("ยังไม่ได้เลือกเครื่องพิมพ์ กรุณากด RPP04 แล้วเลือก RPP04-B");
   if (name === "SecurityError") return new Error("Chrome ไม่อนุญาต Bluetooth กรุณาเปิด Bluetooth และ Location แล้วลองใหม่");
+  if (error instanceof Error && error.message.includes("GATT operation already in progress")) {
+    return new Error("เครื่องพิมพ์กำลังเชื่อมต่ออยู่ กรุณารอ 2 วินาทีแล้วกด RPP04 ตรงอีกครั้ง");
+  }
   return error instanceof Error ? error : new Error("เชื่อมต่อ RPP04 ไม่สำเร็จ");
 }
 
 export async function prepareRpp04Bluetooth(): Promise<Rpp04Session> {
   if (activeSession) return activeSession;
+  if (pendingSession) return pendingSession;
   const bluetooth = (navigator as Navigator & {
     bluetooth?: {
       requestDevice: (options: unknown) => Promise<BluetoothDevice>;
@@ -73,13 +78,21 @@ export async function prepareRpp04Bluetooth(): Promise<Rpp04Session> {
   if (!bluetooth) {
     throw new Error("มือถือรุ่นนี้ยังไม่เปิด Web Bluetooth กรุณาใช้ Google Chrome และเปิด Bluetooth กับ Location");
   }
-  try {
+  pendingSession = (async () => {
     const device = await bluetooth.requestDevice({
       acceptAllDevices: true,
       optionalServices: [...SERVICE_UUIDS],
     });
     if (!device.gatt) throw new Error("เครื่องพิมพ์นี้ไม่มีช่องเชื่อมต่อ Bluetooth GATT");
-    const server = await device.gatt.connect();
+    let server: BluetoothServer;
+    try {
+      server = await device.gatt.connect();
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("GATT operation already in progress")) throw error;
+      await wait(700);
+      server = device.gatt.connected ? device.gatt : await device.gatt.connect();
+    }
+    await wait(300);
     for (const serviceUuid of SERVICE_UUIDS) {
       try {
         const service = await server.getPrimaryService(serviceUuid);
@@ -97,9 +110,14 @@ export async function prepareRpp04Bluetooth(): Promise<Rpp04Session> {
       }
     }
     throw new Error("เชื่อมต่อ RPP04 ได้ แต่ไม่พบช่องส่งคำสั่ง ESC กรุณาส่งรูปหน้า Self-test ของเครื่องให้ผู้พัฒนา");
+  })();
+  try {
+    return await pendingSession;
   } catch (error) {
     activeSession = null;
     throw printerError(error);
+  } finally {
+    pendingSession = null;
   }
 }
 
