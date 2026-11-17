@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -38,3 +38,12 @@ jobs:
         with:
           name: Control-Stock-KIT-Printer
           path: android-printer/app/build/outputs/apk/debug/app-debug.apk
+      - name: Publish installable APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete rpp04-printer-latest --yes --cleanup-tag || true
+          gh release create rpp04-printer-latest \
+            android-printer/app/build/outputs/apk/debug/app-debug.apk#Control-Stock-KIT-Printer.apk \
+            --title "Control Stock KIT Printer" \
+            --notes "Android print bridge for Rongta RPP04-E (Bluetooth Classic / ESC)."
