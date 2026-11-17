@@ -2,6 +2,8 @@
 
 const DOTS_WIDE = 800;
 const DOTS_HIGH = 440;
+const RPP04_SERVICE = 0xffe0;
+const RPP04_WRITE_CHARACTERISTIC = 0xffe1;
 const SERVICE_UUIDS = [
   "0000ffe0-0000-1000-8000-00805f9b34fb",
   "0000ffe5-0000-1000-8000-00805f9b34fb",
@@ -21,13 +23,15 @@ type BluetoothCharacteristic = {
 };
 
 type BluetoothService = {
+  uuid?: string;
   getCharacteristics: () => Promise<BluetoothCharacteristic[]>;
-  getCharacteristic?: (characteristic: string) => Promise<BluetoothCharacteristic>;
+  getCharacteristic?: (characteristic: string | number) => Promise<BluetoothCharacteristic>;
 };
 
 type BluetoothServer = {
   connected?: boolean;
-  getPrimaryService: (service: string) => Promise<BluetoothService>;
+  getPrimaryService: (service: string | number) => Promise<BluetoothService>;
+  getPrimaryServices?: () => Promise<BluetoothService[]>;
 };
 
 type BluetoothDevice = {
@@ -84,8 +88,8 @@ export async function prepareRpp04Bluetooth(): Promise<Rpp04Session> {
   }
   pendingSession = (async () => {
     const device = await bluetooth.requestDevice({
-      acceptAllDevices: true,
-      optionalServices: [...SERVICE_UUIDS],
+      filters: [{ namePrefix: "RPP04" }],
+      optionalServices: [RPP04_SERVICE, 0x18f0, ...SERVICE_UUIDS],
     });
     if (!device.gatt) throw new Error("เครื่องพิมพ์นี้ไม่มีช่องเชื่อมต่อ Bluetooth GATT");
     let server: BluetoothServer;
@@ -101,17 +105,40 @@ export async function prepareRpp04Bluetooth(): Promise<Rpp04Session> {
     // RPP04-B exposes its ESC/POS data channel here. Resolve it directly first;
     // some Android/Chrome versions do not reliably report characteristic
     // properties while enumerating every characteristic in a service.
+    let directChannelError = "";
     try {
-      const rpp04Service = await server.getPrimaryService("0000ffe0-0000-1000-8000-00805f9b34fb");
+      const rpp04Service = await server.getPrimaryService(RPP04_SERVICE);
       const rpp04Characteristic = rpp04Service.getCharacteristic
-        ? await rpp04Service.getCharacteristic("0000ffe1-0000-1000-8000-00805f9b34fb")
+        ? await rpp04Service.getCharacteristic(RPP04_WRITE_CHARACTERISTIC)
         : (await rpp04Service.getCharacteristics())[0];
       if (rpp04Characteristic) {
         activeSession = { deviceName: device.name || "RPP04-B", characteristic: rpp04Characteristic };
         return activeSession;
       }
-    } catch {
+    } catch (error) {
+      directChannelError = error instanceof Error ? error.message : String(error);
       // Fall back to discovery for other RPP04 firmware revisions.
+    }
+
+    // A few Android builds resolve vendor UUIDs only after listing the granted
+    // services. Use the UUIDs reported by the printer as a second direct path.
+    if (server.getPrimaryServices) {
+      try {
+        const services = await server.getPrimaryServices();
+        for (const service of services) {
+          const characteristics = await service.getCharacteristics();
+          const ffe1 = characteristics.find((item) => {
+            const uuid = (item as BluetoothCharacteristic & { uuid?: string }).uuid?.toLowerCase() || "";
+            return uuid === "0000ffe1-0000-1000-8000-00805f9b34fb" || uuid.endsWith("ffe1");
+          });
+          if (ffe1) {
+            activeSession = { deviceName: device.name || "RPP04-B", characteristic: ffe1 };
+            return activeSession;
+          }
+        }
+      } catch (error) {
+        if (!directChannelError) directChannelError = error instanceof Error ? error.message : String(error);
+      }
     }
 
     for (const serviceUuid of SERVICE_UUIDS) {
@@ -130,7 +157,7 @@ export async function prepareRpp04Bluetooth(): Promise<Rpp04Session> {
         // The firmware exposes only one of the supported printer services.
       }
     }
-    throw new Error("เชื่อมต่อ RPP04 ได้ แต่ไม่พบช่องส่งคำสั่ง ESC กรุณาส่งรูปหน้า Self-test ของเครื่องให้ผู้พัฒนา");
+    throw new Error(`เชื่อมต่อ RPP04-B ได้ แต่เปิดช่อง FFE1 ไม่สำเร็จ${directChannelError ? ` (${directChannelError})` : ""}`);
   })();
   try {
     return await pendingSession;
