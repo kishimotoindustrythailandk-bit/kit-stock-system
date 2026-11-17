@@ -62,6 +62,26 @@ export type Rpp04Tag = {
   imageDataUrl?: string;
 };
 
+export type Rpp04SplitTag = {
+  kind: "delivery" | "remaining";
+  qty: number;
+  sourceTagId: string;
+  materialCode: string;
+  jobNo: string;
+  productionDate: string;
+  partName: string;
+  customer: string;
+  location: string;
+  pickId: number | null;
+  dueDate: string;
+  dueTime: string;
+  fact: string;
+  doNo: string;
+  labelId: string;
+  issuedAt: string;
+  qrDataUrl: string;
+};
+
 let activeSession: Rpp04Session | null = null;
 let pendingSession: Promise<Rpp04Session> | null = null;
 
@@ -222,6 +242,22 @@ function loadImage(source: string) {
   });
 }
 
+function canvasToRaster(context: CanvasRenderingContext2D) {
+  const pixels = context.getImageData(0, 0, DOTS_WIDE, DOTS_HIGH).data;
+  const widthBytes = Math.ceil(DOTS_WIDE / 8);
+  const raster = new Uint8Array(widthBytes * DOTS_HIGH);
+  for (let y = 0; y < DOTS_HIGH; y += 1) {
+    for (let x = 0; x < DOTS_WIDE; x += 1) {
+      const source = (y * DOTS_WIDE + x) * 4;
+      const luminance = pixels[source] * 0.299 + pixels[source + 1] * 0.587 + pixels[source + 2] * 0.114;
+      if (pixels[source + 3] > 32 && luminance < 165) {
+        raster[y * widthBytes + (x >> 3)] |= 0x80 >> (x & 7);
+      }
+    }
+  }
+  return raster;
+}
+
 async function renderTag(tag: Rpp04Tag) {
   const canvas = document.createElement("canvas");
   canvas.width = DOTS_WIDE;
@@ -297,19 +333,64 @@ async function renderTag(tag: Rpp04Tag) {
   context.fillText("ยิง QR เพื่อรับงานเข้า Stock", 782, 382);
   context.textAlign = "left";
 
-  const pixels = context.getImageData(0, 0, DOTS_WIDE, DOTS_HIGH).data;
-  const widthBytes = Math.ceil(DOTS_WIDE / 8);
-  const raster = new Uint8Array(widthBytes * DOTS_HIGH);
-  for (let y = 0; y < DOTS_HIGH; y += 1) {
-    for (let x = 0; x < DOTS_WIDE; x += 1) {
-      const source = (y * DOTS_WIDE + x) * 4;
-      const luminance = pixels[source] * 0.299 + pixels[source + 1] * 0.587 + pixels[source + 2] * 0.114;
-      if (pixels[source + 3] > 32 && luminance < 165) {
-        raster[y * widthBytes + (x >> 3)] |= 0x80 >> (x & 7);
-      }
-    }
+  return canvasToRaster(context);
+}
+
+async function renderSplitTag(tag: Rpp04SplitTag) {
+  const canvas = document.createElement("canvas");
+  canvas.width = DOTS_WIDE;
+  canvas.height = DOTS_HIGH;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("มือถือไม่สามารถสร้างภาพ Tag จัดงานได้");
+  context.fillStyle = "#fff";
+  context.fillRect(0, 0, DOTS_WIDE, DOTS_HIGH);
+  context.strokeStyle = "#000";
+  context.lineWidth = 3;
+  context.strokeRect(2, 2, DOTS_WIDE - 4, 422);
+
+  context.fillStyle = "#000";
+  context.fillRect(3, 3, DOTS_WIDE - 6, 58);
+  context.fillStyle = "#fff";
+  context.font = "900 32px Arial, sans-serif";
+  context.fillText("KiT", 16, 41);
+  context.textAlign = "right";
+  context.font = '900 21px Arial, "Noto Sans Thai", sans-serif';
+  context.fillText(tag.kind === "delivery" ? "TAG ส่งพร้อมงาน" : "TAG คงเหลือใน STOCK", 782, 38);
+  context.textAlign = "left";
+
+  label(context, "PART NO. / MATERIAL", tag.materialCode, 20, 86, 540, 34);
+  label(context, "PART NAME", tag.partName, 20, 147, 540, 23);
+
+  context.lineWidth = 2;
+  context.strokeRect(20, 194, 530, 82);
+  context.font = "900 50px Arial, sans-serif";
+  context.fillText(String(tag.qty), 34, 254);
+  context.font = '900 18px Arial, "Noto Sans Thai", sans-serif';
+  context.fillText("ชิ้น / PCS", 330, 251);
+
+  const qr = await loadImage(tag.qrDataUrl);
+  context.strokeRect(580, 78, 190, 198);
+  context.drawImage(qr, 594, 88, 162, 162);
+  context.font = '800 13px Arial, "Noto Sans Thai", sans-serif';
+  context.textAlign = "center";
+  context.fillText(tag.kind === "delivery" ? "ตรวจสอบที่มา" : "ใช้แทน Tag เดิม", 675, 269);
+  context.textAlign = "left";
+
+  label(context, "JOB", tag.jobNo, 20, 302, 240, 19);
+  label(context, "วันที่ผลิต", tag.productionDate, 280, 302, 250, 19);
+  label(context, "ลูกค้า / LOCATION", `${tag.customer} / ${tag.location}`, 550, 302, 220, 17);
+  if (tag.kind === "delivery") {
+    label(context, "วันที่ส่ง / รอบ / FAC", `${tag.dueDate} ${tag.dueTime} / ${tag.fact}`, 20, 352, 500, 18);
+    label(context, "DO / PICK", `${tag.doNo || "—"} / ${tag.pickId || "—"}`, 550, 352, 220, 17);
   }
-  return raster;
+
+  context.font = "900 15px Arial, sans-serif";
+  context.fillText(fitText(context, tag.sourceTagId, 500), 20, 408);
+  context.font = "700 11px Arial, sans-serif";
+  context.textAlign = "right";
+  context.fillText(fitText(context, `${tag.labelId} · ${tag.issuedAt}`, 250), 780, 408);
+  context.textAlign = "left";
+  return canvasToRaster(context);
 }
 
 export function buildEscPosRaster(raster: Uint8Array, width = DOTS_WIDE, height = DOTS_HIGH) {
@@ -352,17 +433,11 @@ async function gzip(bytes: Uint8Array) {
   return { bytes: new Uint8Array(await new Response(stream).arrayBuffer()), encoding: "gzip" } as const;
 }
 
-export async function openRpp04AndroidBridge(tags: Rpp04Tag[]) {
+async function openAndroidBridge(documents: Uint8Array[]) {
   if (!/Android/i.test(navigator.userAgent)) {
     throw new Error("การพิมพ์ RPP04 ต้องเปิดจากมือถือ Android ที่ติดตั้ง Control Stock KIT Printer");
   }
-  const documents: Uint8Array[] = [];
-  let totalLength = 0;
-  for (const tag of tags) {
-    const command = buildEscPosRaster(await renderTag(tag));
-    documents.push(command);
-    totalLength += command.length;
-  }
+  const totalLength = documents.reduce((sum, document) => sum + document.length, 0);
   const combined = new Uint8Array(totalLength);
   let cursor = 0;
   for (const document of documents) {
@@ -372,8 +447,20 @@ export async function openRpp04AndroidBridge(tags: Rpp04Tag[]) {
   const encoded = await gzip(combined);
   const data = toBase64Url(encoded.bytes);
   const fallback = encodeURIComponent(`${window.location.origin}/?page=tags&printer_app=missing`);
-  const intent = `intent://print?data=${data}&encoding=${encoded.encoding}&count=${tags.length}#Intent;scheme=controlstockkit;package=th.co.kishimoto.controlstockprinter;S.browser_fallback_url=${fallback};end`;
+  const intent = `intent://print?data=${data}&encoding=${encoded.encoding}&count=${documents.length}#Intent;scheme=controlstockkit;package=th.co.kishimoto.controlstockprinter;S.browser_fallback_url=${fallback};end`;
   window.location.href = intent;
+}
+
+export async function openRpp04AndroidBridge(tags: Rpp04Tag[]) {
+  const documents: Uint8Array[] = [];
+  for (const tag of tags) documents.push(buildEscPosRaster(await renderTag(tag)));
+  await openAndroidBridge(documents);
+}
+
+export async function openRpp04SplitAndroidBridge(tags: Rpp04SplitTag[]) {
+  const documents: Uint8Array[] = [];
+  for (const tag of tags) documents.push(buildEscPosRaster(await renderSplitTag(tag)));
+  await openAndroidBridge(documents);
 }
 
 export async function printRpp04Tags(

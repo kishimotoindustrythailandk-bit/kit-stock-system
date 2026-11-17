@@ -2,10 +2,12 @@
 import {useEffect,useRef,useState} from 'react';
 import {reportOperationWarning} from './operation-warning';
 import {renderSplitLabels,splitLabelPayload,type SplitTagSnapshot,type SplitTagLabel,type SplitLabelKind} from './split-tag-label';
+import {openRpp04SplitAndroidBridge,type Rpp04SplitTag} from './rpp04-direct-print';
 type Data={snapshot:SplitTagSnapshot;labels?:SplitTagLabel[];labelId?:string;issuedAt?:string;issuedBy?:string;historical?:boolean;current?:SplitTagSnapshot|null};
 export default function SplitTagPopup({pickId,stockTagCode,labelId,page,onClose}:{pickId?:number;stockTagCode?:string;labelId?:string;page:string;onClose:()=>void}){
  const [data,setData]=useState<Data|null>(null),[loading,setLoading]=useState(true),[error,setError]=useState(''),[printing,setPrinting]=useState(false);
  const [delivery,setDelivery]=useState(true),[remaining,setRemaining]=useState(true),[paper,setPaper]=useState<'a4'|'100x55'>('100x55'),[preparedHtml,setPreparedHtml]=useState('');
+ const [preparedTags,setPreparedTags]=useState<Rpp04SplitTag[]>([]);
  const dialog=useRef<HTMLElement>(null),previewFrame=useRef<HTMLIFrameElement>(null),lock=useRef(false);
  useEffect(()=>{const old=document.activeElement as HTMLElement;dialog.current?.focus();const overflow=document.body.style.overflow;document.body.style.overflow='hidden';return()=>{document.body.style.overflow=overflow;old?.focus();};},[]);
  useEffect(()=>{const controller=new AbortController();const query=new URLSearchParams(labelId?{labelId}:pickId?{pickId:String(pickId)}:{stockTagCode:stockTagCode||''});void fetch('/api/split-tags?'+query,{cache:'no-store',signal:controller.signal}).then(async r=>{const value=await r.json() as Data&{error?:string};if(!r.ok)throw new Error(value.error||'โหลด Tag ไม่สำเร็จ');setData(value);setDelivery(value.snapshot.waitingQty>0);setRemaining(value.snapshot.availableQty>0);}).catch(e=>{if(e.name!=='AbortError'){setError(e.message);reportOperationWarning({page,message:e.message});}}).finally(()=>{if(!controller.signal.aborted)setLoading(false);});return()=>controller.abort();},[pickId,stockTagCode,labelId,page]);
@@ -19,9 +21,21 @@ export default function SplitTagPopup({pickId,stockTagCode,labelId,page,onClose}
    const result=await response.json() as Data&{labels:SplitTagLabel[];labelId:string;issuedAt:string;error?:string};if(!response.ok)throw new Error(result.error||'ออก Tag ไม่สำเร็จ');
    const qrcode=await import('qrcode');const qrs=await Promise.all(result.labels.map(label=>qrcode.toDataURL(splitLabelPayload(label,result.labelId,window.location.origin+'/'),{width:500,margin:4,errorCorrectionLevel:'M'})));
    setPreparedHtml(renderSplitLabels(result.labels,result.labelId,result.issuedAt,qrs,paper));
-   setData(current=>current?{...current,labelId:result.labelId,issuedAt:result.issuedAt,issuedBy:result.issuedBy}:current);
+   setPreparedTags(result.labels.map((label,index)=>({...label,labelId:result.labelId,issuedAt:result.issuedAt,qrDataUrl:qrs[index]})));
+   setData(current=>current?{...current,labels:result.labels,labelId:result.labelId,issuedAt:result.issuedAt,issuedBy:result.issuedBy}:current);
   }catch(e){const message=e instanceof Error?e.message:'พิมพ์ Tag ไม่สำเร็จ';setError(message);reportOperationWarning({page,message});}
   finally{lock.current=false;setPrinting(false);}
+ }
+ async function printPrepared(){
+  if(paper==='100x55'){
+   if(!preparedTags.length){setError('ไม่พบข้อมูล Tag สำหรับพิมพ์ RT4-E');return;}
+   setPrinting(true);setError('');
+   try{await openRpp04SplitAndroidBridge(preparedTags);}
+   catch(e){const message=e instanceof Error?e.message:'เปิดแอปพิมพ์ RT4-E ไม่สำเร็จ';setError(message);reportOperationWarning({page,message});}
+   finally{setPrinting(false);}
+   return;
+  }
+  const frame=previewFrame.current;if(!frame?.contentWindow){const message='ไม่สามารถเปิดหน้าพิมพ์ได้ กรุณาลองใหม่';setError(message);reportOperationWarning({page,message});return;}frame.contentWindow.focus();frame.contentWindow.print();
  }
  const snapshot=data?.snapshot;
  return <div className="modal-backdrop dispatch-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="split-tag-title"><section ref={dialog} tabIndex={-1} className="dispatch-confirm-modal" onKeyDown={event=>{if(event.key==='Escape'&&!printing)onClose();if(event.key==='Tab'){const items=Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled)'));const first=items[0],last=items[items.length-1];if(event.shiftKey&&(document.activeElement===first||document.activeElement===dialog.current)){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}}}}>
@@ -30,13 +44,13 @@ export default function SplitTagPopup({pickId,stockTagCode,labelId,page,onClose}
    <div className="dispatch-confirm-part"><small>PART / MATERIAL</small><b>{snapshot.tag.materialCode}</b><p>{snapshot.tag.partName}</p></div>
    <div className="dispatch-confirm-details"><div><small>Tag เดิม</small><b>{snapshot.tag.tagId}</b></div><div><small>Job / วันที่ผลิต</small><b>{snapshot.tag.jobNo} / {snapshot.tag.productionDate}</b></div>{snapshot.pick&&<><div><small>รอบ / FAC</small><b>{snapshot.pick.deliveryTime} / {snapshot.pick.fact}</b></div><div><small>วันที่ส่ง / DO</small><b>{snapshot.pick.deliveryDate} / {snapshot.pick.doNo}</b></div></>}</div>
    {data?.historical?<><p>ออกโดย {data.issuedBy} · {data.issuedAt}</p>{data.labels?.map(label=><p key={label.kind}><b>{label.kind==='delivery'?'ส่งพร้อมงาน':'คงเหลือ Stock'}: {label.qty.toLocaleString()} ชิ้น</b></p>)}<p>ยอดบนฉลากเป็นยอด ณ เวลาออก Tag</p>{data.current?<p>ปัจจุบัน: Stock พร้อมใช้ {data.current.availableQty.toLocaleString()} · งานรอส่ง {data.current.waitingQty.toLocaleString()} ชิ้น</p>:<p>ไม่พบรายการต้นทางในปัจจุบัน</p>}</>:<>
-    <div className="dispatch-confirm-qty"><label style={{padding:16}}><input type="checkbox" disabled={!snapshot.waitingQty||printing} checked={delivery} onChange={event=>{setDelivery(event.target.checked);setPreparedHtml('');}}/><small>Tag ส่งพร้อมงาน</small><b>{snapshot.waitingQty.toLocaleString()}</b><em>ชิ้น</em></label><label style={{padding:16}}><input type="checkbox" disabled={!snapshot.availableQty||printing} checked={remaining} onChange={event=>{setRemaining(event.target.checked);setPreparedHtml('');}}/><small>Tag คงเหลือใน Stock</small><b>{snapshot.availableQty.toLocaleString()}</b><em>ชิ้น</em></label></div>
+    <div className="dispatch-confirm-qty"><label style={{padding:16}}><input type="checkbox" disabled={!snapshot.waitingQty||printing} checked={delivery} onChange={event=>{setDelivery(event.target.checked);setPreparedHtml('');setPreparedTags([]);}}/><small>Tag ส่งพร้อมงาน</small><b>{snapshot.waitingQty.toLocaleString()}</b><em>ชิ้น</em></label><label style={{padding:16}}><input type="checkbox" disabled={!snapshot.availableQty||printing} checked={remaining} onChange={event=>{setRemaining(event.target.checked);setPreparedHtml('');setPreparedTags([]);}}/><small>Tag คงเหลือใน Stock</small><b>{snapshot.availableQty.toLocaleString()}</b><em>ชิ้น</em></label></div>
     <p>พิมพ์เฉพาะประเภทที่เลือก · Tag คงเหลือใช้แทนฉลากเดิมบนกล่อง · ไม่เพิ่มยอด Stock</p>
-    <label>เครื่องพิมพ์ / กระดาษ <select disabled={printing} value={paper} onChange={event=>{setPaper(event.target.value as 'a4'|'100x55');setPreparedHtml('');}}><option value="100x55">Rongta RPP04 · ฉลาก 100 × 55 mm</option><option value="a4">เครื่องบริษัท · A4 (สูงสุด 10 Tag)</option></select></label>
+    <label>เครื่องพิมพ์ / กระดาษ <select disabled={printing} value={paper} onChange={event=>{setPaper(event.target.value as 'a4'|'100x55');setPreparedHtml('');setPreparedTags([]);}}><option value="100x55">Rongta RT4-E · ฉลาก 100 × 55 mm</option><option value="a4">เครื่องบริษัท · A4 (สูงสุด 10 Tag)</option></select></label>
     {data.labelId&&<p role="status">เตรียม Tag และบันทึกประวัติแล้ว · {data.labelId}</p>}
     {preparedHtml&&<section aria-label="ตัวอย่าง Tag ก่อนพิมพ์" style={{marginTop:16}}><b>ตัวอย่าง Tag ก่อนพิมพ์</b><iframe ref={previewFrame} title="ตัวอย่าง Tag แบ่งงาน" srcDoc={preparedHtml} style={{display:'block',width:'100%',height:420,border:'1px solid #cbd5e1',borderRadius:8,marginTop:8,background:'#fff'}}/></section>}
    </>}
   </>}{error&&<p role="alert">{error}</p>}</div>
-  <footer><button className="button secondary" disabled={printing} onClick={onClose}>ปิด</button>{!data?.historical&&!preparedHtml&&<button className="button confirm-dispatch-button" disabled={loading||printing||!snapshot||(!delivery&&!remaining)||(!snapshot.waitingQty&&!snapshot.availableQty)} onClick={()=>void prepare()}>{printing?'กำลังเตรียม Tag…':'เตรียมและดูตัวอย่าง Tag'}</button>}{preparedHtml&&<><button className="button secondary" type="button" onClick={()=>setPreparedHtml('')}>แก้ไขตัวเลือก</button><button className="button confirm-dispatch-button" type="button" onClick={()=>{const frame=previewFrame.current;if(!frame?.contentWindow){reportOperationWarning({page,message:'ไม่สามารถเปิดหน้าพิมพ์ได้ กรุณาลองใหม่'});return;}frame.contentWindow.focus();frame.contentWindow.print();}}>▤ พิมพ์ Tag</button></>}</footer>
+  <footer><button className="button secondary" disabled={printing} onClick={onClose}>ปิด</button>{!data?.historical&&!preparedHtml&&<button className="button confirm-dispatch-button" disabled={loading||printing||!snapshot||(!delivery&&!remaining)||(!snapshot.waitingQty&&!snapshot.availableQty)} onClick={()=>void prepare()}>{printing?'กำลังเตรียม Tag…':'เตรียมและดูตัวอย่าง Tag'}</button>}{preparedHtml&&<><button className="button secondary" type="button" disabled={printing} onClick={()=>{setPreparedHtml('');setPreparedTags([]);}}>แก้ไขตัวเลือก</button><button className="button confirm-dispatch-button" type="button" disabled={printing} onClick={()=>void printPrepared()}>{printing?'กำลังเปิดแอปพิมพ์…':paper==='100x55'?'▤ พิมพ์ RT4-E ตรง':'▤ พิมพ์ Tag A4'}</button></>}</footer>
  </section></div>;
 }
