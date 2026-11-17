@@ -326,6 +326,45 @@ export function buildEscPosRaster(raster: Uint8Array, width = DOTS_WIDE, height 
   return output;
 }
 
+function toBase64Url(bytes: Uint8Array) {
+  let binary = "";
+  const block = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += block) {
+    binary += String.fromCharCode(...bytes.subarray(offset, Math.min(offset + block, bytes.length)));
+  }
+  return window.btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function gzip(bytes: Uint8Array) {
+  if (!("CompressionStream" in window)) return { bytes, encoding: "raw" } as const;
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"));
+  return { bytes: new Uint8Array(await new Response(stream).arrayBuffer()), encoding: "gzip" } as const;
+}
+
+export async function openRpp04AndroidBridge(tags: Rpp04Tag[]) {
+  if (!/Android/i.test(navigator.userAgent)) {
+    throw new Error("การพิมพ์ RPP04 ต้องเปิดจากมือถือ Android ที่ติดตั้ง Control Stock KIT Printer");
+  }
+  const documents: Uint8Array[] = [];
+  let totalLength = 0;
+  for (const tag of tags) {
+    const command = buildEscPosRaster(await renderTag(tag));
+    documents.push(command);
+    totalLength += command.length;
+  }
+  const combined = new Uint8Array(totalLength);
+  let cursor = 0;
+  for (const document of documents) {
+    combined.set(document, cursor);
+    cursor += document.length;
+  }
+  const encoded = await gzip(combined);
+  const data = toBase64Url(encoded.bytes);
+  const fallback = encodeURIComponent(`${window.location.origin}/?page=tags&printer_app=missing`);
+  const intent = `intent://print?data=${data}&encoding=${encoded.encoding}&count=${tags.length}#Intent;scheme=controlstockkit;package=th.co.kishimoto.controlstockprinter;S.browser_fallback_url=${fallback};end`;
+  window.location.href = intent;
+}
+
 export async function printRpp04Tags(
   session: Rpp04Session,
   tags: Rpp04Tag[],

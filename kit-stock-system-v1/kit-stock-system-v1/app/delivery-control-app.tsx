@@ -1,4962 +1,1401 @@
-"use client";
-
-/* eslint-disable @next/next/no-img-element */
-
-import { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { validArrangementQuantity } from "./arrangement-quantity";
-import SplitTagPopup from "./split-tag-popup";
-import OperationWarningPopup from "./operation-warning-popup";
-import { reportOperationWarning } from "./operation-warning";
-import DashboardControlCenter from "./dashboard-control-center";
-import OverdueWorkPage from "./overdue-work-page";
-import StockAllPage from "./stock-all-page";
-import { OverviewIcon, OverviewLogo, OverviewFactory, OVERVIEW_NAV_ICONS } from "./stock-overview-icons";
-import { createForecastExportWorkbook, createForecastExportBinary } from "./forecast-export";
-import { normalizeDueExcelDate } from "./due-excel-date";
-import { speakThaiAlert } from "./voice-alert";
-import VoiceAlertControl from "./voice-alert-control";
-import { prepareRpp04Bluetooth, printRpp04Tags, type Rpp04Tag } from "./rpp04-direct-print";
-
-type PageKey = "stock-all" | "overdue" | "dashboard" | "stock" | "manual-stock" | "stock-count" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
-
-type EditablePageKey = "stock" | "manual-stock" | "stock-count" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "dispatch";
-type EditPermission = `${EditablePageKey}-edit`;
-type AppPermission = PageKey | EditPermission | "stock-all-details" | "stock-all-export" | "parts-add" | "permission-model-v2";
-
-const EDITABLE_PAGE_KEYS: EditablePageKey[] = ["stock", "manual-stock", "stock-count", "forecast", "parts", "tags", "plan", "arrange", "replacement", "dispatch"];
-
-const STOCK_ACCESS_LABELS: Record<string,string> = { "stock-all-details": "Stock ‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î: ‡∏î‡∏π Tag / Job / Movement", "stock-all-export": "Stock ‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î: ‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å Excel", "parts-add": "‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô Part: ‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏• Part ‡πÉ‡∏´‡∏°‡πà" };
-
-type DueLine = {
-  id: number;
-  importId: number;
-  doNo: string;
-  seq: number;
-  materialCode: string;
-  materialDescription: string;
-  site: string;
-  fact: string;
-  line: string;
-  shop: string;
-  reqQty: number;
-  deliveryDate: string;
-  deliveryTime: string;
-  status: string;
-  scannedQty: number;
-  arrangedQty: number;
-  tagCount: number;
-};
-
-type DueScan = {
-  id: number;
-  dueLineId: number;
-  tagId: string;
-  qty: number;
-  unit: string;
-  location: string;
-  scannedByName: string;
-  createdAt: string;
-  materialCode: string;
-  fact: string;
-  deliveryDate: string;
-  deliveryTime: string;
-};
-
-type DueImport = {
-  id: number;
-  fileName: string;
-  rowCount: number;
-  totalQty: number;
-  importedByName: string;
-  createdAt: string;
-};
-type DueReceipt = { id: number; dueLineId: number; tagId: string; qty: number; unit: string; location: string; receivedByName: string; createdAt: string; materialCode: string; fact: string };
-
-type TagPreview = {
-  tag: {
-    tagId: string;
-    qty: number;
-    unit: string;
-    materialCode: string;
-    location: string;
-    doNo: string;
-    deliveryDate: string;
-    line: string;
-    shop: string;
-    seq: number;
-  };
-  due: DueLine & {
-    remainingQty: number;
-    projectedQty: number;
-    remainingAfter: number;
-    projectedStatus: string;
-  };
-  stockAllocations?: Array<{
-    stockTagId: number; stockTagCode?: string; qty: number; jobNo?: string;
-    productionDate?: string; receivedAt?: string; pickedByName?: string; pickedAt?: string;
-  }>;
-};
-
-type ImportRow = Omit<DueLine, "id" | "importId" | "status" | "scannedQty" | "arrangedQty" | "tagCount"> & { sourceKey: string };
-type DuePayload = { dues: DueLine[]; imports: DueImport[]; scans: DueScan[]; receipts: DueReceipt[]; error?: string };
-type SystemUser = { id: number; employeeCode: string; displayName: string; email: string; role: string; active: boolean; permissions: AppPermission[]; createdAt?: string };
-type PartImageMapping = { materialCode: string; originalName: string; contentType: string; updatedByName: string; updatedAt: string; materialDescription?: string };
-type StockPart = { materialCode: string; partName: string; customer: string; location: string; standardQty: number; active: boolean };
-type PartImportItem = Pick<StockPart, "materialCode" | "partName" | "customer" | "location" | "standardQty">;
-type PartBundleRow = { part: PartImportItem; masterFile?: File; actualFile?: File };
-type PartBundlePreview = {
-  fileName: string;
-  rows: PartBundleRow[];
-  unmatchedMaster: string[];
-  unmatchedActual: string[];
-  duplicateImages: string[];
-};
-type StockTag = { id: number; tagId: string; materialCode: string; partName: string; customer: string; qty: number; remainingQty: number; reservedQty: number; receivedQty?: number; ngQty?: number; jobNo: string; productionDate: string; status: string; printedByName: string; receivedByName: string; receivedAt?: string; createdAt: string; payload?: string; boxNo?: number; boxCount?: number; deliveryQty?: number; location?: string; splitLabelId?: string; splitIssuedAt?: string };
-type StockReceivePreview = { action: "receive_preview"; rawPayload: string; tag: StockTag; master: { materialCode: string; partName: string; customer: string; hasImage: boolean }; selectedLocation: string };
-type StockLocationSelection = { code: string; partCount: number };
-type StockAllocation = { id: number; customerTagId: string; stockTagCode: string; materialCode: string; qty: number; status: string; reservedByName: string; reservedAt: string; dispatchedByName: string; dispatchedAt?: string };
-type StockPick = {
-  id: number; dueLineId: number; pickedQty: number; dispatchedQty: number; status: string;
-  pickedByName: string; pickedByCode: string; pickedAt: string; stockTagCode: string;
-  materialCode: string; jobNo: string; productionDate: string; receivedAt?: string;
-  doNo: string; seq: number; fact: string; line: string; shop: string;
-  deliveryDate: string; deliveryTime: string;
-};
-type StockDispatchLink = {
-  id: number; customerTagId: string; qty: number; dispatchedByName: string;
-  dispatchedByCode: string; dispatchedAt: string; pickedByName: string; pickedAt: string;
-  stockTagCode: string; materialCode: string; jobNo: string; productionDate: string;
-  receivedAt?: string; doNo: string; fact: string; line: string;
-};
-type StockJobClosure = {
-  id: number; jobNo: string; materialCode: string; totalQty: number; receivedQty: number;
-  ngQty: number; ngTagCount: number; reason: string; closedByName: string;
-  closedByCode: string; closedAt: string;
-};
-type JobQuantityAdjustmentPreview = {
-  jobNo: string; materialCode: string; partName: string; customer: string; packQty: number;
-  currentQty: number; targetQty: number; difference: number; lockedQty: number; pendingQty: number;
-  productionDate: string; keptTagCount: number;
-  cancelledTags: Array<{ id: number; tagId: string; qty: number }>;
-  newTagQtys: number[];
-};
-type JobQuantityAdjustment = {
-  jobNo: string; materialCode: string; partName: string; currentQty: number;
-};
-type StockManualReceipt = {
-  id: number; stockTagId: number; tagId: string; materialCode: string; partName: string;
-  qty: number; jobNo: string; productionDate: string; referenceNo: string; note: string;
-  receivedByName: string; receivedByCode: string; receivedAt: string;
-  transactionNo: string; transactionTotalQty: number; packQty: number; tagCount: number;
-  duplicateConfirmed: number;
-};
-type ManualDuplicateJob = {
-  materialCode: string; partName: string; jobNo: string; previousQty: number;
-  previousTagCount: number; incomingQty: number; incomingTagCount: number;
-  totalAfter: number; lastReceivedAt: string;
-};
-type ManualReceiptSuccess = {
-  transactionNo: string; tags: StockTag[]; totalQty: number; packQty: number;
-  boxCount: number; duplicateConfirmed: boolean;
-};
-type StockCountAdjustment = {
-  id: number; adjustmentNo: string; countDate: string; materialCode: string; partName: string;
-  systemQty: number; countedQty: number; difference: number; reason: string;
-  adjustedByName: string; adjustedByCode: string; adjustedAt: string; affectedTagCount: number;
-};
-type StockCountAdjustmentLine = {
-  id: number; adjustmentId: number; stockTagId: number; stockTagCode: string;
-  qtyChange: number; beforeQty: number; afterQty: number; createdAt: string;
-};
-type StockMovementDay = { date: string; receivedQty: number; arrangedQty: number; adjustedQty: number };
-type StockCountPreview = {
-  action: "preview_tag_count"; tagId: string; materialCode: string; partName: string;
-  customer: string; jobNo: string; productionDate: string; status: string;
-  systemQty: number; countedQty: number; difference: number; reservedQty: number;
-  stockAreaSystemQty: number; stockAreaCountedQty: number; newTotalQty: number;
-  availableQty: number; materialTotalQty: number; materialTotalAfter: number; countDate: string;
-};
-type StockPayload = {
-  parts: StockPart[]; tags: StockTag[]; allocations: StockAllocation[];
-  picks: StockPick[]; dispatchLinks: StockDispatchLink[]; jobClosures: StockJobClosure[];
-  manualReceipts: StockManualReceipt[]; countAdjustments: StockCountAdjustment[];
-  countAdjustmentLines: StockCountAdjustmentLine[];
-  movementDays: StockMovementDay[];
-};
-type ArrangementPreview = {
-  action: "staged";
-  pick: StockPick;
-  tag: StockTag;
-  due: DueLine & { remainingToArrange: number; remainingQty: number };
-};
-type ArrangeConfirmation = {
-  action: "preview_stage"; tag: StockTag; due: DueLine;
-  pickedQty: number; tagAvailableQty: number; dueOpenQty: number; remainingAfter: number;
-  rawPayload: string; deliveryDate: string; deliveryTime: string; fact: string;
-};
-type ReplacementRequest = {
-  id: number; requestNo: string; materialCode: string; partName: string; customer: string;
-  requestedQty: number; issuedQty: number; remainingQty: number; reasonType: "defect" | "shortage" | "other";
-  reasonDetail: string; neededDate: string; status: "pending" | "partial" | "completed" | "cancelled";
-  requestedByName: string; requestedByCode: string; requestedAt: string; completedAt?: string;
-};
-type ReplacementIssue = {
-  id: number; requestId: number; stockTagId: number; stockTagCode: string; qty: number;
-  noticeNo: string; issuedByName: string; issuedByCode: string; issuedAt: string;
-  printedByName?: string; printedByCode?: string; printedAt?: string; jobNo?: string; productionDate?: string;
-};
-type ReplacementPayload = { requests: ReplacementRequest[]; issues: ReplacementIssue[] };
-type ReplacementIssuePreview = {
-  action: "preview"; request: ReplacementRequest;
-  tag: StockTag & { availableQty: number; stagedQty?: number; legacyReservedQty?: number; location?: string };
-  suggestedQty: number;
-};
-type ForecastImport = {
-  id: number; importToken: string; fileName: string; sourceCalculatedAt: string;
-  rowCount: number; materialCount: number; totalQty: number; status: string;
-  importedByName: string; importedByCode: string; createdAt: string; activatedAt?: string | null;
-};
-type ForecastCoverage = {
-  materialCode: string; description: string; stockQty: number; forecastQty: number;
-  dispatchedAfterImport: number; outstandingQty: number; overdueQty: number;
-  coveredThroughDate: string; coveredThroughTime: string; shortageDate: string;
-  shortageTime: string; firstShortageQty: number; totalShortage: number;
-  remainingStockAfterForecast: number; status: "covered" | "shortage" | "no_stock";
-  factories: string[]; daysToShortage: number | null;
-  timeline?: Array<{ deliveryDate: string; deliveryTime: string; demandQty: number; projectedBalance: number }>;
-  riskGroup: "overdue" | "within3" | "within7" | "within14" | "over14";
-};
-type ForecastSummary = {
-  materialCount: number; stockQty: number; outstandingQty: number; overdueQty: number;
-  totalShortage: number; coveredMaterials: number; shortageMaterials: number;
-  riskGroups: Record<"overdue" | "within3" | "within7" | "within14" | "over14", number>;
-};
-type ForecastTrend = { date: string; demandQty: number; cumulativeDemand: number; projectedStock: number; shortageParts: number };
-type ForecastPayload = {
-  activeImport: ForecastImport | null; imports: ForecastImport[];
-  coverage: ForecastCoverage[]; summary: ForecastSummary | null; trend?: ForecastTrend[]; calculatedAt?: string; error?: string;
-};
-type ForecastUploadRow = {
-  sourceKey: string; materialCode: string; description: string; deliveryDate: string;
-  deliveryTime: string; prodQty: number; deliverySpot: string; factory: string; shop: string; line: string;
-};
-type ForecastPreview = {
-  fileName: string; sourceCalculatedAt: string; sourceLabel: string; sourceRowCount: number;
-  materialCount: number; totalQty: number; duplicateRowCount: number; rows: ForecastUploadRow[];
-};
-type UserRole = "production" | "stock" | "qc" | "delivery" | "dispatcher" | "inspector";
-type UserForm = { id?: number; employeeCode: string; displayName: string; email: string; role: UserRole; pin: string; active: boolean; permissions: AppPermission[] };
-type AuditLog = {
-  id: number; moduleKey: string; moduleLabel: string; actionKey: string; actionLabel: string;
-  entityType: string; entityId: string; summary: string; detailJson: string;
-  beforeJson: string; afterJson: string; actorCode: string; actorName: string;
-  actorEmail: string; actorRole: string; ipAddress: string; createdAt: string;
-};
-
-const ROLE_LABELS: Record<string, string> = {
-  admin: "‡∏ú‡∏π‡πâ‡∏î‡∏π‡πÅ‡∏•‡∏£‡∏∞‡∏ö‡∏ö",
-  production: "Production",
-  stock: "Stock",
-  qc: "QC",
-  delivery: "Delivery",
-  dispatcher: "‡∏ú‡∏π‡πâ‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô (Legacy)",
-  inspector: "‡∏ú‡∏π‡πâ‡∏ï‡∏£‡∏ß‡∏à‡∏á‡∏≤‡∏ô (Legacy)",
-};
-const EMPTY_USER: UserForm = { employeeCode: "", displayName: "", email: "", role: "production", pin: "", active: true, permissions: [] };
-
-const NAV: Array<{ key: PageKey; label: string; icon: string }> = [
-  { key: "dashboard", label: "‡∏´‡∏ô‡πâ‡∏≤‡∏´‡∏•‡∏±‡∏Å", icon: "‚åÇ" },
-  { key: "stock", label: "Stock", icon: "‚ñ¶" },
-  { key: "stock-all", label: "Stock ‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î", icon: "‚ñ¶" },
-  { key: "manual-stock", label: "‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Stock ‡πÅ‡∏ö‡∏ö‡∏Ñ‡∏µ‡∏¢‡πå‡πÄ‡∏≠‡∏á", icon: "Ôºã" },
-  { key: "stock-count", label: "‡∏ï‡∏£‡∏ß‡∏à‡∏ô‡∏±‡∏ö/‡∏õ‡∏£‡∏±‡∏ö‡∏¢‡∏≠‡∏î‡∏™‡∏¥‡πâ‡∏ô‡πÄ‡∏î‡∏∑‡∏≠‡∏ô", icon: "‚âã" },
-  { key: "forecast", label: "Forecast Stock", icon: "‚ñß" },
-  { key: "parts", label: "‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô Part", icon: "‚ñ¶" },
-  { key: "tags", label: "‡∏û‡∏¥‡∏°‡∏û‡πå Tag", icon: "‚ñ§" },
-  { key: "plan", label: "‡πÅ‡∏ú‡∏ô‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô (Due)", icon: "‚ñ§" },
-  { key: "overdue", label: "‡∏á‡∏≤‡∏ô‡∏ï‡∏¥‡∏î‡∏•‡∏ö / ‡∏Ñ‡πâ‡∏≤‡∏á‡∏™‡πà‡∏á", icon: "!" },
-  { key: "arrange", label: "‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô", icon: "‚á•" },
-  { key: "replacement", label: "‡πÄ‡∏ö‡∏¥‡∏Å‡∏á‡∏≤‡∏ô‡∏ó‡∏î‡πÅ‡∏ó‡∏ô", icon: "‚Ü∫" },
-  { key: "dispatch", label: "‡∏ï‡∏£‡∏ß‡∏à‡πÅ‡∏•‡∏∞‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å", icon: "‚åó" },
-  { key: "exports", label: "‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å", icon: "‚ñ±" },
-  { key: "reports", label: "‡∏£‡∏≤‡∏¢‡∏á‡∏≤‡∏ô", icon: "‚ñ•" },
-  { key: "history", label: "‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥", icon: "‚ó∑" },
-  { key: "settings", label: "‡∏ï‡∏±‡πâ‡∏á‡∏Ñ‡πà‡∏≤", icon: "‚öô" },
-  { key: "users", label: "‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô", icon: "‚ôô" },
-];
-
-const DUE_DATA_PAGES: PageKey[] = ["dashboard", "plan", "overdue", "arrange", "dispatch", "exports", "reports", "history"];
-
-const PAGE_KEYS = new Set<PageKey>([...NAV.map((item) => item.key), "verify", "overdue"]);
-
-function pageFromUrl(): PageKey | null {
-  if (typeof window === "undefined") return null;
-  const candidate = new URLSearchParams(window.location.search).get("page");
-  return candidate && PAGE_KEYS.has(candidate as PageKey) ? candidate as PageKey : null;
-}
-
-function pageFromLocation(): PageKey | null {
-  if (typeof window === "undefined") return null;
-  const candidate = pageFromUrl() || window.localStorage.getItem("kit-current-page");
-  return candidate && PAGE_KEYS.has(candidate as PageKey) ? candidate as PageKey : null;
-}
-
-function updatePageLocation(next: PageKey, mode: "push" | "replace" = "push") {
-  const url = new URL(window.location.href);
-  if (next === "dashboard") url.searchParams.delete("page");
-  else url.searchParams.set("page", next);
-  window.localStorage.setItem("kit-current-page", next);
-  const target = `${url.pathname}${url.search}${url.hash}`;
-  if (mode === "replace") window.history.replaceState({ kitPage: next }, "", target);
-  else window.history.pushState({ kitPage: next }, "", target);
-}
-
-const PERMISSION_HELP: Record<PageKey, string> = {
-  dashboard: "‡∏†‡∏≤‡∏û‡∏£‡∏ß‡∏° Due ‡πÅ‡∏•‡∏∞‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏á‡∏≤‡∏ô",
-  stock: "‡∏£‡∏±‡∏ö Tag ‡πÄ‡∏Ç‡πâ‡∏≤ Stock ‡πÅ‡∏•‡∏∞‡∏î‡∏π‡∏¢‡∏≠‡∏î‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠",
-  "stock-all": "‡∏î‡∏π‡∏†‡∏≤‡∏û‡∏£‡∏ß‡∏° Stock ‡∏ó‡∏∏‡∏Å Part ‡∏£‡∏ß‡∏°‡∏¢‡∏≠‡∏î 0 (‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡∏£‡∏≤‡∏¢‡∏•‡∏∞‡πÄ‡∏≠‡∏µ‡∏¢‡∏î‡πÅ‡∏•‡∏∞ Excel ‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡πÅ‡∏¢‡∏Å‡∏î‡πâ‡∏≤‡∏ô‡∏•‡πà‡∏≤‡∏á)",
-  "manual-stock": "‡∏Ñ‡∏µ‡∏¢‡πå‡∏£‡∏±‡∏ö‡∏á‡∏≤‡∏ô‡πÄ‡∏Ç‡πâ‡∏≤‡πÅ‡∏•‡∏∞‡∏™‡∏£‡πâ‡∏≤‡∏á Tag ‡∏ï‡∏≤‡∏°‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ö‡∏£‡∏£‡∏à‡∏∏‡∏ï‡πà‡∏≠‡∏Å‡∏•‡πà‡∏≠‡∏á",
-  "stock-count": "‡∏™‡πÅ‡∏Å‡∏ô‡∏ï‡∏£‡∏ß‡∏à‡∏ô‡∏±‡∏ö‡πÅ‡∏•‡∏∞‡∏õ‡∏£‡∏±‡∏ö‡∏¢‡∏≠‡∏î‡∏ó‡∏µ‡∏•‡∏∞ KIT Stock Tag",
-  forecast: "‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤ Forecast ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤‡πÅ‡∏•‡∏∞‡∏ï‡∏£‡∏ß‡∏à‡∏ß‡πà‡∏≤‡∏¢‡∏≠‡∏î Stock ‡∏™‡πà‡∏á‡πÑ‡∏î‡πâ‡∏ñ‡∏∂‡∏á‡∏ß‡∏±‡∏ô‡πÑ‡∏´‡∏ô",
-  parts: "‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô Part ‡πÅ‡∏•‡∏∞‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô",
-  tags: "‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô Part ‡∏™‡∏£‡πâ‡∏≤‡∏á‡πÅ‡∏•‡∏∞‡∏û‡∏¥‡∏°‡∏û‡πå Tag",
-  overdue: "‡∏î‡∏π‡∏á‡∏≤‡∏ô‡∏ï‡∏¥‡∏î‡∏•‡∏ö / ‡∏Ñ‡πâ‡∏≤‡∏á‡∏™‡πà‡∏á‡∏ó‡∏∏‡∏Å Part ‡∏ó‡∏∏‡∏Å‡∏£‡∏≠‡∏ö ‡∏ó‡∏∏‡∏Å FAC ‡πÅ‡∏•‡∏∞‡πÄ‡∏õ‡∏¥‡∏î‡∏à‡∏≠‡πÅ‡∏™‡∏î‡∏á‡∏á‡∏≤‡∏ô‡∏Ñ‡πâ‡∏≤‡∏á",
-  plan: "‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤ ‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö ‡πÅ‡∏•‡∏∞‡∏•‡∏ö‡πÅ‡∏ú‡∏ô Due",
-  arrange: "‡πÄ‡∏•‡∏∑‡∏≠‡∏Å Due ‡πÅ‡∏•‡∏∞‡∏¢‡∏¥‡∏á KIT Tag ‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡∏£‡∏≠‡∏Ç‡∏≤‡∏¢",
-  replacement: "QC ‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å‡∏á‡∏≤‡∏ô‡πÄ‡∏™‡∏µ‡∏¢/‡∏á‡∏≤‡∏ô‡∏Ç‡∏≤‡∏î ‡πÅ‡∏•‡∏∞‡∏ó‡∏µ‡∏°‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡∏¢‡∏¥‡∏á KIT Tag ‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏ï‡∏±‡∏î Stock",
-  verify: "‡∏™‡πÅ‡∏Å‡∏ô‡πÄ‡∏ó‡∏µ‡∏¢‡∏ö‡∏£‡∏π‡∏õ master ‡∏Å‡πà‡∏≠‡∏ô‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å (‡πÑ‡∏°‡πà‡∏ï‡∏±‡∏î Stock/Due)",
-  dispatch: "‡∏¢‡∏¥‡∏á Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏ï‡∏±‡∏î Stock ‡πÅ‡∏•‡∏∞ Due",
-  exports: "‡∏î‡∏π‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡πÅ‡∏•‡πâ‡∏ß",
-  reports: "‡∏î‡∏π‡πÅ‡∏•‡∏∞‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡∏£‡∏≤‡∏¢‡∏á‡∏≤‡∏ô",
-  history: "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£",
-  settings: "‡∏ï‡∏±‡πâ‡∏á‡∏Ñ‡πà‡∏≤‡∏£‡∏∞‡∏ö‡∏ö‡πÅ‡∏•‡∏∞‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô",
-  users: "‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡πÅ‡∏•‡∏∞‡∏Å‡∏≥‡∏´‡∏ô‡∏î‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå",
-};
-
-const PAGE_SUBTITLE: Record<PageKey, string> = {
-  dashboard: "‡∏†‡∏≤‡∏û‡∏£‡∏ß‡∏°‡∏Å‡∏≤‡∏£‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô‡πÅ‡∏•‡∏∞‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏•‡πà‡∏≤‡∏™‡∏∏‡∏î",
-  "stock-all": "‡∏î‡∏π Stock ‡∏ó‡∏∏‡∏Å Part ‡∏£‡∏ß‡∏°‡∏¢‡∏≠‡∏î 0 ‡∏î‡∏π Tag / Job ‡πÅ‡∏•‡∏∞‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å Excel ‡πÇ‡∏î‡∏¢‡πÅ‡∏¢‡∏Å‡∏à‡∏≤‡∏Å‡∏´‡∏ô‡πâ‡∏≤‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤",
-  stock: "‡∏™‡πÅ‡∏Å‡∏ô‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ ‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏¢‡∏≠‡∏î‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠ ‡πÅ‡∏•‡∏∞‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥ Stock",
-  "manual-stock": "‡∏Ñ‡∏µ‡∏¢‡πå‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ ‡πÅ‡∏ö‡πà‡∏á‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ï‡∏≤‡∏°‡∏ö‡∏£‡∏£‡∏à‡∏∏‡∏ï‡πà‡∏≠‡∏Å‡∏•‡πà‡∏≠‡∏á ‡πÅ‡∏•‡∏∞‡∏™‡∏£‡πâ‡∏≤‡∏á Tag ‡∏≠‡∏±‡∏ï‡πÇ‡∏ô‡∏°‡∏±‡∏ï‡∏¥",
-  "stock-count": "‡∏™‡πÅ‡∏Å‡∏ô‡πÅ‡∏•‡∏∞‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡∏¢‡∏≠‡∏î‡∏à‡∏£‡∏¥‡∏á‡∏ó‡∏µ‡∏•‡∏∞ Tag ‡∏û‡∏£‡πâ‡∏≠‡∏°‡∏õ‡∏£‡∏±‡∏ö‡∏¢‡∏≠‡∏î Stock ‡∏£‡∏ß‡∏°",
-  forecast: "‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤ Forecast ‡∏£‡∏≤‡∏¢‡∏ß‡∏±‡∏ô‡πÅ‡∏•‡∏∞‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏ß‡πà‡∏≤‡∏¢‡∏≠‡∏î Stock ‡∏™‡πà‡∏á‡πÑ‡∏î‡πâ‡∏ñ‡∏∂‡∏á‡∏ß‡∏±‡∏ô‡πÑ‡∏´‡∏ô",
-  parts: "‡πÄ‡∏û‡∏¥‡πà‡∏° ‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤ ‡πÅ‡∏•‡∏∞‡∏à‡∏±‡∏î‡∏Å‡∏≤‡∏£‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô‡∏Ç‡∏≠‡∏á‡πÅ‡∏ï‡πà‡∏•‡∏∞ Part",
-  tags: "‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô Part ‡∏™‡∏£‡πâ‡∏≤‡∏á Tag ‡πÅ‡∏•‡∏∞‡∏û‡∏¥‡∏°‡∏û‡πå Tag ‡∏£‡∏±‡∏ö‡∏á‡∏≤‡∏ô‡πÄ‡∏Ç‡πâ‡∏≤ Stock",
-  overdue: "‡∏á‡∏≤‡∏ô‡∏Ñ‡πâ‡∏≤‡∏á‡∏™‡πà‡∏á‡∏ó‡∏∏‡∏Å Part ‡∏ó‡∏∏‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà ‡∏ó‡∏∏‡∏Å‡∏£‡∏≠‡∏ö ‡πÅ‡∏•‡∏∞‡∏ó‡∏∏‡∏Å FAC",
-  plan: "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡πÅ‡∏ú‡∏ô‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô‡∏à‡∏≤‡∏Å‡πÑ‡∏ü‡∏•‡πå Excel",
-  arrange: "‡∏ú‡∏π‡πâ‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡πÄ‡∏•‡∏∑‡∏≠‡∏Å Due ‡πÅ‡∏•‡πâ‡∏ß‡∏¢‡∏¥‡∏á KIT Stock Tag ‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡∏á‡∏≤‡∏ô‡∏£‡∏≠‡∏Ç‡∏≤‡∏¢",
-  replacement: "QC ‡πÅ‡∏à‡πâ‡∏á‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å‡∏á‡∏≤‡∏ô‡∏ó‡∏î‡πÅ‡∏ó‡∏ô ‡∏ó‡∏µ‡∏°‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡∏¢‡∏¥‡∏á KIT Tag ‡πÅ‡∏•‡∏∞‡∏û‡∏¥‡∏°‡∏û‡πå‡πÉ‡∏ö‡πÅ‡∏à‡πâ‡∏á‡∏≠‡∏≠‡∏Å",
-  verify: "‡∏™‡πÅ‡∏Å‡∏ô‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á‡πÄ‡∏û‡∏∑‡πà‡∏≠‡πÄ‡∏ó‡∏µ‡∏¢‡∏ö‡∏£‡∏π‡∏õ master ‡πÅ‡∏•‡∏∞‡∏á‡∏≤‡∏ô‡∏ó‡∏µ‡πà‡∏ï‡πâ‡∏≠‡∏á‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å ‡∏Å‡πà‡∏≠‡∏ô‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å",
-  dispatch: "‡∏ú‡∏π‡πâ‡∏ï‡∏£‡∏ß‡∏à‡∏™‡πÅ‡∏Å‡∏ô KIT Tag ‡∏ó‡∏µ‡πà‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡πÅ‡∏•‡πâ‡∏ß‡πÅ‡∏•‡∏∞ Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤‡πÉ‡∏´‡πâ‡∏ï‡∏£‡∏á‡∏Å‡∏±‡∏ô‡∏Å‡πà‡∏≠‡∏ô‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å",
-  exports: "‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ó‡∏µ‡πà‡∏ï‡∏±‡∏î‡∏¢‡∏≠‡∏î‡πÅ‡∏•‡∏∞‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡πÅ‡∏•‡πâ‡∏ß",
-  reports: "‡∏™‡∏£‡∏∏‡∏õ‡∏ú‡∏•‡∏Å‡∏≤‡∏£‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô‡∏ï‡∏≤‡∏°‡∏ß‡∏±‡∏ô‡πÅ‡∏•‡∏∞‡πÇ‡∏£‡∏á‡∏á‡∏≤‡∏ô",
-  history: "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡∏Å‡∏≤‡∏£‡∏™‡πÅ‡∏Å‡∏ô‡πÅ‡∏•‡∏∞‡∏ï‡∏±‡∏î‡∏¢‡∏≠‡∏î",
-  settings: "‡∏Å‡∏≥‡∏´‡∏ô‡∏î‡∏Ñ‡πà‡∏≤‡∏Å‡∏≤‡∏£‡∏ó‡∏≥‡∏á‡∏≤‡∏ô‡∏Ç‡∏≠‡∏á‡∏£‡∏∞‡∏ö‡∏ö",
-  users: "‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡∏ó‡∏µ‡πà‡∏°‡∏µ‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡πÄ‡∏Ç‡πâ‡∏≤‡∏ñ‡∏∂‡∏á‡∏£‡∏∞‡∏ö‡∏ö",
-};
-
-type VerifyVerdict = "ready" | "ready_noimg" | "short" | "over" | "no_due" | "ambiguous" | "already" | "bad_tag" | "pair_mismatch";
-type DispatchKitSelection = {
-  pickId: number; dueLineId: number; waitingQty: number; pickedByName: string; pickedAt: string;
-  stockTagId: number; stockTagCode: string; materialCode: string; jobNo: string;
-  productionDate: string; doNo: string; seq: number; fact: string; line: string;
-  shop: string; deliveryDate: string; deliveryTime: string;
-};
-type VerifyResult = {
-  action: "verify";
-  verdict: VerifyVerdict;
-  message?: string;
-  tag?: { rawPayload: string; tagId: string; materialCode: string; qty: number; unit: string; doNo: string; seq: number; deliveryDate: string; line: string; shop: string; location: string };
-  master?: { materialCode: string; partName: string; customer: string; hasImage: boolean };
-  due?: { id: number; doNo: string; seq: number; materialCode: string; materialDescription: string; fact: string; line: string; shop: string; site: string; reqQty: number; deliveryDate: string; deliveryTime: string; alreadyQty: number; remainingDue: number; projectedQty: number; remainingAfter: number };
-  stagedAvail?: number;
-  pairedKit?: { pickId?: number; stockTagId?: number; stockTagCode?: string; materialCode?: string; jobNo?: string; productionDate?: string; waitingQty?: number };
-};
-
-function number(value: unknown) {
-  const parsed = Number(String(value ?? "").replace(/,/g, ""));
-  return Number.isFinite(parsed) ? Math.round(parsed) : 0;
-}
-
-function text(value: unknown) {
-  return String(value ?? "").trim();
-}
-
-function normalizeDate(value: unknown, xlsx: typeof import("xlsx")) {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
-  }
-  if (typeof value === "number") {
-    const parsed = xlsx.SSF.parse_date_code(value);
-    if (parsed) return `${parsed.y}-${String(parsed.m).padStart(2, "0")}-${String(parsed.d).padStart(2, "0")}`;
-  }
-  const raw = text(value).split(" ")[0];
-  const thai = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (thai) return `${thai[3]}-${thai[2].padStart(2, "0")}-${thai[1].padStart(2, "0")}`;
-  const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-  if (iso) return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
-  return "";
-}
-
-function normalizeTime(value: unknown) {
-  if (value instanceof Date) return `${String(value.getHours()).padStart(2, "0")}:${String(value.getMinutes()).padStart(2, "0")}`;
-  if (typeof value === "number" && value >= 0 && value < 1) {
-    const minutes = Math.round(value * 24 * 60);
-    return `${String(Math.floor(minutes / 60) % 24).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
-  }
-  return text(value).slice(0, 5);
-}
-
-function fmt(value: number) {
-  return Number(value || 0).toLocaleString("th-TH");
-}
-
-function formatDate(value: string) {
-  if (!value) return "‚Äî";
-  const [year, month, day] = value.split("-");
-  return `${day}/${month}/${year}`;
-}
-
-function formatDateTime(value: string) {
-  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("th-TH", { dateStyle: "short", timeStyle: "short" }).format(date);
-}
-
-function formatDateOnly(value: string) {
-  if (!value) return "‚Äî";
-  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) return formatDate(value.slice(0, 10));
-  return `${String(date.getDate()).padStart(2, "0")}/${String(date.getMonth() + 1).padStart(2, "0")}/${date.getFullYear()}`;
-}
-
-/** ‡πÅ‡∏õ‡∏•‡∏á‡πÄ‡∏ß‡∏•‡∏≤‡∏à‡∏≤‡∏Å‡∏ê‡∏≤‡∏ô‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏• (UTC ‡πÑ‡∏°‡πà‡∏°‡∏µ‡πÇ‡∏ã‡∏ô‡∏ï‡πà‡∏≠‡∏ó‡πâ‡∏≤‡∏¢) ‡πÄ‡∏õ‡πá‡∏ô Date ‡∏ï‡∏≤‡∏°‡πÄ‡∏ß‡∏•‡∏≤‡πÄ‡∏Ñ‡∏£‡∏∑‡πà‡∏≠‡∏á‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ */
-function toLocalDate(value: string) {
-  if (!value) return null;
-  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
-  const date = new Date(normalized);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function formatTime(value: string) {
-  const date = toLocalDate(value);
-  if (!date) return "‚Äî";
-  return new Intl.DateTimeFormat("th-TH", { hour: "2-digit", minute: "2-digit" }).format(date);
-}
-
-/** ‡∏ß‡∏±‡∏ô‡∏ô‡∏µ‡πâ‡∏ï‡∏≤‡∏°‡πÄ‡∏ß‡∏•‡∏≤‡πÄ‡∏Ñ‡∏£‡∏∑‡πà‡∏≠‡∏á‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ ‡πÑ‡∏°‡πà‡πÉ‡∏ä‡πà UTC ‡∏°‡∏¥‡∏â‡∏∞‡∏ô‡∏±‡πâ‡∏ô‡∏¢‡∏≠‡∏î‡∏ï‡∏≠‡∏ô‡πÄ‡∏¢‡πá‡∏ô‡∏à‡∏∞‡∏Ç‡πâ‡∏≤‡∏°‡∏ß‡∏±‡∏ô‡∏ú‡∏¥‡∏î */
-function isToday(value: string) {
-  const date = toLocalDate(value);
-  if (!date) return false;
-  const now = new Date();
-  return date.getFullYear() === now.getFullYear()
-    && date.getMonth() === now.getMonth()
-    && date.getDate() === now.getDate();
-}
-
-function html(value: unknown) {
-  return String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character] || character);
-}
-
-const BANGKOK_DATE_TIME_FORMATTER = new Intl.DateTimeFormat("en-CA", {
-  timeZone: "Asia/Bangkok",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  hourCycle: "h23",
-});
-
-function bangkokDateTimeKey(value = new Date()) {
-  const parts = Object.fromEntries(
-    BANGKOK_DATE_TIME_FORMATTER.formatToParts(value)
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, part.value]),
-  );
-  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
-}
-
-function parseCsv(textValue: string) {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let cell = "";
-  let quoted = false;
-  const source = textValue.replace(/^\uFEFF/, "");
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index];
-    if (character === '"') {
-      if (quoted && source[index + 1] === '"') {
-        cell += '"';
-        index += 1;
-      } else quoted = !quoted;
-    } else if (character === "," && !quoted) {
-      row.push(cell);
-      cell = "";
-    } else if ((character === "\n" || character === "\r") && !quoted) {
-      if (character === "\r" && source[index + 1] === "\n") index += 1;
-      row.push(cell);
-      if (row.some((value) => value.trim())) rows.push(row);
-      row = [];
-      cell = "";
-    } else cell += character;
-  }
-  row.push(cell);
-  if (row.some((value) => value.trim())) rows.push(row);
-  return rows;
-}
-
-function normalizeForecastDate(value: string) {
-  const match = value.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (!match) return "";
-  return `${match[3]}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}`;
-}
-
-function normalizeForecastTime(value: string) {
-  const match = value.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
-  if (!match) return "";
-  return `${match[1].padStart(2, "0")}:${match[2]}:${match[3] || "00"}`;
-}
-
-async function parseForecastFile(file: File): Promise<ForecastPreview> {
-  const rows = parseCsv(await file.text());
-  if (rows.length < 3) throw new Error("‡πÑ‡∏ü‡∏•‡πå Forecast ‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•");
-  const sourceMatch = (rows[0][0] || "").match(/\((\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}:\d{2}:\d{2})\)/);
-  if (!sourceMatch) throw new Error("‡πÑ‡∏°‡πà‡∏û‡∏ö‡πÄ‡∏ß‡∏•‡∏≤ Last Calculate DO ‡πÉ‡∏ô‡πÑ‡∏ü‡∏•‡πå");
-  const sourceDate = `${sourceMatch[3]}-${sourceMatch[2].padStart(2, "0")}-${sourceMatch[1].padStart(2, "0")}`;
-  const sourceTime = normalizeForecastTime(sourceMatch[4]);
-  const sourceCalculatedAt = new Date(`${sourceDate}T${sourceTime}+07:00`).toISOString();
-  const headers = rows[1].map((value) => value.trim());
-  const column = (name: string) => headers.indexOf(name);
-  for (const required of ["Material", "Description", "Prod.Qty.", "Delivery Date", "Delivery Time"]) {
-    if (column(required) < 0) throw new Error(`‡πÑ‡∏ü‡∏•‡πå‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏Ñ‡∏≠‡∏•‡∏±‡∏°‡∏ô‡πå ${required}`);
-  }
-  const grouped = new Map<string, ForecastUploadRow>();
-  let sourceRowCount = 0;
-  let invalidRowCount = 0;
-  let duplicateRowCount = 0;
-  for (const cells of rows.slice(2)) {
-    const materialCode = String(cells[column("Material")] || "").trim().toUpperCase();
-    const deliveryDate = normalizeForecastDate(String(cells[column("Delivery Date")] || ""));
-    const deliveryTime = normalizeForecastTime(String(cells[column("Delivery Time")] || ""));
-    const prodQty = number(cells[column("Prod.Qty.")]);
-    if (!cells.some((cell) => String(cell || "").trim())) continue;
-    if (!materialCode || !deliveryDate || !deliveryTime || prodQty <= 0) {
-      invalidRowCount += 1;
-      continue;
-    }
-    sourceRowCount += 1;
-    const sourceKey = `${materialCode}|${deliveryDate}|${deliveryTime}`;
-    const existing = grouped.get(sourceKey);
-    if (existing) { existing.prodQty += prodQty; duplicateRowCount += 1; }
-    else grouped.set(sourceKey, {
-      sourceKey, materialCode, deliveryDate, deliveryTime, prodQty,
-      description: String(cells[column("Description")] || "").trim(),
-      deliverySpot: String(cells[column("Delivery Spot")] || "").trim(),
-      factory: String(cells[column("Factory")] || "").trim(),
-      shop: String(cells[column("Shop")] || "").trim(),
-      line: String(cells[column("Line")] || "").trim(),
-    });
-  }
-  const uploadRows = [...grouped.values()].sort((left, right) =>
-    left.materialCode.localeCompare(right.materialCode)
-    || left.deliveryDate.localeCompare(right.deliveryDate)
-    || left.deliveryTime.localeCompare(right.deliveryTime)
-  );
-  if (invalidRowCount > 0) throw new Error(`‡∏û‡∏ö‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏ú‡∏¥‡∏î‡∏£‡∏π‡∏õ‡πÅ‡∏ö‡∏ö ${invalidRowCount} ‡πÅ‡∏ñ‡∏ß ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏ï‡∏£‡∏ß‡∏à Part No., ‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà, ‡πÄ‡∏ß‡∏•‡∏≤ ‡πÅ‡∏•‡∏∞ Quantity`);
-  if (!uploadRows.length) throw new Error("‡πÑ‡∏°‡πà‡∏û‡∏ö‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ Forecast ‡∏ó‡∏µ‡πà‡∏°‡∏µ‡∏¢‡∏≠‡∏î‡∏°‡∏≤‡∏Å‡∏Å‡∏ß‡πà‡∏≤ 0");
-  return {
-    fileName: file.name,
-    sourceCalculatedAt,
-    sourceLabel: `${sourceMatch[1].padStart(2, "0")}/${sourceMatch[2].padStart(2, "0")}/${sourceMatch[3]} ${sourceTime}`,
-    sourceRowCount,
-    materialCount: new Set(uploadRows.map((row) => row.materialCode)).size,
-    totalQty: uploadRows.reduce((sum, row) => sum + row.prodQty, 0),
-    duplicateRowCount,
-    rows: uploadRows,
-  };
-}
-
-function isDeliveryOverdue(due: DueLine, now = new Date()) {
-  const status = String(due.status || "").trim().toLowerCase();
-  if (["completed", "cancelled", "canceled"].includes(status)) return false;
-  const required = Number(due.reqQty);
-  const dispatched = Number(due.scannedQty);
-  if (!Number.isFinite(required) || required <= 0 || !Number.isFinite(dispatched) || dispatched >= required) return false;
-
-  const dateMatch = due.deliveryDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  const timeMatch = due.deliveryTime.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
-  if (!dateMatch || !timeMatch) return false;
-  const year = Number(dateMatch[1]);
-  const month = Number(dateMatch[2]);
-  const day = Number(dateMatch[3]);
-  const validDate = new Date(Date.UTC(year, month - 1, day));
-  if (validDate.getUTCFullYear() !== year || validDate.getUTCMonth() !== month - 1 || validDate.getUTCDate() !== day) return false;
-
-  return `${due.deliveryDate}T${due.deliveryTime}` < bangkokDateTimeKey(now);
-}
-
-function stateOf(due: DueLine, now = new Date()) {
-  const scanned = Number(due.scannedQty);
-  if (scanned >= Number(due.reqQty)) return "completed";
-  if (isDeliveryOverdue(due, now)) return "over";
-  if (scanned > 0) return "partial";
-  return "pending";
-}
-
-function stateLabel(due: DueLine, now = new Date()) {
-  const state = stateOf(due, now);
-  if (state === "over") return "‡πÄ‡∏Å‡∏¥‡∏ô‡∏î‡∏¥‡∏ß‡∏à‡∏±‡∏î‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô";
-  if (state === "completed") return "‡∏Ñ‡∏£‡∏ö‡∏ï‡∏≤‡∏°‡πÅ‡∏ú‡∏ô";
-  if (Number(due.arrangedQty) > 0 && Number(due.scannedQty) > 0) return "‡∏™‡πà‡∏á‡∏ö‡∏≤‡∏á‡∏™‡πà‡∏ß‡∏ô / ‡∏°‡∏µ‡∏á‡∏≤‡∏ô‡∏£‡∏≠";
-  if (Number(due.arrangedQty) > 0) return "‡∏à‡∏±‡∏î‡πÅ‡∏•‡πâ‡∏ß ‡∏£‡∏≠‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å";
-  if (state === "partial") return "‡∏™‡πà‡∏á‡∏ö‡∏≤‡∏á‡∏™‡πà‡∏ß‡∏ô";
-  return "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏™‡πà‡∏á";
-}
-
-async function playOverdueAlertTone(audioContextRef: { current: AudioContext | null }) {
-  try {
-    const audioWindow = window as typeof window & { webkitAudioContext?: typeof AudioContext };
-    const AudioContextClass = audioWindow.AudioContext || audioWindow.webkitAudioContext;
-    if (!AudioContextClass) return false;
-    const existingContext = audioContextRef.current;
-    const context = existingContext && existingContext.state !== "closed" ? existingContext : new AudioContextClass();
-    audioContextRef.current = context;
-    if (context.state !== "running") await context.resume();
-
-    const startAt = context.currentTime + 0.02;
-    [{ frequency: 880, offset: 0 }, { frequency: 660, offset: 0.2 }].forEach(({ frequency, offset }) => {
-      const oscillator = context.createOscillator();
-      const gain = context.createGain();
-      const toneStart = startAt + offset;
-      oscillator.type = "sine";
-      oscillator.frequency.setValueAtTime(frequency, toneStart);
-      gain.gain.setValueAtTime(0.0001, toneStart);
-      gain.gain.exponentialRampToValueAtTime(0.12, toneStart + 0.025);
-      gain.gain.exponentialRampToValueAtTime(0.0001, toneStart + 0.16);
-      oscillator.connect(gain);
-      gain.connect(context.destination);
-      oscillator.start(toneStart);
-      oscillator.stop(toneStart + 0.18);
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function MetricCard({ tone, icon, label, value, suffix, note }: { tone: string; icon: string; label: string; value: string; suffix?: string; note?: string }) {
-  return (
-    <article className={`metric-card tone-${tone}`}>
-      <span className="metric-icon">{icon}</span>
-      <div><span className="metric-label">{label}</span><strong>{value}</strong><small>{suffix}{note ? ` ¬∑ ${note}` : ""}</small></div>
-    </article>
-  );
-}
-
-function Card({ title, action, children, className = "" }: { title?: ReactNode; action?: ReactNode; children: ReactNode; className?: string }) {
-  return (
-    <section className={`panel ${className}`}>
-      {(title || action) && <header className="panel-head">{title && <h3>{title}</h3>}{action}</header>}
-      {children}
-    </section>
-  );
-}
-
-function Empty({ title = "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•", text = "‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤‡πÅ‡∏ú‡∏ô‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô‡πÄ‡∏û‡∏∑‡πà‡∏≠‡πÄ‡∏£‡∏¥‡πà‡∏°‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡∏£‡∏∞‡∏ö‡∏ö" }: { title?: string; text?: string }) {
-  return <div className="empty"><span>‚ñ¶</span><strong>{title}</strong><p>{text}</p></div>;
-}
-
-/**
- * ‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô
- *
- * version ‡∏Ñ‡∏∑‡∏≠‡πÄ‡∏ß‡∏•‡∏≤‡∏ó‡∏µ‡πà‡∏£‡∏π‡∏õ‡∏ñ‡∏π‡∏Å‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç‡∏•‡πà‡∏≤‡∏™‡∏∏‡∏î ‡πÉ‡∏™‡πà‡∏ï‡πà‡∏≠‡∏ó‡πâ‡∏≤‡∏¢ URL ‡πÄ‡∏û‡∏∑‡πà‡∏≠‡πÉ‡∏´‡πâ‡πÄ‡∏ö‡∏£‡∏≤‡∏ß‡πå‡πÄ‡∏ã‡∏≠‡∏£‡πå‡∏£‡∏π‡πâ‡∏ß‡πà‡∏≤
- * ‡πÄ‡∏õ‡πá‡∏ô‡∏Ñ‡∏ô‡∏•‡∏∞‡∏£‡∏π‡∏õ‡∏Å‡∏±‡∏ö‡∏ó‡∏µ‡πà‡πÄ‡∏Ñ‡∏¢‡πÅ‡∏Ñ‡∏ä‡πÑ‡∏ß‡πâ ‡∏°‡∏¥‡∏â‡∏∞‡∏ô‡∏±‡πâ‡∏ô‡∏≠‡∏±‡∏õ‡πÇ‡∏´‡∏•‡∏î‡∏£‡∏π‡∏õ‡πÉ‡∏´‡∏°‡πà‡∏ó‡∏±‡∏ö‡πÅ‡∏•‡πâ‡∏ß‡∏à‡∏∞‡∏¢‡∏±‡∏á‡πÄ‡∏´‡πá‡∏ô‡∏£‡∏π‡∏õ‡πÄ‡∏Å‡πà‡∏≤
- * ‡πÄ‡∏û‡∏£‡∏≤‡∏∞ URL ‡πÄ‡∏î‡∏¥‡∏°‡∏≠‡πâ‡∏≤‡∏á‡∏î‡πâ‡∏ß‡∏¢ materialCode ‡∏≠‡∏¢‡πà‡∏≤‡∏á‡πÄ‡∏î‡∏µ‡∏¢‡∏ß
- */
-function PartImage({ materialCode, compact = false, version, slot = "master", strict = false }: { materialCode: string; compact?: boolean; version?: string; slot?: "master" | "actual"; strict?: boolean }) {
-  const key = `${slot}:${materialCode}:${version || "unversioned"}:${strict ? "strict" : "compatible"}`;
-  const [failedKey, setFailedKey] = useState("");
-  if (failedKey === key) return <div className={`part-photo-fallback ${compact ? "compact" : ""}`}><span>‚óà</span><small>‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏£‡∏π‡∏õ</small></div>;
-  const source = `/api/part-images?materialCode=${encodeURIComponent(materialCode)}${slot === "actual" ? "&slot=actual" : ""}${strict ? "&strict=1" : ""}${version ? `&v=${encodeURIComponent(version)}` : ""}`;
-  const imageLabel = slot === "actual" ? "‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á" : "‡∏£‡∏π‡∏õ‡∏ï‡∏±‡∏ß‡∏≠‡∏¢‡πà‡∏≤‡∏á Master";
-  return <div className={`part-photo ${compact ? "compact" : ""}`}><img src={source} alt={`${imageLabel} ${materialCode}`} loading="lazy" decoding="async" onError={() => setFailedKey(key)} /></div>;
-}
-
-const EFFECTIVE_IMAGE_PROJECTION_VERSION = "separate-image-slots-v4";
-
-/**
- * ‡πÇ‡∏ä‡∏ß‡πå‡∏£‡∏π‡∏õ‡∏Ñ‡∏π‡πà‡∏Å‡∏±‡∏ô‡∏ï‡∏≤‡∏°‡∏ï‡∏≥‡πÅ‡∏´‡∏ô‡πà‡∏á‡∏ó‡∏µ‡πà‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡∏Ñ‡∏∏‡πâ‡∏ô‡πÄ‡∏Ñ‡∏¢: ‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô‡∏≠‡∏¢‡∏π‡πà‡∏ã‡πâ‡∏≤‡∏¢ ‡πÅ‡∏•‡∏∞‡∏£‡∏π‡∏õ‡∏ï‡∏±‡∏ß‡∏≠‡∏¢‡πà‡∏≤‡∏á‡∏≠‡∏¢‡∏π‡πà‡∏Ç‡∏ß‡∏≤
- * ‡πÉ‡∏ä‡πâ‡∏ï‡∏≠‡∏ô‡∏™‡πÅ‡∏Å‡∏ô‡πÄ‡∏û‡∏∑‡πà‡∏≠‡πÉ‡∏´‡πâ‡∏ú‡∏π‡πâ‡∏ï‡∏£‡∏ß‡∏à‡πÄ‡∏ó‡∏µ‡∏¢‡∏ö‡∏ß‡πà‡∏≤‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á‡∏ï‡∏£‡∏á‡∏Å‡∏±‡∏ö‡∏ï‡∏±‡∏ß‡∏≠‡∏¢‡πà‡∏≤‡∏á‡∏à‡∏£‡∏¥‡∏á
- *
- * ‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ Stock/Delivery ‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡πÇ‡∏´‡∏•‡∏î metadata ‡∏£‡∏π‡∏õ ‡∏à‡∏∂‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ updatedAt ‡∏™‡∏≥‡∏´‡∏£‡∏±‡∏ö cache busting
- * projectionVersion ‡∏ó‡∏≥‡πÉ‡∏´‡πâ popup ‡πÑ‡∏°‡πà‡πÉ‡∏ä‡πâ URL unversioned ‡∏ó‡∏µ‡πà‡∏≠‡∏≤‡∏à‡∏Ñ‡πâ‡∏≤‡∏á‡∏à‡∏≤‡∏Å semantics ‡∏Å‡πà‡∏≠‡∏ô legacy fallback
- */
-function PartImagePair({ materialCode, masterVersion, actualVersion, masterAvailable = true, actualAvailable = true, projectionVersion = EFFECTIVE_IMAGE_PROJECTION_VERSION, strictSlots = false }: { materialCode: string; masterVersion?: string; actualVersion?: string; masterAvailable?: boolean; actualAvailable?: boolean; projectionVersion?: string; strictSlots?: boolean }) {
-  const capStyle: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: "#6b7787", marginBottom: 5, textAlign: "center", letterSpacing: "0.02em" };
-  const figStyle: React.CSSProperties = { margin: 0, flex: "1 1 130px", minWidth: 0 };
-  const fallback = <div className="part-photo-fallback"><span>‚óà</span><small>‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏£‡∏π‡∏õ</small></div>;
-  return <div className="part-image-pair" style={{ display: "flex", gap: 12, flexWrap: "wrap", width: "100%" }}>
-    <figure style={figStyle}><figcaption style={capStyle}>‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á</figcaption>{actualAvailable ? <PartImage materialCode={materialCode} slot="actual" version={actualVersion || projectionVersion} strict={strictSlots} /> : fallback}</figure>
-    <figure style={figStyle}><figcaption style={capStyle}>‡∏£‡∏π‡∏õ‡∏ï‡∏±‡∏ß‡∏≠‡∏¢‡πà‡∏≤‡∏á (Master)</figcaption>{masterAvailable ? <PartImage materialCode={materialCode} slot="master" version={masterVersion || projectionVersion} strict={strictSlots} /> : fallback}</figure>
-  </div>;
-}
-
-export default function DeliveryControlApp({ user, signOutPath, monitorMode = false }: { user: { id: number; employeeCode: string; displayName: string; email: string; role: string; permissions: AppPermission[] }; signOutPath: string; monitorMode?: boolean }) {
-  // ‡∏≠‡∏≠‡∏Å‡∏à‡∏≤‡∏Å‡∏£‡∏∞‡∏ö‡∏ö‡∏î‡πâ‡∏ß‡∏¢ POST ‡πÄ‡∏ó‡πà‡∏≤‡∏ô‡∏±‡πâ‡∏ô ‡∏õ‡∏∏‡πà‡∏°‡∏¢‡∏±‡∏á‡πÄ‡∏õ‡πá‡∏ô <a> ‡πÄ‡∏û‡∏∑‡πà‡∏≠‡πÉ‡∏´‡πâ‡∏™‡πÑ‡∏ï‡∏•‡πå‡πÄ‡∏î‡∏¥‡∏° (.top-user a,
-  // .mobile-logout) ‡πÉ‡∏ä‡πâ‡πÑ‡∏î‡πâ‡∏ï‡πà‡∏≠‡πÇ‡∏î‡∏¢‡πÑ‡∏°‡πà‡∏ï‡πâ‡∏≠‡∏á‡πÅ‡∏Å‡πâ CSS ‡πÅ‡∏ï‡πà‡∏ï‡∏±‡∏ß‡∏Ñ‡∏≥‡∏Ç‡∏≠‡∏à‡∏£‡∏¥‡∏á‡πÄ‡∏õ‡πá‡∏ô POST
-  async function signOut(event: ReactMouseEvent<HTMLAnchorElement>) {
-    event.preventDefault();
-    await fetch(signOutPath, { method: "POST" }).catch(() => undefined);
-    window.location.href = "/login";
-  }
-
-  const initialPage = monitorMode ? "overdue" : user.role === "admin"
-    ? "dashboard"
-    : NAV.find((item) => user.permissions.includes(item.key))?.key || "dashboard";
-  const hasDueDataPermission = user.role === "admin" || DUE_DATA_PAGES.some((key) => user.permissions.includes(key));
-  const [page, setPage] = useState<PageKey>(initialPage);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [stockMenuCollapsed, setStockMenuCollapsed] = useState(false);
-  const [stockOverviewSearch,setStockOverviewSearch]=useState("");
-  useEffect(()=>{const sync=(event:Event)=>setStockOverviewSearch(String((event as CustomEvent).detail||""));window.addEventListener("stock-overview-search-value",sync);return()=>window.removeEventListener("stock-overview-search-value",sync);},[]);
-  const [payload, setPayload] = useState<DuePayload>({ dues: [], imports: [], scans: [], receipts: [] });
-  const [loading, setLoading] = useState(hasDueDataPermission);
-  const [error, setErrorState] = useState("");
-  const setError = (value: string) => { setErrorState(value); if(value) reportOperationWarning({page,message:value}); };
-  const [notice, setNoticeState] = useState<{ type: "success" | "error"; text: string } | null>(null);
-  const setNotice = (value: { type: "success" | "error"; text: string; warningHandled?: boolean } | null) => {
-    setNoticeState(value);
-    if(value?.type === "error" && !value.warningHandled) reportOperationWarning({page,message:value.text});
-  };
-  const [dueLoadedAt, setDueLoadedAt] = useState<string | null>(null);
-  const [deadlineClock, setDeadlineClock] = useState(() => Date.now());
-  const [overdueSoundEnabled, setOverdueSoundEnabled] = useState(false);
-  const overdueAudioContextRef = useRef<AudioContext | null>(null);
-  const previousOverdueIdsRef = useRef<Set<number> | null>(null);
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(null), 4000);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
-  useEffect(() => {
-    let timer: number | undefined;
-    const refreshClock = () => setDeadlineClock(Date.now());
-    const scheduleNextMinute = () => {
-      if (timer !== undefined) window.clearTimeout(timer);
-      const delay = 60_000 - (Date.now() % 60_000) + 50;
-      timer = window.setTimeout(() => {
-        refreshClock();
-        scheduleNextMinute();
-      }, delay);
-    };
-    const refreshWhenVisible = () => {
-      if (document.visibilityState !== "visible") return;
-      refreshClock();
-      scheduleNextMinute();
-    };
-    scheduleNextMinute();
-    window.addEventListener("focus", refreshWhenVisible);
-    document.addEventListener("visibilitychange", refreshWhenVisible);
-    return () => {
-      if (timer !== undefined) window.clearTimeout(timer);
-      window.removeEventListener("focus", refreshWhenVisible);
-      document.removeEventListener("visibilitychange", refreshWhenVisible);
-    };
-  }, []);
-  const [file, setFile] = useState<File | null>(null);
-  const [previewRows, setPreviewRows] = useState<ImportRow[]>([]);
-  const [parsing, setParsing] = useState(false);
-  const [importing, setImporting] = useState(false);
-  const [forecast, setForecast] = useState<ForecastPayload>({ activeImport: null, imports: [], coverage: [], summary: null });
-  const [forecastLoading, setForecastLoading] = useState(false);
-  const [forecastFile, setForecastFile] = useState<File | null>(null);
-  const [forecastPreview, setForecastPreview] = useState<ForecastPreview | null>(null);
-  const [forecastParsing, setForecastParsing] = useState(false);
-  const [forecastImporting, setForecastImporting] = useState(false);
-  const [forecastProgress, setForecastProgress] = useState(0);
-  const [forecastSearch, setForecastSearch] = useState("");
-  const [forecastExporting, setForecastExporting] = useState(false);
-  const [forecastStatus, setForecastStatus] = useState<"all" | "overdue" | "within3" | "within7" | "within14" | "over14" | "shortage" | "covered">("all");
-  const [forecastFactory, setForecastFactory] = useState("ALL");
-  const [forecastRange, setForecastRange] = useState<7 | 14 | 30>(14);
-  const [forecastDragActive, setForecastDragActive] = useState(false);
-  const [rawTag, setRawTag] = useState("");
-  const [tagPreview, setTagPreview] = useState<TagPreview | null>(null);
-  const [dispatchConfirmation, setDispatchConfirmation] = useState<VerifyResult | null>(null);
-  const [dispatchKitSelection, setDispatchKitSelection] = useState<DispatchKitSelection | null>(null);
-  const [dispatchDueDate, setDispatchDueDate] = useState("");
-  const [dispatchDueTime, setDispatchDueTime] = useState("");
-  const [dispatchDueFact, setDispatchDueFact] = useState("");
-  const [checkingTag, setCheckingTag] = useState(false);
-  const [verifyRaw, setVerifyRaw] = useState("");
-  const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
-  const [verifyLoading, setVerifyLoading] = useState(false);
-  const [arrangeDueDate, setArrangeDueDate] = useState("");
-  const [arrangeWarning, setArrangeWarning] = useState<{ message: string; date: string; time: string; fact: string } | null>(null);
-  const [arrangeDueTime, setArrangeDueTime] = useState("");
-  const [arrangeDueFact, setArrangeDueFact] = useState("");
-  const [arrangeTag, setArrangeTag] = useState("");
-  const [arrangeQty, setArrangeQty] = useState("");
-  const [arrangeDueSearch, setArrangeDueSearch] = useState("");
-  const [arrangeListPage, setArrangeListPage] = useState(1);
-  const [arrangedSearch, setArrangedSearch] = useState("");
-  const [arrangedPage, setArrangedPage] = useState(1);
-  const [arrangeConfirmQty,setArrangeConfirmQty]=useState("");
-  const [arrangeConfirmation, setArrangeConfirmation] = useState<ArrangeConfirmation | null>(null);
-  const arrangeRequestRef = useRef(false);
-  const arrangeConfirmButtonRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => { if (arrangeConfirmation) arrangeConfirmButtonRef.current?.focus(); }, [arrangeConfirmation]);
-  const [splitTagRequest,setSplitTagRequest]=useState<{pickId?:number;stockTagCode?:string;labelId?:string}|null>(null);
-  useEffect(()=>{const id=new URLSearchParams(window.location.search).get("splitLabel");if(!id)return;const timer=window.setTimeout(()=>setSplitTagRequest({labelId:id}),0);return()=>window.clearTimeout(timer);},[]);
-  function closeSplitTag() {
-    setSplitTagRequest(null);
-    const url=new URL(window.location.href);
-    if(url.searchParams.has("splitLabel")){url.searchParams.delete("splitLabel");window.history.replaceState(window.history.state,"",url.pathname+url.search+url.hash);}
-  }
-  const [arrangementPreview, setArrangementPreview] = useState<ArrangementPreview | null>(null);
-  const [filterDate, setFilterDate] = useState("");
-  const [dashboardStatusFilter, setDashboardStatusFilter] = useState<"all" | "completed" | "pending" | "over">("all");
-  const [planPage, setPlanPage] = useState(1);
-  const [planPageSize, setPlanPageSize] = useState(10);
-  const [filterFact, setFilterFact] = useState("ALL");
-  const [filterTime, setFilterTime] = useState("ALL");
-  const [query, setQuery] = useState("");
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  const [cameraOpen, setCameraOpen] = useState(false);
-  const [cameraPurpose, setCameraPurpose] = useState<"scan" | "stock" | "stock-count">("scan");
-  const [cameraError, setCameraErrorState] = useState("");
-  const setCameraError = (value:string) => { setCameraErrorState(value); if(value)reportOperationWarning({page,message:value}); };
-  const [selectedScan, setSelectedScan] = useState<DueScan | null>(null);
-  const [settings, setSettings] = useState({ partial: true, confirm: true, sound: true, autoFocus: true });
-  function changeVoiceEnabled(sound:boolean) {
-    const next={...settings,sound};
-    setSettings(next);
-    try {window.localStorage.setItem('kit-due-settings',JSON.stringify(next));} catch { /* settings remain active for this session */ }
-  }
-  useEffect(() => {
-    if (notice) speakThaiAlert(notice.type, page, notice.text, settings.sound);
-  }, [notice, page, settings.sound]);
-  const [systemUsers, setSystemUsers] = useState<SystemUser[]>([]);
-  const [userSearch, setUserSearch] = useState("");
-  const [usersLoading, setUsersLoading] = useState(false);
-  const [userSaving, setUserSaving] = useState(false);
-  const [userForm, setUserForm] = useState<UserForm>(EMPTY_USER);
-  const [userEditorOpen, setUserEditorOpen] = useState(false);
-  const [partImages, setPartImages] = useState<PartImageMapping[]>([]);
-  const [partActualImages, setPartActualImages] = useState<PartImageMapping[]>([]);
-  const [partActualImageFile, setPartActualImageFile] = useState<File | null>(null);
-  const [partImagesLoading, setPartImagesLoading] = useState(false);
-  const [partImageCode, setPartImageCode] = useState("");
-  const [partImageFile, setPartImageFile] = useState<File | null>(null);
-  const [partImageSaving, setPartImageSaving] = useState(false);
-  const [bulkMasterImageFiles, setBulkMasterImageFiles] = useState<File[]>([]);
-  const [bulkActualImageFiles, setBulkActualImageFiles] = useState<File[]>([]);
-  const [bulkImageRunning, setBulkImageRunning] = useState(false);
-  const [bulkImageProgress, setBulkImageProgress] = useState({ done: 0, total: 0 });
-  const [bulkImageFailed, setBulkImageFailed] = useState<Array<{ name: string; reason: string }>>([]);
-  const [partBundleExcel, setPartBundleExcel] = useState<File | null>(null);
-  const [partBundleMasterFiles, setPartBundleMasterFiles] = useState<File[]>([]);
-  const [partBundleActualFiles, setPartBundleActualFiles] = useState<File[]>([]);
-  const [partBundlePreview, setPartBundlePreview] = useState<PartBundlePreview | null>(null);
-  const [partBundleRunning, setPartBundleRunning] = useState(false);
-  const [partBundleProgress, setPartBundleProgress] = useState({ done: 0, total: 0 });
-  const [partBundleFailed, setPartBundleFailed] = useState<Array<{ name: string; reason: string }>>([]);
-  const [partImageNeedle, setPartImageNeedle] = useState("");
-  const [deletingImportId, setDeletingImportId] = useState<number | null>(null);
-  const [stock, setStock] = useState<StockPayload>({ parts: [], tags: [], allocations: [], picks: [], dispatchLinks: [], jobClosures: [], manualReceipts: [], countAdjustments: [], countAdjustmentLines: [], movementDays: [] });
-  const [stockListExpanded, setStockListExpanded] = useState(false);
-  const [stockManualEntry, setStockManualEntry] = useState(false);
-  const [lastStockReceipt, setLastStockReceipt] = useState<{ tagId: string; materialCode: string; jobNo: string; qty: number; locationCode: string } | null>(null);
-  const [manualStockForm, setManualStockForm] = useState({ materialCode: "", qty: "", jobNo: "", productionDate: new Date().toISOString().slice(0, 10), referenceNo: "", note: "" });
-  const [manualDuplicateJob, setManualDuplicateJob] = useState<ManualDuplicateJob | null>(null);
-  const [manualReceiptSuccess, setManualReceiptSuccess] = useState<ManualReceiptSuccess | null>(null);
-  const [manualTransactionOpen, setManualTransactionOpen] = useState("");
-  const [stockCountForm, setStockCountForm] = useState({ rawPayload: "", countedQty: "", countDate: new Date().toISOString().slice(0, 10), reason: "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡∏¢‡∏≠‡∏î‡∏ï‡∏£‡∏ß‡∏à‡∏ô‡∏±‡∏ö Stock ‡∏™‡∏¥‡πâ‡∏ô‡πÄ‡∏î‡∏∑‡∏≠‡∏ô" });
-  const [stockCountPreview, setStockCountPreview] = useState<StockCountPreview | null>(null);
-  const [stockCountConfirmOpen, setStockCountConfirmOpen] = useState(false);
-  const [stockManagementSaving, setStockManagementSaving] = useState(false);
-  const stockCountInputRef = useRef<HTMLInputElement>(null);
-  const [replacement, setReplacement] = useState<ReplacementPayload>({ requests: [], issues: [] });
-  const [replacementLoading, setReplacementLoading] = useState(false);
-  const [replacementSaving, setReplacementSaving] = useState(false);
-  const [replacementSearch, setReplacementSearch] = useState("");
-  const [replacementSelectedId, setReplacementSelectedId] = useState("");
-  const [replacementTag, setReplacementTag] = useState("");
-  const [replacementQty, setReplacementQty] = useState("");
-  const [replacementPreview, setReplacementPreview] = useState<ReplacementIssuePreview | null>(null);
-  const [replacementForm, setReplacementForm] = useState({
-    materialCode: "", customer: "", requestedQty: "", reasonType: "shortage", reasonDetail: "", neededDate: "",
-  });
-  const replacementInputRef = useRef<HTMLInputElement>(null);
-  const [jobClosingKey, setJobClosingKey] = useState("");
-  const [jobQtyAdjustment, setJobQtyAdjustment] = useState<JobQuantityAdjustment | null>(null);
-  const [jobQtyTarget, setJobQtyTarget] = useState("");
-  const [jobQtyReason, setJobQtyReason] = useState("");
-  const [jobQtyPreview, setJobQtyPreview] = useState<JobQuantityAdjustmentPreview | null>(null);
-  const [jobQtySaving, setJobQtySaving] = useState(false);
-  const [jobQtyCreatedTags, setJobQtyCreatedTags] = useState<StockTag[]>([]);
-  const [jobQtyAdjusted, setJobQtyAdjusted] = useState(false);
-  const [jobCloseSearch, setJobCloseSearch] = useState("");
-  const [jobClosePage, setJobClosePage] = useState(1);
-  const [stockLoading, setStockLoading] = useState(false);
-  const [clearingTestStock, setClearingTestStock] = useState(false);
-  const [stockPartForm, setStockPartForm] = useState({ materialCode: "", partName: "", customer: "", location: "", standardQty: "" });
-  const [partSearch, setPartSearch] = useState("");
-  const [historyQuery, setHistoryQuery] = useState("");
-  const [historyDate, setHistoryDate] = useState("");
-  const [historyDateTo, setHistoryDateTo] = useState("");
-  const [historyType, setHistoryType] = useState("all");
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
-  const [auditLogsLoading, setAuditLogsLoading] = useState(false);
-  const [partPage, setPartPage] = useState(1);
-  const [partPageSize, setPartPageSize] = useState(10);
-  const [tagSearch, setTagSearch] = useState("");
-  const [tagPage, setTagPage] = useState(1);
-  const [tagPageSize, setTagPageSize] = useState(10);
-  const [deletingPartCode, setDeletingPartCode] = useState("");
-  const [deletingStockTagId, setDeletingStockTagId] = useState("");
-  const [stockTagForm, setStockTagForm] = useState({ materialCode: "", qty: "", jobNo: "", productionDate: new Date().toISOString().slice(0, 10) });
-  const [stockScan, setStockScan] = useState("");
-  const [stockLocation, setStockLocation] = useState<StockLocationSelection | null>(null);
-  const [stockLocationActivity, setStockLocationActivity] = useState(0);
-  const stockScanInputRef = useRef<HTMLInputElement>(null);
-  const stockScanTimerRef = useRef<number | null>(null);
-  const stockScanRequestRef = useRef(false);
-  const dispatchScanTimerRef = useRef<number | null>(null);
-  const dispatchScanRequestRef = useRef(false);
-  const hardwareScanBufferRef = useRef("");
-  const hardwareScanLastKeyRef = useRef(0);
-  const hardwareScanTimerRef = useRef<number | null>(null);
-  const [stockReceivePreview, setStockReceivePreview] = useState<StockReceivePreview | null>(null);
-  const [stockReceiveQty, setStockReceiveQty] = useState("");
-  const [stockReceiveProductionDate, setStockReceiveProductionDate] = useState("");
-  const [stockSaving, setStockSaving] = useState(false);
-  // Scanner/camera handlers live inside effects and can otherwise see an old Stock snapshot.
-  // Keep the latest data in a ref so a known printed Tag can open its confirmation immediately.
-  const stockDataRef = useRef(stock);
-  stockDataRef.current = stock;
-  const [createdStockTags, setCreatedStockTags] = useState<StockTag[]>([]);
-  const fileInput = useRef<HTMLInputElement>(null);
-  const partBundleExcelInput = useRef<HTMLInputElement>(null);
-  const partBundleMasterInput = useRef<HTMLInputElement>(null);
-  const partBundleActualInput = useRef<HTMLInputElement>(null);
-  const tagInput = useRef<HTMLInputElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const tagResultRef = useRef<HTMLElement>(null);
-  const verifyInput = useRef<HTMLInputElement>(null);
-  const verifyResultRef = useRef<HTMLElement>(null);
-  const canEditPage = (target: EditablePageKey) => user.role === "admin" || user.permissions.includes(`${target}-edit`);
-  const canPrintTags = user.role === "admin" || user.permissions?.includes("tags");
-  const canCreateReplacement = canEditPage("replacement") && (user.role === "admin" || user.role === "qc" || user.role === "inspector");
-  const canIssueReplacement = canEditPage("replacement") && (user.role === "admin" || user.role === "delivery" || user.role === "dispatcher");
-  const allowedPages = useMemo(() => {
-    const pages = new Set<PageKey>(NAV.filter((item) => user.role === "admin" || user.permissions.includes(item.key)).map((item) => item.key));
-    return pages;
-  }, [user.permissions, user.role]);
-  const firstAllowedPage = NAV.find((item) => allowedPages.has(item.key))?.key || "dashboard";
-  const workflowPage: PageKey | null = allowedPages.has("dispatch")
-    ? "dispatch"
-    : allowedPages.has("arrange") ? "arrange" : null;
-
-  const restoredPageRef = useRef(false);
-  useEffect(() => {
-    if (restoredPageRef.current) return;
-    restoredPageRef.current = true;
-    const savedPage = monitorMode ? "overdue" : pageFromLocation();
-    const nextPage = savedPage && allowedPages.has(savedPage) ? savedPage : firstAllowedPage;
-    setPage(nextPage);
-    if (!monitorMode) updatePageLocation(nextPage, "replace");
-  }, [allowedPages, firstAllowedPage, monitorMode]);
-
-  useEffect(() => {
-    const onHistoryChange = () => {
-      if (monitorMode) return;
-      const requestedPage = pageFromUrl();
-      const nextPage = requestedPage && allowedPages.has(requestedPage) ? requestedPage : firstAllowedPage;
-      window.localStorage.setItem("kit-current-page", nextPage);
-      setPage(nextPage);
-      if (nextPage !== "stock") {
-        setStockLocation(null);
-        setStockLocationActivity(0);
-        setStockScan("");
-      }
-      if (nextPage === "parts" || nextPage === "settings") void loadPartImages();
-      setMenuOpen(false);
-      window.scrollTo({ top: 0 });
-    };
-    window.addEventListener("popstate", onHistoryChange);
-    return () => window.removeEventListener("popstate", onHistoryChange);
-  }, [allowedPages, firstAllowedPage, monitorMode]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  async function loadDue() {
-    setLoading(true);
-    setError("");
-    try {
-      const response = await fetch("/api/due", { cache: "no-store" });
-      const data = await response.json() as DuePayload;
-      if (!response.ok) throw new Error(data.error || "‡πÇ‡∏´‡∏•‡∏î‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏• Due ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setPayload(data);
-      setDueLoadedAt(new Date().toISOString());
-      if (!filterDate && data.dues.length) {
-        const dates = [...new Set(data.dues.map((due) => due.deliveryDate))].sort();
-        const today = bangkokDateTimeKey().slice(0, 10);
-        setFilterDate(dates.includes(today) ? today : dates.at(-1) || "");
-      }
-      if (!selectedScan && data.scans.length) setSelectedScan(data.scans[0]);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "‡πÇ‡∏´‡∏•‡∏î‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏• Due ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function loadStock() {
-    setStockLoading(true);
-    try {
-      const response = await fetch("/api/stock", { cache: "no-store" });
-      const data = await response.json() as StockPayload & { error?: string };
-      if (!response.ok) throw new Error(data.error || "‡πÇ‡∏´‡∏•‡∏î Stock ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setStock({
-        parts: data.parts || [], tags: data.tags || [], allocations: data.allocations || [],
-        picks: data.picks || [], dispatchLinks: data.dispatchLinks || [], jobClosures: data.jobClosures || [],
-        manualReceipts: data.manualReceipts || [], countAdjustments: data.countAdjustments || [],
-        countAdjustmentLines: data.countAdjustmentLines || [], movementDays: data.movementDays || [],
-      });
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡πÇ‡∏´‡∏•‡∏î Stock ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setStockLoading(false);
-    }
-  }
-
-  async function loadForecast() {
-    setForecastLoading(true);
-    try {
-      const response = await fetch("/api/forecast", { cache: "no-store" });
-      const data = await response.json() as ForecastPayload;
-      if (!response.ok) throw new Error(data.error || "‡πÇ‡∏´‡∏•‡∏î Forecast Stock ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setForecast({
-        activeImport: data.activeImport || null,
-        imports: data.imports || [],
-        coverage: data.coverage || [],
-        summary: data.summary || null,
-        trend: data.trend || [],
-        calculatedAt: data.calculatedAt,
-      });
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡πÇ‡∏´‡∏•‡∏î Forecast Stock ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setForecastLoading(false);
-    }
-  }
-
-  async function loadAuditLogs() {
-    setAuditLogsLoading(true);
-    try {
-      const response = await fetch("/api/audit-logs?limit=2000", { cache: "no-store" });
-      const data = await response.json() as { logs?: AuditLog[]; error?: string };
-      if (!response.ok) throw new Error(data.error || "‡πÇ‡∏´‡∏•‡∏î‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡∏Å‡∏≤‡∏£‡∏î‡∏≥‡πÄ‡∏ô‡∏¥‡∏ô‡∏Å‡∏≤‡∏£‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setAuditLogs(data.logs || []);
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡πÇ‡∏´‡∏•‡∏î‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡∏Å‡∏≤‡∏£‡∏î‡∏≥‡πÄ‡∏ô‡∏¥‡∏ô‡∏Å‡∏≤‡∏£‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setAuditLogsLoading(false);
-    }
-  }
-
-  async function prepareForecastFile(selected: File | null) {
-    setForecastFile(selected);
-    setForecastPreview(null);
-    if (!selected) return;
-    if (!selected.name.toLowerCase().endsWith(".csv")) {
-      setForecastFile(null);
-      setNotice({ type: "error", text: "‡∏£‡∏≠‡∏á‡∏£‡∏±‡∏ö‡πÄ‡∏â‡∏û‡∏≤‡∏∞‡πÑ‡∏ü‡∏•‡πå Forecast .csv" });
-      return;
-    }
-    setForecastParsing(true);
-    try {
-      const parsed = await parseForecastFile(selected);
-      setForecastPreview(parsed);
-    } catch (caught) {
-      setForecastFile(null);
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏≠‡πà‡∏≤‡∏ô‡πÑ‡∏ü‡∏•‡πå Forecast ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setForecastParsing(false);
-    }
-  }
-
-  async function selectForecastFile(event: ChangeEvent<HTMLInputElement>) {
-    await prepareForecastFile(event.target.files?.[0] || null);
-    event.target.value = "";
-  }
-
-  async function importForecast() {
-    if (!forecastFile || !forecastPreview || forecastImporting) return;
-    setForecastImporting(true);
-    setForecastProgress(0);
-    let importId = 0;
-    try {
-      const importToken = [forecastFile.name, forecastFile.size, forecastFile.lastModified, forecastPreview.sourceCalculatedAt].join("|");
-      const beginResponse = await fetch("/api/forecast", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "begin_import", importToken, fileName: forecastFile.name,
-          sourceCalculatedAt: forecastPreview.sourceCalculatedAt,
-        }),
-      });
-      const begin = await beginResponse.json() as { importId?: number; error?: string };
-      if (!beginResponse.ok || !begin.importId) throw new Error(begin.error || "‡πÄ‡∏£‡∏¥‡πà‡∏°‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤ Forecast ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      importId = begin.importId;
-      const chunkSize = 100;
-      for (let offset = 0; offset < forecastPreview.rows.length; offset += chunkSize) {
-        const rows = forecastPreview.rows.slice(offset, offset + chunkSize);
-        const response = await fetch("/api/forecast", {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ action: "append_rows", importId, rows }),
-        });
-        const data = await response.json() as { error?: string };
-        if (!response.ok) throw new Error(data.error || `‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏ä‡∏∏‡∏î‡∏ó‡∏µ‡πà ${Math.floor(offset / chunkSize) + 1} ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à`);
-        setForecastProgress(Math.min(99, Math.round(((offset + rows.length) / forecastPreview.rows.length) * 100)));
-      }
-      const finalizeResponse = await fetch("/api/forecast", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "finalize_import", importId }),
-      });
-      const finalized = await finalizeResponse.json() as { error?: string };
-      if (!finalizeResponse.ok) throw new Error(finalized.error || "‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô Forecast ‡∏ä‡∏∏‡∏î‡πÉ‡∏´‡∏°‡πà‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setForecastProgress(100);
-      setForecastFile(null);
-      setForecastPreview(null);
-      setNotice({ type: "success", text: "‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤ Forecast ‡∏ä‡∏∏‡∏î‡πÉ‡∏´‡∏°‡πà‡πÅ‡∏•‡∏∞‡∏Ñ‡∏≥‡∏ô‡∏ß‡∏ì‡∏£‡∏∞‡∏¢‡∏∞ Stock ‡πÄ‡∏£‡∏µ‡∏¢‡∏ö‡∏£‡πâ‡∏≠‡∏¢" });
-      await loadForecast();
-    } catch (caught) {
-      if (importId) {
-        await fetch("/api/forecast", {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ action: "cancel_import", importId }),
-        }).catch(() => undefined);
-      }
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤ Forecast ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setForecastImporting(false);
-    }
-  }
-
-  async function loadReplacements() {
-    setReplacementLoading(true);
-    try {
-      const response = await fetch("/api/replacements", { cache: "no-store" });
-      const data = await response.json() as ReplacementPayload & { error?: string };
-      if (!response.ok) throw new Error(data.error || "‡πÇ‡∏´‡∏•‡∏î‡πÉ‡∏ö‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å‡∏á‡∏≤‡∏ô‡∏ó‡∏î‡πÅ‡∏ó‡∏ô‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setReplacement({ requests: data.requests || [], issues: data.issues || [] });
-      setReplacementSelectedId((current) => {
-        if (current && (data.requests || []).some((item) => String(item.id) === current && !["completed", "cancelled"].includes(item.status))) return current;
-        const firstOpen = (data.requests || []).find((item) => item.status === "pending" || item.status === "partial");
-        return firstOpen ? String(firstOpen.id) : "";
-      });
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡πÇ‡∏´‡∏•‡∏î‡πÉ‡∏ö‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å‡∏á‡∏≤‡∏ô‡∏ó‡∏î‡πÅ‡∏ó‡∏ô‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setReplacementLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    if (!hasDueDataPermission) return;
-    const timer = window.setTimeout(() => void loadDue(), 0);
-    return () => window.clearTimeout(timer);
-  }, [hasDueDataPermission]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (page !== "overdue" || !allowedPages.has("overdue")) return;
-    const refresh = () => { if (document.visibilityState === "visible") void loadDue(); };
-    const timer = window.setInterval(refresh, 30_000);
-    document.addEventListener("visibilitychange", refresh);
-    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", refresh); };
-  }, [page, allowedPages]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!["stock", "manual-stock", "stock-count", "parts", "tags", "arrange", "replacement", "dispatch", "reports", "history"].includes(page)) return;
-    const timer = window.setTimeout(() => void loadStock(), 0);
-    return () => window.clearTimeout(timer);
-  }, [page]);
-
-  useEffect(() => {
-    if (page !== "forecast") return;
-    const timer = window.setTimeout(() => void loadForecast(), 0);
-    return () => window.clearTimeout(timer);
-  }, [page]);
-
-  useEffect(() => {
-    if (page !== "replacement") return;
-    const timer = window.setTimeout(() => void loadReplacements(), 0);
-    return () => window.clearTimeout(timer);
-  }, [page]);
-
-  useEffect(() => {
-    if (page !== "history" || !allowedPages.has("history")) return;
-    const timer = window.setTimeout(() => void loadAuditLogs(), 0);
-    return () => window.clearTimeout(timer);
-  }, [page, allowedPages]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (page !== "users" || user.role !== "admin" || !allowedPages.has("users")) return;
-    const timer = window.setTimeout(() => void loadUsers(), 0);
-    return () => window.clearTimeout(timer);
-  }, [page, user.role, allowedPages]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      const stored = window.localStorage.getItem("kit-due-settings");
-      if (stored) {
-        try {
-          const parsed = JSON.parse(stored) as Partial<typeof settings>;
-          setSettings((current) => ({ ...current, ...parsed, sound: parsed.sound !== false }));
-        } catch { /* use defaults */ }
-      }
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, []);
-
-  async function loadUsers() {
-    if (user.role !== "admin" || !allowedPages.has("users")) return;
-    setUsersLoading(true);
-    try {
-      const response = await fetch("/api/users", { cache: "no-store" });
-      const data = await response.json() as { users?: SystemUser[]; error?: string };
-      if (!response.ok) throw new Error(data.error || "‡πÇ‡∏´‡∏•‡∏î‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setSystemUsers(data.users || []);
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡πÇ‡∏´‡∏•‡∏î‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setUsersLoading(false);
-    }
-  }
-
-  async function loadPartImages() {
-    if (!allowedPages.has("parts") && !allowedPages.has("settings")) return;
-    setPartImagesLoading(true);
-    try {
-      const [masterRes, actualRes] = await Promise.all([
-        fetch("/api/part-images", { cache: "no-store" }),
-        fetch("/api/part-images?slot=actual", { cache: "no-store" }),
-      ]);
-      const data = await masterRes.json() as { images?: PartImageMapping[]; error?: string };
-      if (!masterRes.ok) throw new Error(data.error || "‡πÇ‡∏´‡∏•‡∏î‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏£‡∏π‡∏õ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setPartImages(data.images || []);
-      const actualData = await actualRes.json() as { images?: PartImageMapping[]; error?: string };
-      if (actualRes.ok) setPartActualImages(actualData.images || []);
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡πÇ‡∏´‡∏•‡∏î‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏£‡∏π‡∏õ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setPartImagesLoading(false);
-    }
-  }
-
-  async function uploadPartImage(event: FormEvent) {
-    event.preventDefault();
-    if (!partImageCode.trim() || !partImageFile) return;
-    setPartImageSaving(true);
-    setNotice(null);
-    try {
-      const form = new FormData();
-      form.set("materialCode", partImageCode.trim().toUpperCase());
-      form.set("image", partImageFile);
-      const response = await fetch("/api/part-images", { method: "POST", body: form });
-      const data = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(data.error || "‡∏≠‡∏±‡∏õ‡πÇ‡∏´‡∏•‡∏î‡∏£‡∏π‡∏õ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setNotice({ type: "success", text: `‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡∏£‡∏π‡∏õ ${partImageCode.trim().toUpperCase()} ‡πÅ‡∏•‡πâ‡∏ß ‡∏£‡∏π‡∏õ‡∏à‡∏∞‡πÅ‡∏™‡∏î‡∏á‡∏ó‡∏±‡∏ô‡∏ó‡∏µ‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏™‡πÅ‡∏Å‡∏ô` });
-      setPartImageCode("");
-      setPartImageFile(null);
-      await loadPartImages();
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏≠‡∏±‡∏õ‡πÇ‡∏´‡∏•‡∏î‡∏£‡∏π‡∏õ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setPartImageSaving(false);
-    }
-  }
-
-  /**
-   * ‡πÅ‡∏õ‡∏•‡∏á‡∏ä‡∏∑‡πà‡∏≠‡πÑ‡∏ü‡∏•‡πå‡πÄ‡∏õ‡πá‡∏ô Material Code
-   *
-   * ‡∏ï‡∏±‡∏î‡∏ô‡∏≤‡∏°‡∏™‡∏Å‡∏∏‡∏•‡∏≠‡∏≠‡∏Å ‡∏ï‡∏±‡∏î‡πÄ‡∏•‡∏Ç‡∏™‡∏≥‡πÄ‡∏ô‡∏≤‡πÅ‡∏ö‡∏ö " (1)" ‡∏ó‡∏µ‡πà Windows ‡πÄ‡∏ï‡∏¥‡∏°‡πÉ‡∏´‡πâ‡πÄ‡∏ß‡∏•‡∏≤‡∏ä‡∏∑‡πà‡∏≠‡∏ã‡πâ‡∏≥
-   * ‡πÅ‡∏•‡πâ‡∏ß‡πÅ‡∏õ‡∏•‡∏á‡πÄ‡∏õ‡πá‡∏ô‡∏ï‡∏±‡∏ß‡∏û‡∏¥‡∏°‡∏û‡πå‡πÉ‡∏´‡∏ç‡πà ‡πÉ‡∏´‡πâ‡∏ï‡∏£‡∏á‡∏Å‡∏±‡∏ö‡∏ó‡∏µ‡πà‡∏£‡∏∞‡∏ö‡∏ö‡πÄ‡∏Å‡πá‡∏ö Part No.
-   */
-  function materialCodeFromFileName(name: string) {
-    return name
-      .replace(/\.[^.]+$/, "")
-      .replace(/\s*\(\d+\)\s*$/, "")
-      .trim()
-      .toUpperCase();
-  }
-
-  /**
-   * ‡∏≠‡∏±‡∏õ‡πÇ‡∏´‡∏•‡∏î‡∏£‡∏π‡∏õ Master ‡πÅ‡∏•‡∏∞‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á‡∏´‡∏•‡∏≤‡∏¢‡πÑ‡∏ü‡∏•‡πå‡πÉ‡∏ô‡∏£‡∏≠‡∏ö‡πÄ‡∏î‡∏µ‡∏¢‡∏ß
-   * ‡πÇ‡∏î‡∏¢‡πÉ‡∏ä‡πâ‡∏ä‡∏∑‡πà‡∏≠‡πÑ‡∏ü‡∏•‡πå (‡πÑ‡∏°‡πà‡∏£‡∏ß‡∏°‡∏ô‡∏≤‡∏°‡∏™‡∏Å‡∏∏‡∏•) ‡πÄ‡∏õ‡πá‡∏ô Material Code
-   */
-  async function uploadPartImagesBulk(event: FormEvent) {
-    event.preventDefault();
-    const uploads = [
-      ...bulkMasterImageFiles.map((file) => ({ file, slot: "master" as const, label: "Master" })),
-      ...bulkActualImageFiles.map((file) => ({ file, slot: "actual" as const, label: "‡∏£‡∏π‡∏õ‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á" })),
-    ];
-    if (!uploads.length) return;
-    setBulkImageRunning(true);
-    setNotice(null);
-    setBulkImageFailed([]);
-    setBulkImageProgress({ done: 0, total: uploads.length });
-
-    const failed: Array<{ name: string; reason: string }> = [];
-    let saved = 0;
-
-    for (const [index, upload] of uploads.entries()) {
-      const materialCode = materialCodeFromFileName(upload.file.name);
-      try {
-        if (!materialCode) throw new Error("‡∏ä‡∏∑‡πà‡∏≠‡πÑ‡∏ü‡∏•‡πå‡∏ß‡πà‡∏≤‡∏á ‡∏ï‡∏±‡πâ‡∏á‡∏ä‡∏∑‡πà‡∏≠‡πÑ‡∏ü‡∏•‡πå‡πÉ‡∏´‡πâ‡∏ï‡∏£‡∏á‡∏Å‡∏±‡∏ö Part No.");
-        if (!stock.parts.some((part) => part.materialCode === materialCode)) {
-          throw new Error(`‡πÑ‡∏°‡πà‡∏û‡∏ö Part ${materialCode} ‡πÉ‡∏ô‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô`);
-        }
-        const form = new FormData();
-        form.set("materialCode", materialCode);
-        form.set("slot", upload.slot);
-        form.set("image", upload.file);
-        const response = await fetch("/api/part-images", { method: "POST", body: form });
-        const data = await response.json() as { error?: string };
-        if (!response.ok) throw new Error(data.error || "‡∏≠‡∏±‡∏õ‡πÇ‡∏´‡∏•‡∏î‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-        saved += 1;
-      } catch (caught) {
-        failed.push({ name: `${upload.label} ¬∑ ${upload.file.name}`, reason: caught instanceof Error ? caught.message : "‡∏≠‡∏±‡∏õ‡πÇ‡∏´‡∏•‡∏î‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-      }
-      setBulkImageProgress({ done: index + 1, total: uploads.length });
-    }
-
-    setBulkImageFailed(failed);
-    setNotice(failed.length
-      ? { type: "error", text: `‡∏≠‡∏±‡∏õ‡πÇ‡∏´‡∏•‡∏î‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à ${fmt(saved)} ‡∏£‡∏π‡∏õ ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à ${fmt(failed.length)} ‡∏£‡∏π‡∏õ ‡∏î‡∏π‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏î‡πâ‡∏≤‡∏ô‡∏•‡πà‡∏≤‡∏á` }
-      : { type: "success", text: `‡∏≠‡∏±‡∏õ‡πÇ‡∏´‡∏•‡∏î‡∏£‡∏π‡∏õ Master ‡πÅ‡∏•‡∏∞‡∏£‡∏π‡∏õ‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î ${fmt(saved)} ‡∏£‡∏π‡∏õ` });
-    setBulkMasterImageFiles([]);
-    setBulkActualImageFiles([]);
-    setBulkImageRunning(false);
-    await loadPartImages();
-  }
-
-  async function deletePartImage(materialCode: string) {
-    if (!window.confirm(`‡∏•‡∏ö‡∏£‡∏π‡∏õ‡∏Ç‡∏≠‡∏á ${materialCode} ‡πÉ‡∏ä‡πà‡∏´‡∏£‡∏∑‡∏≠‡πÑ‡∏°‡πà?`)) return;
-    const response = await fetch("/api/part-images", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ materialCode }) });
-    const data = await response.json() as { error?: string };
-    if (!response.ok) return setNotice({ type: "error", text: data.error || "‡∏•‡∏ö‡∏£‡∏π‡∏õ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    setNotice({ type: "success", text: `‡∏•‡∏ö‡∏£‡∏π‡∏õ ${materialCode} ‡πÅ‡∏•‡πâ‡∏ß` });
-    await loadPartImages();
-  }
-
-  async function saveUser(event: FormEvent) {
-    event.preventDefault();
-    if (!userForm.permissions.length) {
-      setNotice({ type: "error", text: "‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡πÄ‡∏Ç‡πâ‡∏≤‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡∏≠‡∏¢‡πà‡∏≤‡∏á‡∏ô‡πâ‡∏≠‡∏¢ 1 ‡∏´‡∏ô‡πâ‡∏≤" });
-      return;
-    }
-    setUserSaving(true);
-    setNotice(null);
-    try {
-      const response = await fetch("/api/users", {
-        method: userForm.id ? "PATCH" : "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...userForm, permissions: [...new Set([...userForm.permissions, "permission-model-v2" as const])] }),
-      });
-      const data = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(data.error || "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setNotice({ type: "success", text: userForm.id ? "‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡πÄ‡∏£‡∏µ‡∏¢‡∏ö‡∏£‡πâ‡∏≠‡∏¢" : "‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡πÄ‡∏£‡∏µ‡∏¢‡∏ö‡∏£‡πâ‡∏≠‡∏¢ ‡∏™‡∏≤‡∏°‡∏≤‡∏£‡∏ñ‡πÄ‡∏Ç‡πâ‡∏≤‡∏™‡∏π‡πà‡∏£‡∏∞‡∏ö‡∏ö‡πÑ‡∏î‡πâ‡∏ó‡∏±‡∏ô‡∏ó‡∏µ" });
-      setUserForm(EMPTY_USER);
-      setUserEditorOpen(false);
-      await loadUsers();
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setUserSaving(false);
-    }
-  }
-
-  function editUser(target: SystemUser) {
-    setUserForm({
-      id: target.id, employeeCode: target.employeeCode, displayName: target.displayName,
-      email: target.email, role: target.role as UserRole, pin: "",
-      active: target.active, permissions: [...(target.permissions || [])],
-    });
-    setUserEditorOpen(true);
-  }
-
-  async function toggleUser(target: SystemUser) {
-    const response = await fetch("/api/users", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: target.id, active: !target.active }) });
-    const data = await response.json() as { error?: string };
-    if (!response.ok) return setNotice({ type: "error", text: data.error || "‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    setNotice({ type: "success", text: `${target.active ? "‡∏£‡∏∞‡∏á‡∏±‡∏ö" : "‡πÄ‡∏õ‡∏¥‡∏î‡πÉ‡∏ä‡πâ"}‡∏ö‡∏±‡∏ç‡∏ä‡∏µ ${target.employeeCode} ‡πÅ‡∏•‡πâ‡∏ß` });
-    await loadUsers();
-  }
-
-  useEffect(() => {
-    if (!cameraOpen) return;
-    const videoElement = videoRef.current;
-    let stopped = false;
-    let scannerControls: { stop(): void } | null = null;
-    const handleCameraValue = (value: string) => {
-      setCameraOpen(false);
-      if (cameraPurpose === "stock") {
-        setStockScan(value);
-        void receiveStockTag(value);
-        return;
-      }
-      if (cameraPurpose === "stock-count") {
-        setStockCountForm((current) => ({ ...current, rawPayload: value }));
-        void loadStockCountTag(value);
-        return;
-      }
-      if (page === "verify") {
-        setVerifyRaw(value);
-        setVerifyResult(null);
-        void verifyTag(value);
-        return;
-      }
-      if (page === "replacement") {
-        setReplacementTag(value);
-        setReplacementPreview(null);
-        void previewReplacementIssue(value);
-        return;
-      }
-      if (page === "arrange") {
-        setArrangeTag(value);
-        setArrangementPreview(null);
-        void stageStockTag(value);
-      } else {
-        setRawTag(value);
-        setTagPreview(null);
-        void handleDispatchScan(value);
-      }
-    };
-    async function start() {
-      try {
-        setCameraError("");
-        if (!navigator.mediaDevices?.getUserMedia || !videoElement) throw new Error("‡∏≠‡∏∏‡∏õ‡∏Å‡∏£‡∏ì‡πå‡∏ô‡∏µ‡πâ‡πÑ‡∏°‡πà‡∏£‡∏≠‡∏á‡∏£‡∏±‡∏ö‡∏Å‡∏≤‡∏£‡πÄ‡∏õ‡∏¥‡∏î‡∏Å‡∏•‡πâ‡∏≠‡∏á");
-        const [{ BrowserMultiFormatReader, BrowserQRCodeReader, BarcodeFormat }, { DecodeHintType }] = await Promise.all([
-          import("@zxing/browser"),
-          import("@zxing/library"),
-        ]);
-        if (stopped) return;
-        const customerTagMode = page === "dispatch" && Boolean(dispatchKitSelection);
-        const hints = new Map();
-        hints.set(DecodeHintType.POSSIBLE_FORMATS, customerTagMode ? [BarcodeFormat.QR_CODE] : [
-          BarcodeFormat.QR_CODE, BarcodeFormat.DATA_MATRIX, BarcodeFormat.CODE_128, BarcodeFormat.CODE_39,
-        ]);
-        hints.set(DecodeHintType.TRY_HARDER, true);
-        const videoConstraints = {
-          facingMode: { ideal: "environment" },
-          width: { ideal: customerTagMode ? 1920 : 1280 },
-          height: { ideal: customerTagMode ? 1080 : 720 },
-          frameRate: { ideal: 30 },
-        };
-        const enhanceCameraTrack = async (track: MediaStreamTrack) => {
-          const capabilities = track.getCapabilities() as MediaTrackCapabilities & {
-            focusMode?: string[];
-            zoom?: { min:number; max:number };
-          };
-          const advanced: Record<string, unknown> = {};
-          if (capabilities.focusMode?.includes("continuous")) advanced.focusMode = "continuous";
-          if (customerTagMode && capabilities.zoom && capabilities.zoom.max > capabilities.zoom.min) {
-            advanced.zoom = Math.min(capabilities.zoom.max, Math.max(capabilities.zoom.min, 1.25));
-          }
-          if (Object.keys(advanced).length) {
-            const enhancedConstraints = { advanced: [advanced] } as unknown as MediaTrackConstraints;
-            await track.applyConstraints(enhancedConstraints).catch(() => undefined);
-          }
-        };
-        if (customerTagMode) {
-          const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
-          if (stopped) {
-            stream.getTracks().forEach((track) => track.stop());
-            return;
-          }
-          videoElement.srcObject = stream;
-          await videoElement.play();
-          const track = stream.getVideoTracks()[0];
-          if (track) await enhanceCameraTrack(track);
-          const reader = new BrowserQRCodeReader(hints, { delayBetweenScanAttempts: 60, delayBetweenScanSuccess: 200 });
-          const canvas = document.createElement("canvas");
-          const context = canvas.getContext("2d", { alpha: false });
-          if (!context) throw new Error("‡∏≠‡∏∏‡∏õ‡∏Å‡∏£‡∏ì‡πå‡∏ô‡∏µ‡πâ‡πÑ‡∏°‡πà‡∏£‡∏≠‡∏á‡∏£‡∏±‡∏ö‡∏Å‡∏≤‡∏£‡∏õ‡∏£‡∏∞‡∏°‡∏ß‡∏•‡∏ú‡∏• QR");
-          let scanTimer: number | null = null;
-          let scanAttempt = 0;
-          const scanCustomerQr = () => {
-            if (stopped) return;
-            if (videoElement.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && videoElement.videoWidth > 0) {
-              const scanFullFrame = scanAttempt % 4 === 3;
-              const cropScale = scanFullFrame ? 1 : 0.66;
-              const sourceWidth = Math.round(videoElement.videoWidth * cropScale);
-              const sourceHeight = Math.round(videoElement.videoHeight * cropScale);
-              const sourceX = Math.round((videoElement.videoWidth - sourceWidth) / 2);
-              const sourceY = Math.round((videoElement.videoHeight - sourceHeight) / 2);
-              const targetHeight = Math.max(540, Math.round(960 * sourceHeight / sourceWidth));
-              if (canvas.width !== 960 || canvas.height !== targetHeight) {
-                canvas.width = 960;
-                canvas.height = targetHeight;
-                context.imageSmoothingEnabled = true;
-                context.imageSmoothingQuality = "high";
-              }
-              context.drawImage(videoElement, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
-              try {
-                const result = reader.decodeFromCanvas(canvas);
-                const scannedValue = result.getText().trim();
-                if (scannedValue) {
-                  stopped = true;
-                  stream.getTracks().forEach((mediaTrack) => mediaTrack.stop());
-                  handleCameraValue(scannedValue);
-                  return;
-                }
-              } catch {
-                // Keep scanning while the QR is moving, blurred or not yet inside the guide frame.
-              }
-              scanAttempt += 1;
-            }
-            scanTimer = window.setTimeout(scanCustomerQr, 60);
-          };
-          scannerControls = {
-            stop() {
-              if (scanTimer !== null) window.clearTimeout(scanTimer);
-              stream.getTracks().forEach((mediaTrack) => mediaTrack.stop());
-            },
-          };
-          scanCustomerQr();
-          return;
-        }
-        const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 80, delayBetweenScanSuccess: 250 });
-        scannerControls = await reader.decodeFromConstraints(
-          { video: videoConstraints, audio: false },
-          videoElement,
-          (result, _error, controls) => {
-            if (!result || stopped) return;
-            const scannedValue = result.getText().trim();
-            stopped = true;
-            controls.stop();
-            handleCameraValue(scannedValue);
-          },
-        );
-        const stream = videoElement.srcObject;
-        const track = stream instanceof MediaStream ? stream.getVideoTracks()[0] : undefined;
-        if (track) {
-          void enhanceCameraTrack(track);
-        }
-      } catch (caught) {
-        setCameraError(caught instanceof Error ? caught.message : "‡πÄ‡∏õ‡∏¥‡∏î‡∏Å‡∏•‡πâ‡∏≠‡∏á‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      }
-    }
-    void start();
-    return () => {
-      stopped = true;
-      scannerControls?.stop();
-      const stream = videoElement?.srcObject;
-      if (stream instanceof MediaStream) stream.getTracks().forEach((track) => track.stop());
-    };
-  }, [cameraOpen, cameraPurpose, page, dispatchKitSelection, stockLocation]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    const scannerPage = page === "stock" || page === "stock-count" || page === "dispatch" || (page === "replacement" && canIssueReplacement);
-    if (!scannerPage || stockReceivePreview || dispatchConfirmation || replacementPreview || cameraOpen || splitTagRequest) return;
-    const activeInput = page === "stock" ? stockScanInputRef.current : page === "stock-count" ? stockCountInputRef.current : page === "replacement" ? replacementInputRef.current : tagInput.current;
-    const mobileOrTouch = window.matchMedia("(max-width: 720px), (pointer: coarse)").matches;
-    const focusTimer = mobileOrTouch ? null : window.setTimeout(() => activeInput?.focus(), 80);
-    const submitBuffer = () => {
-      const value = hardwareScanBufferRef.current.trim();
-      hardwareScanBufferRef.current = "";
-      if (hardwareScanTimerRef.current !== null) window.clearTimeout(hardwareScanTimerRef.current);
-      hardwareScanTimerRef.current = null;
-      if (value.length < 4) return;
-      if (page === "stock") {
-        setStockScan(value);
-        void receiveStockTag(value);
-      } else if (page === "stock-count") {
-        setStockCountForm((current) => ({ ...current, rawPayload: value }));
-        void loadStockCountTag(value);
-      } else if (page === "replacement") {
-        setReplacementTag(value);
-        void previewReplacementIssue(value);
-      } else {
-        setRawTag(value);
-        setTagPreview(null);
-        void handleDispatchScan(value);
-      }
-    };
-    const onScannerKey = (event: globalThis.KeyboardEvent) => {
-      if (event.ctrlKey || event.metaKey || event.altKey) return;
-      const target = event.target as HTMLElement | null;
-      if (target === activeInput || target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.tagName === "SELECT") return;
-      if (event.key === "Enter" || event.key === "Tab") {
-        if (hardwareScanBufferRef.current) {
-          event.preventDefault();
-          submitBuffer();
-        }
-        return;
-      }
-      if (event.key.length !== 1) return;
-      const now = Date.now();
-      if (now - hardwareScanLastKeyRef.current > 400) hardwareScanBufferRef.current = "";
-      hardwareScanLastKeyRef.current = now;
-      hardwareScanBufferRef.current += event.key;
-      if (hardwareScanTimerRef.current !== null) window.clearTimeout(hardwareScanTimerRef.current);
-      hardwareScanTimerRef.current = window.setTimeout(submitBuffer, 320);
-    };
-    document.addEventListener("keydown", onScannerKey);
-    return () => {
-      if (focusTimer !== null) window.clearTimeout(focusTimer);
-      if (hardwareScanTimerRef.current !== null) window.clearTimeout(hardwareScanTimerRef.current);
-      hardwareScanBufferRef.current = "";
-      document.removeEventListener("keydown", onScannerKey);
-    };
-  }, [page, stockReceivePreview, dispatchConfirmation, replacementPreview, cameraOpen, replacementSelectedId, splitTagRequest, dispatchKitSelection, stockLocation]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (page !== "stock") return;
-    if (!stockLocation || !stockLocationActivity) return;
-    const timer = window.setTimeout(() => {
-      const keep = window.confirm(`‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏Å‡∏≤‡∏£‡∏™‡πÅ‡∏Å‡∏ô‡∏ó‡∏µ‡πà‡∏ä‡∏±‡πâ‡∏ô ${stockLocation.code} ‡πÄ‡∏õ‡πá‡∏ô‡πÄ‡∏ß‡∏•‡∏≤ 5 ‡∏ô‡∏≤‡∏ó‡∏µ\n\n‡∏¢‡∏±‡∏á‡∏£‡∏±‡∏ö‡∏á‡∏≤‡∏ô‡πÄ‡∏Ç‡πâ‡∏≤‡∏ä‡∏±‡πâ‡∏ô‡πÄ‡∏î‡∏¥‡∏°‡∏≠‡∏¢‡∏π‡πà‡∏´‡∏£‡∏∑‡∏≠‡πÑ‡∏°‡πà?`);
-      if (keep) {
-        setStockLocationActivity(Date.now());
-        window.setTimeout(() => stockScanInputRef.current?.focus(), 50);
-      } else {
-        setStockLocation(null);
-        setStockLocationActivity(0);
-        setStockScan("");
-        setNotice({ type: "success", text: "‡∏¢‡∏Å‡πÄ‡∏•‡∏¥‡∏Å‡∏ä‡∏±‡πâ‡∏ô‡∏à‡∏±‡∏î‡πÄ‡∏Å‡πá‡∏ö‡πÅ‡∏•‡πâ‡∏ß ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏™‡πÅ‡∏Å‡∏ô QR ‡∏ä‡∏±‡πâ‡∏ô‡πÉ‡∏´‡∏°‡πà" });
-      }
-    }, 5 * 60 * 1000);
-    return () => window.clearTimeout(timer);
-  }, [page, stockLocation, stockLocationActivity]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  async function parseExcel(event: ChangeEvent<HTMLInputElement>) {
-    const selected = event.target.files?.[0] ?? null;
-    setFile(selected);
-    setPreviewRows([]);
-    setNotice(null);
-    if (!selected) return;
-    setParsing(true);
-    try {
-      if (!/\.xlsx?$/i.test(selected.name)) throw new Error("‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡πÑ‡∏ü‡∏•‡πå Excel .xlsx ‡∏´‡∏£‡∏∑‡∏≠ .xls");
-      const xlsx = await import("xlsx");
-      // Keep Excel dates as serial numbers: formatted .w text may use month/day,
-      // and converting to JS Date can shift the calendar date across time zones.
-      const workbook = xlsx.read(await selected.arrayBuffer(), { type: "array", cellDates: false });
-      const normalized = (value: unknown) => text(value).toLowerCase().replace(/[\s._/()\-]+/g, "");
-      const normalizeDueDate = (value: unknown) => normalizeDueExcelDate(value, xlsx, Boolean(workbook.Workbook?.WBProps?.date1904));
-      const valueAt = (row: unknown[], headers: string[], aliases: string[]) => {
-        const index = headers.findIndex((header) => aliases.includes(header));
-        return index >= 0 ? row[index] : "";
-      };
-      const alias = {
-        material: ["materialcode", "materialno", "partno", "itemno"],
-        qty: ["reqqty", "dueqty", "quantity", "qty"],
-        description: ["materialdescription", "description", "partname"],
-        doNo: ["deliveryorderno", "dono", "pono", "ordernumber"],
-        doSubGroup: ["dosubgroup"],
-        seq: ["seq", "poitem", "item"],
-        date: ["deliverydate", "duedate"],
-        time: ["deliverytime", "duetime"],
-        fact: ["fact", "factory", "fac"],
-        line: ["line"],
-        shop: ["shop", "deliveryspot"],
-        site: ["site"],
-      };
-      const candidates: Array<{ sheetName: string; rows: ImportRow[] }> = [];
-      // ‡∏ä‡∏µ‡∏ï‡πÅ‡∏ú‡∏ô FAC ‡∏ï‡πâ‡∏≠‡∏á‡∏Ç‡∏∂‡πâ‡∏ô‡∏ï‡πâ‡∏ô‡∏î‡πâ‡∏ß‡∏¢‡∏£‡∏´‡∏±‡∏™‡∏ï‡∏±‡∏ß‡πÄ‡∏•‡∏Ç ‡πÄ‡∏ä‡πà‡∏ô 02, 09, 09.0 F3 ‡∏´‡∏£‡∏∑‡∏≠ 09.00 F3
-      // ‡πÑ‡∏°‡πà‡πÉ‡∏ä‡πâ‡∏Å‡∏≤‡∏£‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤‡∏ï‡∏±‡∏ß‡πÄ‡∏•‡∏Ç‡∏ó‡∏µ‡πà‡∏ï‡∏≥‡πÅ‡∏´‡∏ô‡πà‡∏á‡πÉ‡∏î‡∏Å‡πá‡πÑ‡∏î‡πâ ‡πÄ‡∏û‡∏∑‡πà‡∏≠‡πÑ‡∏°‡πà‡πÉ‡∏´‡πâ Sheet1/Sheet2 ‡∏ñ‡∏π‡∏Å‡∏≠‡πà‡∏≤‡∏ô‡πÄ‡∏õ‡πá‡∏ô‡πÅ‡∏ú‡∏ô‡∏á‡∏≤‡∏ô
-      const isNumericDueSheet = (name: string) => /^\d{1,2}(?:[.:]\d{1,2})?(?:\s|$)/.test(name.trim());
-
-      for (const sheetName of workbook.SheetNames) {
-        const trimmedSheetName = sheetName.trim();
-        const isTimeSheet = isNumericDueSheet(trimmedSheetName);
-        const isMcpSheet = /^mcp\s*site\s*[12](?:\s|$)/i.test(trimmedSheetName);
-        // ‡∏Ç‡πâ‡∏≤‡∏°‡∏ä‡∏µ‡∏ï‡∏ä‡πà‡∏ß‡∏¢‡∏Ñ‡∏≥‡∏ô‡∏ß‡∏ì/‡∏™‡∏£‡∏∏‡∏õ ‡πÄ‡∏ä‡πà‡∏ô vlookup, ‡∏£‡∏≠‡∏ö‡πÄ‡∏ä‡πâ‡∏≤, Sheet1 ‡∏ï‡∏±‡πâ‡∏á‡πÅ‡∏ï‡πà‡∏Å‡πà‡∏≠‡∏ô‡∏≠‡πà‡∏≤‡∏ô‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•
-        if (!isTimeSheet && !isMcpSheet) continue;
-
-        const sheet = workbook.Sheets[sheetName];
-        const grid = xlsx.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: "" });
-        // ‡πÅ‡∏ö‡∏ö‡∏ü‡∏≠‡∏£‡πå‡∏° MCP ‡∏£‡∏ß‡∏°‡∏ä‡∏∑‡πà‡∏≠ Site, ‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà ‡πÅ‡∏•‡∏∞‡∏£‡∏≠‡∏ö‡πÄ‡∏ß‡∏•‡∏≤‡πÑ‡∏ß‡πâ‡πÉ‡∏ô‡∏´‡∏±‡∏ß‡∏î‡πâ‡∏≤‡∏ô‡∏ö‡∏ô (‡πÄ‡∏ã‡∏•‡∏•‡πå merged ‡πÄ‡∏ä‡πà‡∏ô B1)
-        // ‡∏à‡∏∂‡∏á‡∏≠‡πà‡∏≤‡∏ô‡∏Ç‡πâ‡∏≠‡∏Ñ‡∏ß‡∏≤‡∏°‡∏à‡∏≤‡∏Å 6 ‡πÅ‡∏ñ‡∏ß‡πÅ‡∏£‡∏Å‡πÅ‡∏•‡∏∞‡πÉ‡∏ä‡πâ‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà/‡πÄ‡∏ß‡∏•‡∏≤‡∏ô‡∏µ‡πâ‡∏Å‡∏±‡∏ö‡∏ó‡∏∏‡∏Å‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡πÉ‡∏ô‡∏ä‡∏µ‡∏ï
-        const mcpHeader = isMcpSheet
-          ? grid.slice(0, 6).flat().map((value) => text(value)).filter(Boolean).join(" ")
-          : "";
-        const mcpDateMatch = mcpHeader.match(/(?:^|\s)(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})(?=\s|$)/);
-        const mcpTimeMatch = mcpHeader.match(/‡∏£‡∏≠‡∏ö\s*(\d{1,2})[.:](\d{2})/i);
-        const mcpHeaderDate = mcpDateMatch
-          ? (() => {
-              const rawYear = Number(mcpDateMatch[3]);
-              const year = rawYear > 2400 ? rawYear - 543 : rawYear < 100 ? rawYear + 2000 : rawYear;
-              return `${year}-${mcpDateMatch[2].padStart(2, "0")}-${mcpDateMatch[1].padStart(2, "0")}`;
-            })()
-          : "";
-        const mcpHeaderTime = mcpTimeMatch
-          ? `${mcpTimeMatch[1].padStart(2, "0")}:${mcpTimeMatch[2]}`
-          : "";
-        const sheetDeliveryDate = isTimeSheet
-          ? normalizeDueDate(sheet["A2"]?.v ?? grid[1]?.[0])
-          : isMcpSheet ? mcpHeaderDate : "";
-        const sheetDeliveryTime = isTimeSheet
-          ? normalizeTime(grid[1]?.[1])
-          : isMcpSheet ? mcpHeaderTime : "";
-        let activeHeaders: string[] = [];
-        const parsedRows: ImportRow[] = [];
-
-        for (let rowIndex = 0; rowIndex < grid.length; rowIndex += 1) {
-          const row = grid[rowIndex];
-          const normalizedRow = row.map(normalized);
-          const hasMaterial = normalizedRow.some((header) => alias.material.includes(header));
-          const hasQty = normalizedRow.some((header) => alias.qty.includes(header));
-          if (hasMaterial && hasQty) {
-            activeHeaders = normalizedRow;
-            continue;
-          }
-          if (!activeHeaders.length) continue;
-
-          const materialCode = text(valueAt(row, activeHeaders, alias.material)).toUpperCase();
-          const reqQty = number(valueAt(row, activeHeaders, alias.qty));
-          if (!materialCode || materialCode === "ITEM NO." || materialCode.includes("‡∏ú‡∏•‡∏£‡∏ß‡∏°") || reqQty <= 0) continue;
-
-          const doSubGroup = text(valueAt(row, activeHeaders, alias.doSubGroup));
-          const doRaw = doSubGroup.split("|")[0] || text(valueAt(row, activeHeaders, alias.doNo));
-          const doNo = doRaw.toUpperCase();
-          const seq = number(valueAt(row, activeHeaders, alias.seq)) || rowIndex + 1;
-          const rowDeliveryDate = normalizeDueDate(valueAt(row, activeHeaders, alias.date));
-          const suppliedTime = normalizeTime(valueAt(row, activeHeaders, alias.time));
-          const deliveryDate = sheetDeliveryDate || rowDeliveryDate;
-          const deliveryTime = sheetDeliveryTime || suppliedTime || "09:00";
-          const deliverySpot = text(valueAt(row, activeHeaders, alias.shop)).toUpperCase();
-          const filenameSite = selected.name.match(/SITE\s*([1-9])/i)?.[1] || "";
-          const spotFactory = deliverySpot.match(/(?:^|[-_ ])F(?:AC)?\s*([1-9])(?:$|[-_ ])/i)?.[1] || "";
-          const factRaw = text(valueAt(row, activeHeaders, alias.fact)).toUpperCase();
-          const fact = factRaw || (spotFactory ? `FAC${spotFactory}` : filenameSite ? `FAC${filenameSite}` : "FAC1");
-          const line = text(valueAt(row, activeHeaders, alias.line)).toUpperCase();
-          const shop = deliverySpot;
-          const siteRaw = text(valueAt(row, activeHeaders, alias.site)).toUpperCase();
-          const site = siteRaw || (/MCP/i.test(selected.name) ? "MCP" : deliverySpot);
-          if (!doNo || !deliveryDate) continue;
-
-          const baseKey = [doNo, materialCode, seq, deliveryDate, deliveryTime, fact, line, shop].join("|");
-          parsedRows.push({
-            sourceKey: `${baseKey}|SHEET:${sheetName.trim().toUpperCase()}|ROW:${rowIndex + 1}`,
-            doNo, seq, materialCode,
-            materialDescription: text(valueAt(row, activeHeaders, alias.description)),
-            site, fact, line, shop, reqQty, deliveryDate, deliveryTime,
-          });
-        }
-        if (parsedRows.length) candidates.push({ sheetName, rows: parsedRows });
-      }
-
-      // ‡πÑ‡∏ü‡∏•‡πå MCP ‡πÉ‡∏ä‡πâ‡∏ä‡∏µ‡∏ï MCP site1/site2 ‡πÄ‡∏õ‡πá‡∏ô‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏´‡∏•‡∏±‡∏Å
-      // ‡πÑ‡∏ü‡∏•‡πå FAC ‡∏£‡∏ß‡∏°‡πÉ‡∏ä‡πâ‡πÄ‡∏â‡∏û‡∏≤‡∏∞‡∏ä‡∏µ‡∏ï‡∏ó‡∏µ‡πà‡∏Ç‡∏∂‡πâ‡∏ô‡∏ï‡πâ‡∏ô‡∏î‡πâ‡∏ß‡∏¢‡∏£‡∏´‡∏±‡∏™‡∏ï‡∏±‡∏ß‡πÄ‡∏•‡∏Ç ‡πÄ‡∏û‡∏∑‡πà‡∏≠‡πÑ‡∏°‡πà‡∏≠‡πà‡∏≤‡∏ô Sheet1/vlookup/‡∏£‡∏≠‡∏ö‡πÄ‡∏ä‡πâ‡∏≤
-      const mcpSheets = candidates.filter((candidate) => /^mcp\s*site\s*[12](?:\s|$)/i.test(candidate.sheetName.trim()));
-      const timeSheets = candidates.filter((candidate) => isNumericDueSheet(candidate.sheetName));
-      const selectedSheets = mcpSheets.length ? mcpSheets : timeSheets;
-      const rows = selectedSheets.flatMap((candidate) => candidate.rows);
-      if (!rows.length) throw new Error("‡πÑ‡∏°‡πà‡∏û‡∏ö‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ Due ‡πÉ‡∏ô‡∏ä‡∏µ‡∏ï‡∏£‡∏´‡∏±‡∏™‡∏ï‡∏±‡∏ß‡πÄ‡∏•‡∏Ç ‡πÄ‡∏ä‡πà‡∏ô 02, 09 ‡∏´‡∏£‡∏∑‡∏≠ 09.00 F3 ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏ä‡∏∑‡πà‡∏≠‡∏ä‡∏µ‡∏ï‡πÅ‡∏•‡∏∞‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô");
-      setPreviewRows(rows);
-      setNotice({ type: "success", text: `‡∏≠‡πà‡∏≤‡∏ô‡∏à‡∏≤‡∏Å‡∏ä‡∏µ‡∏ï ${selectedSheets.map((item) => item.sheetName.trim()).join(", ")} ‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à ${fmt(rows.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ‡∏£‡∏ß‡∏° ${fmt(rows.reduce((sum, row) => sum + row.reqQty, 0))} ‡∏ä‡∏¥‡πâ‡∏ô` });
-    } catch (caught) {
-      setFile(null);
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏≠‡πà‡∏≤‡∏ô‡πÑ‡∏ü‡∏•‡πå Excel ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setParsing(false);
-    }
-  }
-
-  async function importExcel() {
-    if (!file || !previewRows.length) return;
-    setImporting(true);
-    setNotice(null);
-    try {
-      const response = await fetch("/api/due-import", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ importToken: `${file.name}|${file.size}|${file.lastModified}`, fileName: file.name, rows: previewRows }),
-      });
-      const result = await response.json() as { error?: string; rowCount?: number; totalQty?: number };
-      if (!response.ok) throw new Error(result.error || "‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤‡πÑ‡∏ü‡∏•‡πå‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setFile(null);
-      setPreviewRows([]);
-      setFilterDate("");
-      setFilterFact("ALL");
-      setFilterTime("ALL");
-      setQuery("");
-      setPlanPage(1);
-      if (fileInput.current) fileInput.current.value = "";
-      setNotice({ type: "success", text: `‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤ Due ‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à ${fmt(result.rowCount || 0)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ‡∏£‡∏ß‡∏° ${fmt(result.totalQty || 0)} ‡∏ä‡∏¥‡πâ‡∏ô ¬∑ ‡πÅ‡∏™‡∏î‡∏á‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î‡πÅ‡∏•‡πâ‡∏ß` });
-      await loadDue();
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤‡πÑ‡∏ü‡∏•‡πå‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setImporting(false);
-    }
-  }
-
-  async function deleteImport(item: DueImport, confirmActivity = false) {
-    if (!confirmActivity && !window.confirm(`‡∏•‡∏ö‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏ó‡∏µ‡πà‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤‡∏à‡∏≤‡∏Å‡πÑ‡∏ü‡∏•‡πå ${item.fileName} ‡∏à‡∏≥‡∏ô‡∏ß‡∏ô ${fmt(item.rowCount)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ‡πÉ‡∏ä‡πà‡∏´‡∏£‡∏∑‡∏≠‡πÑ‡∏°‡πà?`)) return;
-    setDeletingImportId(item.id);
-    setNotice(null);
-    try {
-      const response = await fetch("/api/due-import", {
-        method: "DELETE", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: item.id, confirmActivity }),
-      });
-      const data = await response.json() as { error?: string; requiresConfirmation?: boolean; scanCount?: number; receiptCount?: number; stockCount?: number };
-      if (response.status === 409 && data.requiresConfirmation) {
-        const confirmed = window.confirm(`‡∏Ñ‡∏≥‡πÄ‡∏ï‡∏∑‡∏≠‡∏ô: ‡∏ä‡∏∏‡∏î‡∏ô‡∏µ‡πâ‡∏°‡∏µ‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô ${fmt(data.receiptCount || 0)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å ${fmt(data.scanCount || 0)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ‡πÅ‡∏•‡∏∞‡πÄ‡∏ä‡∏∑‡πà‡∏≠‡∏° Stock ${fmt(data.stockCount || 0)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£\n\n‡∏´‡∏≤‡∏Å‡∏•‡∏ö ‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡∏Ñ‡∏∑‡∏ô Stock ‡∏ó‡∏µ‡πà‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‡∏à‡∏≤‡∏Å‡∏ä‡∏∏‡∏î‡∏ô‡∏µ‡πâ‡πÅ‡∏•‡∏∞‡∏•‡∏ö‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡∏ó‡∏µ‡πà‡πÄ‡∏Å‡∏µ‡πà‡∏¢‡∏ß‡∏Ç‡πâ‡∏≠‡∏á ‡∏ï‡πâ‡∏≠‡∏á‡∏Å‡∏≤‡∏£‡∏î‡∏≥‡πÄ‡∏ô‡∏¥‡∏ô‡∏Å‡∏≤‡∏£‡∏ï‡πà‡∏≠‡∏´‡∏£‡∏∑‡∏≠‡πÑ‡∏°‡πà?`);
-        if (confirmed) { await deleteImport(item, true); return; }
-        return;
-      }
-      if (!response.ok) throw new Error(data.error || "‡∏•‡∏ö‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setNotice({ type: "success", text: `‡∏•‡∏ö‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏à‡∏≤‡∏Å ${item.fileName} ‡πÅ‡∏•‡πâ‡∏ß ${fmt(item.rowCount)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£` });
-      await loadDue();
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏•‡∏ö‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setDeletingImportId(null);
-    }
-  }
-
-  function updateDispatchScannerValue(value: string) {
-    setRawTag(value);
-    setTagPreview(null);
-    setDispatchConfirmation(null);
-    if (dispatchScanTimerRef.current !== null) window.clearTimeout(dispatchScanTimerRef.current);
-    if (value.trim().length < 4) return;
-    dispatchScanTimerRef.current = window.setTimeout(() => {
-      dispatchScanTimerRef.current = null;
-      void handleDispatchScan(value);
-    }, 320);
-  }
-
-  function handleDispatchScan(value?: string | FormEvent) {
-    return dispatchKitSelection ? previewDispatchTag(value) : previewDispatchKitTag(value);
-  }
-
-  async function previewDispatchKitTag(value?: string | FormEvent) {
-    const event = typeof value === "object" ? value : undefined;
-    event?.preventDefault();
-    if (dispatchScanTimerRef.current !== null) {
-      window.clearTimeout(dispatchScanTimerRef.current);
-      dispatchScanTimerRef.current = null;
-    }
-    const scannedValue = typeof value === "string" ? value.trim() : rawTag.trim();
-    if (!effectiveDispatchDueDate) {
-      setNotice({ type: "error", text: "‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô‡∏Å‡πà‡∏≠‡∏ô‡∏™‡πÅ‡∏Å‡∏ô KIT Tag" });
-      return;
-    }
-    if (!scannedValue || dispatchScanRequestRef.current) return;
-    dispatchScanRequestRef.current = true;
-    setCheckingTag(true);
-    setDispatchConfirmation(null);
-    setTagPreview(null);
-    setNotice(null);
-    try {
-      const response = await fetch("/api/due", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ rawPayload: scannedValue, mode: "dispatch_kit_verify", deliveryDate: effectiveDispatchDueDate, deliveryTime: dispatchDueTime, fact: dispatchDueFact }),
-      });
-      const result = await response.json() as { verdict?: string; message?: string; kit?: DispatchKitSelection; error?: string };
-      if (!response.ok || result.verdict !== "ready" || !result.kit) throw new Error(result.error || result.message || "‡πÑ‡∏°‡πà‡∏û‡∏ö KIT Tag ‡∏ó‡∏µ‡πà‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡πÅ‡∏•‡πâ‡∏ß");
-      setDispatchKitSelection(result.kit);
-      setRawTag("");
-      setNotice({ type: "success", text: `‡∏û‡∏ö KIT Tag ${result.kit.stockTagCode} ¬∑ ${result.kit.materialCode} ¬∑ ${fmt(result.kit.waitingQty)} ‡∏ä‡∏¥‡πâ‡∏ô ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏™‡πÅ‡∏Å‡∏ô Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤` });
-      window.setTimeout(() => tagInput.current?.focus(), 80);
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö KIT Tag ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-      window.setTimeout(() => tagInput.current?.select(), 80);
-    } finally {
-      dispatchScanRequestRef.current = false;
-      setCheckingTag(false);
-    }
-  }
-
-  async function previewDispatchTag(value?: string | FormEvent) {
-    const event = typeof value === "object" ? value : undefined;
-    event?.preventDefault();
-    if (dispatchScanTimerRef.current !== null) {
-      window.clearTimeout(dispatchScanTimerRef.current);
-      dispatchScanTimerRef.current = null;
-    }
-    const scannedValue = typeof value === "string" ? value.trim() : rawTag.trim();
-    if (!effectiveDispatchDueDate) {
-      setNotice({ type: "error", text: "‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô‡∏Å‡πà‡∏≠‡∏ô‡∏™‡πÅ‡∏Å‡∏ô Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤" });
-      return;
-    }
-    if (!dispatchKitSelection) {
-      setNotice({ type: "error", text: "‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏™‡πÅ‡∏Å‡∏ô KIT Tag ‡∏ó‡∏µ‡πà‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡πÅ‡∏•‡πâ‡∏ß‡∏Å‡πà‡∏≠‡∏ô" });
-      return;
-    }
-    if (!scannedValue || dispatchScanRequestRef.current) return;
-    dispatchScanRequestRef.current = true;
-    setCheckingTag(true);
-    setDispatchConfirmation(null);
-    setTagPreview(null);
-    setNotice(null);
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 12_000);
-    try {
-      const response = await fetch("/api/due", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ rawPayload: scannedValue, mode: "dispatch_verify", pickId: dispatchKitSelection.pickId, stockTagCode: dispatchKitSelection.stockTagCode, deliveryDate: effectiveDispatchDueDate, deliveryTime: dispatchDueTime, fact: dispatchDueFact }),
-        signal: controller.signal,
-      });
-      const contentType = response.headers.get("content-type") || "";
-      const result = contentType.includes("application/json")
-        ? await response.json() as VerifyResult & { error?: string }
-        : { action: "verify" as const, verdict: "bad_tag" as const, error: response.redirected ? "‡πÄ‡∏ã‡∏™‡∏ä‡∏±‡∏ô‡∏´‡∏°‡∏î‡∏≠‡∏≤‡∏¢‡∏∏ ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡πÄ‡∏Ç‡πâ‡∏≤‡∏™‡∏π‡πà‡∏£‡∏∞‡∏ö‡∏ö‡πÉ‡∏´‡∏°‡πà" : "‡∏£‡∏∞‡∏ö‡∏ö‡∏ï‡∏≠‡∏ö‡∏Å‡∏•‡∏±‡∏ö‡πÑ‡∏°‡πà‡∏ñ‡∏π‡∏Å‡∏ï‡πâ‡∏≠‡∏á ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏•‡∏≠‡∏á‡∏™‡πÅ‡∏Å‡∏ô‡πÉ‡∏´‡∏°‡πà" };
-      const responseError = "error" in result ? result.error : undefined;
-      const responseMessage = "message" in result ? result.message : undefined;
-      if (!response.ok || !contentType.includes("application/json")) throw new Error(responseError || responseMessage || "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö Tag ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setRawTag(scannedValue);
-      setDispatchConfirmation(result);
-      if(result.verdict !== "ready" && result.verdict !== "ready_noimg") reportOperationWarning({page:'dispatch',message:result.message || '‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡πÑ‡∏°‡πà‡∏û‡∏£‡πâ‡∏≠‡∏°‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å',showPopup:false,context:{verdict:result.verdict,tagId:result.tag?.tagId || '',materialCode:result.tag?.materialCode || ''}});
-    } catch (caught) {
-      const message = caught instanceof DOMException && caught.name === "AbortError"
-        ? "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö Tag ‡πÉ‡∏ä‡πâ‡πÄ‡∏ß‡∏•‡∏≤‡∏ô‡∏≤‡∏ô‡πÄ‡∏Å‡∏¥‡∏ô‡πÑ‡∏õ ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏•‡∏≠‡∏á‡∏™‡πÅ‡∏Å‡∏ô‡πÉ‡∏´‡∏°‡πà"
-        : caught instanceof Error ? caught.message : "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö Tag ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à";
-      setNotice({ type: "error", text: message });
-      window.setTimeout(() => tagInput.current?.select(), 80);
-    } finally {
-      window.clearTimeout(timeout);
-      dispatchScanRequestRef.current = false;
-      setCheckingTag(false);
-    }
-  }
-
-  async function confirmDispatch() {
-    const rawPayload = dispatchConfirmation?.tag?.rawPayload;
-    if (!rawPayload || !dispatchKitSelection || checkingTag) return;
-    setDispatchConfirmation(null);
-    await processTag(rawPayload, { deliveryDate: effectiveDispatchDueDate, deliveryTime: dispatchDueTime, fact: dispatchDueFact });
-  }
-
-  async function processTag(value?: string | FormEvent, scope?: { deliveryDate: string; deliveryTime: string; fact: string }) {
-    const event = typeof value === "object" ? value : undefined;
-    event?.preventDefault();
-    const scannedValue = typeof value === "string" ? value.trim() : rawTag.trim();
-    if (!scannedValue || checkingTag) return;
-    setCheckingTag(true);
-    setTagPreview(null);
-    setNotice(null);
-    try {
-      const response = await fetch("/api/due", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ rawPayload: scannedValue, pickId: dispatchKitSelection?.pickId, stockTagCode: dispatchKitSelection?.stockTagCode, deliveryDate: scope?.deliveryDate || effectiveDispatchDueDate, deliveryTime: scope?.deliveryTime ?? dispatchDueTime, fact: scope?.fact ?? dispatchDueFact }),
-      });
-      const result = await response.json() as TagPreview & { action?: string; error?: string };
-      if (!response.ok) throw new Error(result.error || "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å Tag ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setTagPreview(result);
-      setRawTag("");
-      setDispatchKitSelection(null);
-      setNotice({ type: "success", text: `‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å ‡∏ï‡∏±‡∏î Stock ‡πÅ‡∏•‡∏∞ Due ${result.due.materialCode} ‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à ‡πÄ‡∏´‡∏•‡∏∑‡∏≠ Due ${fmt(result.due.remainingAfter)} ‡∏ä‡∏¥‡πâ‡∏ô` });
-      await Promise.all([loadDue(), loadStock()]);
-      window.setTimeout(() => {
-        if (window.matchMedia("(max-width: 720px)").matches) tagResultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-        else tagInput.current?.focus();
-      }, 120);
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å Tag ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setCheckingTag(false);
-    }
-  }
-
-  async function verifyTag(value?: string | FormEvent) {
-    const event = typeof value === "object" ? value : undefined;
-    event?.preventDefault();
-    const scannedValue = typeof value === "string" ? value.trim() : verifyRaw.trim();
-    if (!scannedValue || verifyLoading) return;
-    setVerifyLoading(true);
-    setVerifyResult(null);
-    setNotice(null);
-    try {
-      const response = await fetch("/api/due", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ rawPayload: scannedValue, mode: "verify" }),
-      });
-      const result = await response.json() as VerifyResult & { error?: string };
-      if (!response.ok) throw new Error(result.error || "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setVerifyResult(result);
-      if(result.verdict !== "ready" && result.verdict !== "ready_noimg") reportOperationWarning({page:'dispatch',message:result.message || '‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô‡πÑ‡∏°‡πà‡∏ú‡πà‡∏≤‡∏ô',context:{verdict:result.verdict,tagId:result.tag?.tagId || ''}});
-      window.setTimeout(() => {
-        if (window.matchMedia("(max-width: 720px)").matches) verifyResultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-        else verifyInput.current?.focus();
-      }, 120);
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setVerifyLoading(false);
-    }
-  }
-
-  function goDispatchFromVerify() {
-    if (!verifyResult?.tag) return;
-    setRawTag(verifyResult.tag.rawPayload);
-    setTagPreview(null);
-    go("dispatch");
-  }
-
-  async function stageStockTag(value?: string | FormEvent, confirmation?: ArrangeConfirmation) {
-    const event = typeof value === "object" ? value : undefined;
-    event?.preventDefault();
-    const scannedValue = typeof value === "string" ? value.trim() : arrangeTag.trim();
-    if (checkingTag || arrangeWarning || arrangeRequestRef.current || (arrangeConfirmation && !confirmation)) return;
-    const deliveryDate = confirmation?.deliveryDate || effectiveArrangeDueDate;
-    const deliveryTime = confirmation ? confirmation.deliveryTime : arrangeDueTime;
-    const fact = confirmation ? confirmation.fact : arrangeDueFact;
-    let warningLogged = false;
-    const warn = async (message: string) => {
-      setArrangeConfirmation(null);
-      setArrangeWarning({ message, date: deliveryDate, time: deliveryTime, fact: fact });
-      setNotice({ type: "error", text: message, warningHandled: true });
-      setArrangeTag("");
-      if (!warningLogged) await recordClientAudit("arrange_warning", `${message} ¬∑ ‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà ${deliveryDate || "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡πÄ‡∏•‡∏∑‡∏≠‡∏Å"} ¬∑ ‡∏£‡∏≠‡∏ö ${deliveryTime || "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î"} ¬∑ ${fact || "‡∏ó‡∏∏‡∏Å FAC"}`, {
-        warningMessage: message, deliveryDate: deliveryDate, deliveryTime: deliveryTime, fact: fact,
-        stockTagCode: /^KITSTK-[A-Z0-9-]+$/i.test(scannedValue) ? scannedValue : "[Tag ‡πÑ‡∏°‡πà‡∏ñ‡∏π‡∏Å‡∏ï‡πâ‡∏≠‡∏á]",
-      });
-    };
-    if (confirmation && !validArrangementQuantity(confirmation.pickedQty,Math.min(confirmation.tagAvailableQty,confirmation.dueOpenQty))) {
-      await warn("‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏£‡∏∞‡∏ö‡∏∏‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡πÄ‡∏õ‡πá‡∏ô‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡πÄ‡∏ï‡πá‡∏° ‡∏°‡∏≤‡∏Å‡∏Å‡∏ß‡πà‡∏≤ 0 ‡πÅ‡∏•‡∏∞‡πÑ‡∏°‡πà‡πÄ‡∏Å‡∏¥‡∏ô Stock ‡∏û‡∏£‡πâ‡∏≠‡∏°‡πÉ‡∏ä‡πâ / Due ‡∏ó‡∏µ‡πà‡πÄ‡∏´‡∏•‡∏∑‡∏≠");
-      return;
-    }
-    if (!deliveryDate || !scannedValue) {
-      await warn(!deliveryDate ? "‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà Due ‡∏Å‡πà‡∏≠‡∏ô‡∏™‡πÅ‡∏Å‡∏ô Tag" : "‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏™‡πÅ‡∏Å‡∏ô‡∏´‡∏£‡∏∑‡∏≠‡∏£‡∏∞‡∏ö‡∏∏ KIT Stock Tag");
-      return;
-    }
-    // Keep the chosen scope even after its last remaining Due is arranged.
-    setArrangeDueDate(deliveryDate);
-    arrangeRequestRef.current = true;
-    setCheckingTag(true);
-    setArrangementPreview(null);
-    setNotice(null);
-    try {
-      const response = await fetch("/api/stock", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "stage",
-          deliveryDate: deliveryDate,
-          deliveryTime: deliveryTime,
-          fact: fact,
-          rawPayload: scannedValue,
-          qty: confirmation ? confirmation.pickedQty : Number(arrangeQty || 0),
-          preview: !confirmation,
-          ...(confirmation ? { dueLineId: confirmation.due.id } : {}),
-        }),
-      });
-      const result = await response.json() as (ArrangementPreview | ArrangeConfirmation) & { error?: string; warningLogged?: boolean };
-      warningLogged = Boolean(result.warningLogged);
-      if (!response.ok) throw new Error(result.error || "‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      if (!confirmation && result.action === "preview_stage") {
-        setArrangeConfirmQty(String(result.pickedQty));
-        setArrangeConfirmation({ ...result, rawPayload: scannedValue, deliveryDate, deliveryTime, fact });
-        return;
-      }
-      if (result.action !== "staged") throw new Error("‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡πÑ‡∏°‡πà‡∏ñ‡∏π‡∏Å‡∏ï‡πâ‡∏≠‡∏á ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏™‡πÅ‡∏Å‡∏ô‡πÉ‡∏´‡∏°‡πà");
-      setArrangeConfirmation(null);
-      setArrangementPreview(result);
-      setArrangeTag("");
-      setArrangeQty("");
-      setNotice({
-        type: "success",
-        text: `‡∏à‡∏±‡∏î ${fmt(result.pick.pickedQty)} ‡∏ä‡∏¥‡πâ‡∏ô‡∏à‡∏≤‡∏Å Job ${result.tag.jobNo} ‡∏£‡∏≠‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å ‚Äî ‡∏¢‡πâ‡∏≤‡∏¢‡∏¢‡∏≠‡∏î‡∏à‡∏≤‡∏Å Stock ‡∏û‡∏£‡πâ‡∏≠‡∏°‡πÉ‡∏ä‡πâ‡πÑ‡∏õ‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡∏£‡∏≠‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß`,
-      });
-      await Promise.all([loadDue(), loadStock()]);
-      window.setTimeout(() => {
-        if (window.matchMedia("(max-width: 720px)").matches) tagResultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-        else tagInput.current?.focus();
-      }, 120);
-    } catch (caught) {
-      await warn(caught instanceof Error ? caught.message : "‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-    } finally {
-      arrangeRequestRef.current = false;
-      setCheckingTag(false);
-    }
-  }
-
-
-  async function submitManualStockReceipt(confirmDuplicateJob = false) {
-    if (stockManagementSaving) return;
-    setStockManagementSaving(true);
-    try {
-      const response = await fetch("/api/stock", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "manual_receive", ...manualStockForm,
-          qty: Number(manualStockForm.qty || 0), confirmDuplicateJob,
-        }),
-      });
-      const data = await response.json() as ManualReceiptSuccess & {
-        duplicate?: ManualDuplicateJob; code?: string; error?: string;
-      };
-      if (response.status === 409 && data.code === "duplicate_job_confirmation_required" && data.duplicate) {
-        setManualDuplicateJob(data.duplicate);
-        return;
-      }
-      if (!response.ok) throw new Error(data.error || "‡∏Ñ‡∏µ‡∏¢‡πå‡∏£‡∏±‡∏ö‡∏á‡∏≤‡∏ô‡πÄ‡∏Ç‡πâ‡∏≤ Stock ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setManualDuplicateJob(null);
-      setManualReceiptSuccess(data);
-      setManualStockForm((current) => ({
-        ...current, materialCode: "", qty: "", jobNo: "", referenceNo: "", note: "",
-      }));
-      setNotice({
-        type: "success",
-        text: `‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Stock ${fmt(Number(data.totalQty || 0))} ‡∏ä‡∏¥‡πâ‡∏ô ‡πÅ‡∏•‡∏∞‡∏™‡∏£‡πâ‡∏≤‡∏á ${fmt(Number(data.boxCount || data.tags?.length || 0))} Tag ‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à`,
-      });
-      await loadStock();
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏Ñ‡∏µ‡∏¢‡πå‡∏£‡∏±‡∏ö‡∏á‡∏≤‡∏ô‡πÄ‡∏Ç‡πâ‡∏≤ Stock ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setStockManagementSaving(false);
-    }
-  }
-
-  async function saveManualStockReceipt(event: FormEvent) {
-    event.preventDefault();
-    await submitManualStockReceipt(false);
-  }
-
-  function defaultStockCountReason(difference: number) {
-    if (difference > 0) return "‡∏õ‡∏£‡∏±‡∏ö‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏¢‡∏≠‡∏î‡∏ô‡∏±‡∏ö Stock ‡∏™‡∏¥‡πâ‡∏ô‡πÄ‡∏î‡∏∑‡∏≠‡∏ô";
-    if (difference < 0) return "‡∏õ‡∏£‡∏±‡∏ö‡∏•‡∏î‡∏¢‡∏≠‡∏î‡∏ô‡∏±‡∏ö Stock ‡∏™‡∏¥‡πâ‡∏ô‡πÄ‡∏î‡∏∑‡∏≠‡∏ô";
-    return "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡∏¢‡∏≠‡∏î‡∏ï‡∏£‡∏ß‡∏à‡∏ô‡∏±‡∏ö Stock ‡∏™‡∏¥‡πâ‡∏ô‡πÄ‡∏î‡∏∑‡∏≠‡∏ô";
-  }
-
-  async function loadStockCountTag(value?: string) {
-    const rawPayload = (value ?? stockCountForm.rawPayload).trim();
-    if (!rawPayload || stockManagementSaving) return;
-    setStockManagementSaving(true);
-    setStockCountConfirmOpen(false);
-    setStockCountPreview(null);
-    try {
-      const response = await fetch("/api/stock", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "preview_tag_count", rawPayload, countDate: stockCountForm.countDate }),
-      });
-      const data = await response.json() as StockCountPreview & { error?: string };
-      if (!response.ok) throw new Error(data.error || "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö KIT Stock Tag ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setStockCountForm((current) => ({
-        ...current, rawPayload: data.tagId, countedQty: String(data.stockAreaSystemQty),
-        reason: defaultStockCountReason(0),
-      }));
-      setStockCountPreview(data);
-      setNotice({ type: "success", text: `‡∏û‡∏ö Tag ${data.tagId} ¬∑ ‡∏Ñ‡∏ß‡∏£‡∏≠‡∏¢‡∏π‡πà‡πÉ‡∏ô‡∏û‡∏∑‡πâ‡∏ô‡∏ó‡∏µ‡πà Stock ${fmt(data.stockAreaSystemQty)} ‡∏ä‡∏¥‡πâ‡∏ô ¬∑ ‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô/‡∏à‡∏≠‡∏á‡πÑ‡∏ß‡πâ ${fmt(data.reservedQty)} ‡∏ä‡∏¥‡πâ‡∏ô` });
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö KIT Stock Tag ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setStockManagementSaving(false);
-    }
-  }
-
-  async function previewStockCount(event: FormEvent) {
-    event.preventDefault();
-    if (stockManagementSaving) return;
-    setStockManagementSaving(true);
-    try {
-      const response = await fetch("/api/stock", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "preview_tag_count", rawPayload: stockCountForm.rawPayload,
-          countedQty: Number(stockCountForm.countedQty), countDate: stockCountForm.countDate,
-          expectedSystemQty: stockCountPreview?.systemQty,
-          expectedReservedQty: stockCountPreview?.reservedQty,
-          expectedStatus: stockCountPreview?.status,
-        }),
-      });
-      const data = await response.json() as StockCountPreview & { error?: string };
-      if (response.status === 409) {
-        setStockCountConfirmOpen(false);
-        setStockCountPreview(null);
-      }
-      if (!response.ok) throw new Error(data.error || "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏¢‡∏≠‡∏î Tag ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setStockCountForm((current) => ({
-        ...current,
-        reason: current.reason.trim() && current.reason !== "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡∏¢‡∏≠‡∏î‡∏ï‡∏£‡∏ß‡∏à‡∏ô‡∏±‡∏ö Stock ‡∏™‡∏¥‡πâ‡∏ô‡πÄ‡∏î‡∏∑‡∏≠‡∏ô"
-          ? current.reason : defaultStockCountReason(data.difference),
-      }));
-      setStockCountPreview(data);
-      setStockCountConfirmOpen(true);
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏¢‡∏≠‡∏î Tag ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setStockManagementSaving(false);
-    }
-  }
-
-  async function confirmStockCountAdjustment() {
-    if (!stockCountPreview || stockManagementSaving) return;
-    setStockManagementSaving(true);
-    try {
-      const response = await fetch("/api/stock", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "confirm_tag_count", rawPayload: stockCountForm.rawPayload,
-          countedQty: Number(stockCountForm.countedQty), countDate: stockCountForm.countDate,
-          expectedSystemQty: stockCountPreview?.systemQty,
-          expectedReservedQty: stockCountPreview?.reservedQty,
-          expectedStatus: stockCountPreview?.status,
-          reason: stockCountForm.reason,
-        }),
-      });
-      const data = await response.json() as StockCountPreview & { adjustmentNo?: string; error?: string };
-      if (response.status === 409) {
-        setStockCountConfirmOpen(false);
-        setStockCountPreview(null);
-      }
-      if (!response.ok) throw new Error(data.error || "‡∏õ‡∏£‡∏±‡∏ö‡∏¢‡∏≠‡∏î Tag ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setStockCountConfirmOpen(false);
-      setStockCountPreview(null);
-      setStockCountForm((current) => ({ ...current, rawPayload: "", countedQty: "", reason: "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡∏¢‡∏≠‡∏î‡∏ï‡∏£‡∏ß‡∏à‡∏ô‡∏±‡∏ö Stock ‡∏™‡∏¥‡πâ‡∏ô‡πÄ‡∏î‡∏∑‡∏≠‡∏ô" }));
-      setNotice({ type: "success", text: `‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å Tag ${data.tagId} ‡πÅ‡∏•‡πâ‡∏ß ¬∑ ${data.difference > 0 ? "‡πÄ‡∏û‡∏¥‡πà‡∏°" : data.difference < 0 ? "‡∏•‡∏î" : "‡∏¢‡∏≠‡∏î‡∏ï‡∏£‡∏á"} ${fmt(Math.abs(data.difference))} ‡∏ä‡∏¥‡πâ‡∏ô ¬∑ Stock ‡∏£‡∏ß‡∏° ${fmt(data.materialTotalAfter)} ‡∏ä‡∏¥‡πâ‡∏ô` });
-      await loadStock();
-      window.setTimeout(() => stockCountInputRef.current?.focus(), 100);
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏õ‡∏£‡∏±‡∏ö‡∏¢‡∏≠‡∏î Tag ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setStockManagementSaving(false);
-    }
-  }
-
-  async function saveStockPart(event: FormEvent) {
-    event.preventDefault();
-    setStockSaving(true);
-    try {
-      const response = await fetch("/api/stock", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "save_part", ...stockPartForm, standardQty: Number(stockPartForm.standardQty || 0) }),
-      });
-      const data = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(data.error || "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å Part ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      const savedCode = stockPartForm.materialCode.trim().toUpperCase();
-      if (partImageFile) {
-        const form = new FormData();
-        form.set("materialCode", savedCode);
-        form.set("image", partImageFile);
-        const imageResponse = await fetch("/api/part-images", { method: "POST", body: form });
-        const imageData = await imageResponse.json() as { error?: string };
-        if (!imageResponse.ok) throw new Error(imageData.error || "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å Part ‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à ‡πÅ‡∏ï‡πà‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡∏£‡∏π‡∏õ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      }
-      if (partActualImageFile) {
-        const form = new FormData();
-        form.set("materialCode", savedCode);
-        form.set("slot", "actual");
-        form.set("image", partActualImageFile);
-        const imageResponse = await fetch("/api/part-images", { method: "POST", body: form });
-        const imageData = await imageResponse.json() as { error?: string };
-        if (!imageResponse.ok) throw new Error(imageData.error || "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å Part ‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à ‡πÅ‡∏ï‡πà‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      }
-      const savedAnyImage = Boolean(partImageFile || partActualImageFile);
-      setStockPartForm({ materialCode: "", partName: "", customer: "", location: "", standardQty: "" });
-      setPartImageCode("");
-      setPartImageFile(null);
-      setPartActualImageFile(null);
-      setNotice({ type: "success", text: savedAnyImage ? "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡πÅ‡∏•‡∏∞‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô‡πÅ‡∏•‡πâ‡∏ß" : "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å Part ‡πÉ‡∏ô‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô Stock ‡πÅ‡∏•‡πâ‡∏ß" });
-      await Promise.all([loadStock(), loadPartImages()]);
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å Part ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setStockSaving(false);
-    }
-  }
-
-  async function parsePartExcel(selected: File): Promise<PartImportItem[]> {
-    if (!/\.xlsx?$/i.test(selected.name)) throw new Error("‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡πÑ‡∏ü‡∏•‡πå Excel .xlsx ‡∏´‡∏£‡∏∑‡∏≠ .xls");
-    const xlsx = await import("xlsx");
-    const workbook = xlsx.read(await selected.arrayBuffer(), { type: "array", cellDates: true });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const grid = xlsx.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: "" });
-    const normalized = (value: unknown) => text(value).toLowerCase().replace(/[\s._/()\-]+/g, "");
-    const aliases = {
-      materialCode: ["partno", "material", "materialno", "materialcode", "partmaterialno", "itemno", "itemnumber", "‡∏£‡∏´‡∏±‡∏™part", "‡∏û‡∏≤‡∏£‡πå‡∏ó", "‡∏£‡∏´‡∏±‡∏™‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô"],
-      partName: ["partname", "materialdescription", "description", "itemname", "‡∏ä‡∏∑‡πà‡∏≠‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô", "‡∏£‡∏≤‡∏¢‡∏•‡∏∞‡πÄ‡∏≠‡∏µ‡∏¢‡∏î"],
-      customer: ["customer", "customername", "‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤"],
-      location: ["location", "locationcode", "storage", "bin", "rack", "‡πÇ‡∏•‡πÄ‡∏Ñ‡∏ä‡∏±‡πà‡∏ô", "‡∏ï‡∏≥‡πÅ‡∏´‡∏ô‡πà‡∏á‡∏à‡∏±‡∏î‡πÄ‡∏Å‡πá‡∏ö", "‡∏™‡∏ñ‡∏≤‡∏ô‡∏ó‡∏µ‡πà‡∏à‡∏±‡∏î‡πÄ‡∏Å‡πá‡∏ö"],
-      standardQty: ["maxqtyperbox", "maxperbox", "packqty", "standardqty", "qtyperbox", "‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏™‡∏π‡∏á‡∏™‡∏∏‡∏î‡∏ï‡πà‡∏≠‡∏Å‡∏•‡πà‡∏≠‡∏á", "‡∏ä‡∏¥‡πâ‡∏ô‡∏ï‡πà‡∏≠‡∏Å‡∏•‡πà‡∏≠‡∏á", "‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ï‡πà‡∏≠‡∏Å‡∏•‡πà‡∏≠‡∏á"],
-    };
-    const normalizedAliases = Object.fromEntries(
-      Object.entries(aliases).map(([key, values]) => [key, values.map(normalized)]),
-    ) as Record<keyof typeof aliases, string[]>;
-    const headerIndex = grid.findIndex((row) => {
-      const headers = row.map(normalized);
-      return normalizedAliases.materialCode.some((name) => headers.includes(name))
-        && normalizedAliases.partName.some((name) => headers.includes(name));
-    });
-    if (headerIndex < 0) throw new Error("‡πÑ‡∏°‡πà‡∏û‡∏ö‡∏´‡∏±‡∏ß‡∏ï‡∏≤‡∏£‡∏≤‡∏á Part / Material No. (‡∏´‡∏£‡∏∑‡∏≠ Item No.) ‡πÅ‡∏•‡∏∞ Part Name ‡πÉ‡∏ô‡πÑ‡∏ü‡∏•‡πå");
-    const headers = grid[headerIndex].map(normalized);
-    const columnIndex = (names: string[]) => headers.findIndex((header) => names.includes(header));
-    const indexes = {
-      materialCode: columnIndex(normalizedAliases.materialCode),
-      partName: columnIndex(normalizedAliases.partName),
-      customer: columnIndex(normalizedAliases.customer),
-      location: columnIndex(normalizedAliases.location),
-      standardQty: columnIndex(normalizedAliases.standardQty),
-    };
-    if (indexes.standardQty < 0) throw new Error("‡πÑ‡∏°‡πà‡∏û‡∏ö‡∏Ñ‡∏≠‡∏•‡∏±‡∏°‡∏ô‡πå Max Qty per Box / ‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏™‡∏π‡∏á‡∏™‡∏∏‡∏î‡∏ï‡πà‡∏≠‡∏Å‡∏•‡πà‡∏≠‡∏á");
-    const byCode = new Map<string, PartImportItem>();
-    for (const row of grid.slice(headerIndex + 1)) {
-      const part = {
-        materialCode: text(row[indexes.materialCode]).toUpperCase(),
-        partName: text(row[indexes.partName]),
-        customer: indexes.customer >= 0 ? text(row[indexes.customer]) : "",
-        location: indexes.location >= 0 ? text(row[indexes.location]).toUpperCase() : "",
-        standardQty: number(row[indexes.standardQty]),
-      };
-      if (part.materialCode && part.partName && part.standardQty > 0) byCode.set(part.materialCode, part);
-    }
-    const parts = [...byCode.values()];
-    if (!parts.length) throw new Error("‡πÑ‡∏°‡πà‡∏û‡∏ö‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏• Part ‡∏ó‡∏µ‡πà‡∏°‡∏µ Part No., Part Name ‡πÅ‡∏•‡∏∞‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ï‡πà‡∏≠‡∏Å‡∏•‡πà‡∏≠‡∏á‡∏Ñ‡∏£‡∏ö‡∏ñ‡πâ‡∏ß‡∏ô");
-    return parts;
-  }
-
-  async function downloadPartWorkbook(mode: "template" | "export") {
-    try {
-      const xlsx = await import("xlsx");
-      const headers = ["Part / Material No.", "Part Name", "Customer", "Location", "Max Qty per Box"];
-      const rows = mode === "export"
-        ? stock.parts.map((part) => [part.materialCode, part.partName, part.customer, part.location, part.standardQty])
-        : [];
-      const worksheet = xlsx.utils.aoa_to_sheet([headers, ...rows]);
-      worksheet["!cols"] = [{ wch: 24 }, { wch: 36 }, { wch: 24 }, { wch: 20 }, { wch: 20 }];
-      const workbook = xlsx.utils.book_new();
-      xlsx.utils.book_append_sheet(workbook, worksheet, "Parts");
-      const fileName = mode === "template"
-        ? "KIT-Part-Import-Template.xlsx"
-        : `KIT-Part-Registry-${new Date().toISOString().slice(0, 10)}.xlsx`;
-      xlsx.writeFile(workbook, fileName);
-      setNotice({ type: "success", text: mode === "template" ? "‡∏î‡∏≤‡∏ß‡∏ô‡πå‡πÇ‡∏´‡∏•‡∏î Template ‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô Part ‡πÅ‡∏•‡πâ‡∏ß" : `‡∏î‡∏≤‡∏ß‡∏ô‡πå‡πÇ‡∏´‡∏•‡∏î‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏• Part ${fmt(rows.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡πÅ‡∏•‡πâ‡∏ß` });
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏î‡∏≤‡∏ß‡∏ô‡πå‡πÇ‡∏´‡∏•‡∏î‡πÑ‡∏ü‡∏•‡πå Part ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    }
-  }
-
-  function matchBundleImages(files: File[], parts: PartImportItem[]) {
-    const codes = parts.map((part) => part.materialCode).sort((a, b) => b.length - a.length);
-    const matched = new Map<string, File>();
-    const unmatched: string[] = [];
-    const duplicates: string[] = [];
-    for (const file of files) {
-      if (!/^image\/(jpeg|png|webp)$/i.test(file.type) || file.size > 5 * 1024 * 1024) {
-        unmatched.push(`${file.name} ‚Äî ‡∏£‡∏≠‡∏á‡∏£‡∏±‡∏ö JPG, PNG, WebP ‡∏Ç‡∏ô‡∏≤‡∏î‡πÑ‡∏°‡πà‡πÄ‡∏Å‡∏¥‡∏ô 5MB`);
-        continue;
-      }
-      const stem = materialCodeFromFileName(file.name);
-      const code = codes.find((item) => stem === item || stem.startsWith(`${item}_`) || stem.startsWith(`${item}-MASTER`) || stem.startsWith(`${item}-ACTUAL`) || stem.startsWith(`${item}-BOX`) || stem.startsWith(`${item}-SAMPLE`));
-      if (!code) {
-        unmatched.push(`${file.name} ‚Äî ‡πÑ‡∏°‡πà‡∏û‡∏ö Part No. ‡∏ó‡∏µ‡πà‡∏ï‡∏£‡∏á‡∏Å‡∏±‡∏ô‡πÉ‡∏ô Excel`);
-        continue;
-      }
-      const previous = matched.get(code);
-      if (previous) {
-        duplicates.push(`${code}: ${previous.name}, ${file.name}`);
-        continue;
-      }
-      matched.set(code, file);
-    }
-    return { matched, unmatched, duplicates };
-  }
-
-  async function previewPartBundle(event: FormEvent) {
-    event.preventDefault();
-    setPartBundleFailed([]);
-    setNotice(null);
-    try {
-      if (!partBundleExcel) throw new Error("‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡πÑ‡∏ü‡∏•‡πå Excel ‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô Part");
-      const parts = await parsePartExcel(partBundleExcel);
-      const master = matchBundleImages(partBundleMasterFiles, parts);
-      const actual = matchBundleImages(partBundleActualFiles, parts);
-      setPartBundlePreview({
-        fileName: partBundleExcel.name,
-        rows: parts.map((part) => ({ part, masterFile: master.matched.get(part.materialCode), actualFile: actual.matched.get(part.materialCode) })),
-        unmatchedMaster: master.unmatched,
-        unmatchedActual: actual.unmatched,
-        duplicateImages: [...master.duplicates.map((item) => `‡∏£‡∏π‡∏õ‡∏ï‡∏±‡∏ß‡∏≠‡∏¢‡πà‡∏≤‡∏á ¬∑ ${item}`), ...actual.duplicates.map((item) => `‡∏£‡∏π‡∏õ‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á ¬∑ ${item}`)],
-      });
-    } catch (caught) {
-      setPartBundlePreview(null);
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡πÑ‡∏ü‡∏•‡πå‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    }
-  }
-
-  function resetPartBundle() {
-    setPartBundleExcel(null);
-    setPartBundleMasterFiles([]);
-    setPartBundleActualFiles([]);
-    setPartBundlePreview(null);
-    setPartBundleFailed([]);
-    setPartBundleProgress({ done: 0, total: 0 });
-    if (partBundleExcelInput.current) partBundleExcelInput.current.value = "";
-    if (partBundleMasterInput.current) partBundleMasterInput.current.value = "";
-    if (partBundleActualInput.current) partBundleActualInput.current.value = "";
-  }
-
-  async function importPartBundle() {
-    if (!partBundlePreview || partBundleRunning) return;
-    setPartBundleRunning(true);
-    setPartBundleFailed([]);
-    setNotice(null);
-    const candidateUploads = partBundlePreview.rows.flatMap((row) => [
-      ...(row.masterFile ? [{ materialCode: row.part.materialCode, file: row.masterFile, slot: "master" as const }] : []),
-      ...(row.actualFile ? [{ materialCode: row.part.materialCode, file: row.actualFile, slot: "actual" as const }] : []),
-    ]);
-    setPartBundleProgress({ done: 0, total: candidateUploads.length + 1 });
-    try {
-      const response = await fetch("/api/stock", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ importContract: "preserve_existing_v1", action: "import_parts", parts: partBundlePreview.rows.map((row) => row.part) }),
-      });
-      const data = await response.json() as { importContract?: string; imported?: number; skipped?: number; skippedMaterialCodes?: string[]; error?: string };
-      if (!response.ok) throw new Error(data.error || "‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô Part ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      if (data.importContract !== "preserve_existing_v1" || !Array.isArray(data.skippedMaterialCodes)) {
-        throw new Error("‡∏£‡∏∞‡∏ö‡∏ö‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤ Part ‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏£‡∏≠‡∏á‡∏£‡∏±‡∏ö‡∏Å‡∏≤‡∏£‡∏Ñ‡∏á‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡πÄ‡∏î‡∏¥‡∏° ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏£‡∏µ‡πÄ‡∏ü‡∏£‡∏ä‡∏´‡∏ô‡πâ‡∏≤‡πÅ‡∏•‡πâ‡∏ß‡∏•‡∏≠‡∏á‡πÉ‡∏´‡∏°‡πà");
-      }
-      const skippedCodes = new Set(data.skippedMaterialCodes);
-      const uploads = candidateUploads.filter((upload) => !skippedCodes.has(upload.materialCode));
-      setPartBundleProgress({ done: 1, total: uploads.length + 1 });
-      const failed: Array<{ name: string; reason: string }> = [];
-      for (const [index, upload] of uploads.entries()) {
-        try {
-          const form = new FormData();
-          form.set("materialCode", upload.materialCode);
-          form.set("slot", upload.slot);
-          form.set("image", upload.file);
-          const imageResponse = await fetch("/api/part-images", { method: "POST", body: form });
-          const imageData = await imageResponse.json() as { error?: string };
-          if (!imageResponse.ok) throw new Error(imageData.error || "‡∏≠‡∏±‡∏õ‡πÇ‡∏´‡∏•‡∏î‡∏£‡∏π‡∏õ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-        } catch (caught) {
-          failed.push({ name: `${upload.materialCode} ¬∑ ${upload.file.name}`, reason: caught instanceof Error ? caught.message : "‡∏≠‡∏±‡∏õ‡πÇ‡∏´‡∏•‡∏î‡∏£‡∏π‡∏õ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-        }
-        setPartBundleProgress({ done: index + 2, total: uploads.length + 1 });
-      }
-      setPartBundleFailed(failed);
-      await Promise.all([loadStock(), loadPartImages()]);
-      const importedCount = data.imported || 0;
-      const skippedCount = data.skipped || 0;
-      if (failed.length) {
-        setNotice({ type: "error", text: `‡πÄ‡∏û‡∏¥‡πà‡∏° Part ‡πÉ‡∏´‡∏°‡πà ${fmt(importedCount)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ‡∏Ç‡πâ‡∏≤‡∏° Part ‡∏ã‡πâ‡∏≥ ${fmt(skippedCount)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ‡πÅ‡∏ï‡πà‡∏≠‡∏±‡∏õ‡πÇ‡∏´‡∏•‡∏î‡∏£‡∏π‡∏õ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à ${fmt(failed.length)} ‡∏£‡∏π‡∏õ` });
-      } else {
-        setNotice({ type: "success", text: `‡πÄ‡∏û‡∏¥‡πà‡∏° Part ‡πÉ‡∏´‡∏°‡πà ${fmt(importedCount)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ‡∏Ç‡πâ‡∏≤‡∏° Part ‡∏ã‡πâ‡∏≥ ${fmt(skippedCount)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ‡∏û‡∏£‡πâ‡∏≠‡∏°‡∏£‡∏π‡∏õ ${fmt(uploads.length)} ‡∏£‡∏π‡∏õ‡πÄ‡∏£‡∏µ‡∏¢‡∏ö‡∏£‡πâ‡∏≠‡∏¢` });
-        resetPartBundle();
-      }
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤ Part ‡∏û‡∏£‡πâ‡∏≠‡∏°‡∏£‡∏π‡∏õ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setPartBundleRunning(false);
-    }
-  }
-
-  async function syncDueParts() {
-    setStockSaving(true);
-    try {
-      const response = await fetch("/api/stock", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "sync_due_parts" }),
-      });
-      const data = await response.json() as { changed?: number; error?: string };
-      if (!response.ok) throw new Error(data.error || "‡∏ô‡∏≥ Part ‡∏à‡∏≤‡∏Å Due ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setNotice({ type: "success", text: `‡∏ô‡∏≥ Part ‡∏à‡∏≤‡∏Å Due ‡πÄ‡∏Ç‡πâ‡∏≤‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô‡πÅ‡∏•‡πâ‡∏ß ${fmt(data.changed || 0)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£` });
-      await loadStock();
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏ô‡∏≥ Part ‡∏à‡∏≤‡∏Å Due ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setStockSaving(false);
-    }
-  }
-
-  async function deleteStockPart(part: StockPart) {
-    if (!window.confirm(`‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡∏•‡∏ö Part ${part.materialCode} ¬∑ ${part.partName} ‡∏´‡∏£‡∏∑‡∏≠‡πÑ‡∏°‡πà?`)) return;
-    setDeletingPartCode(part.materialCode);
-    try {
-      const response = await fetch("/api/stock", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "delete_part", materialCode: part.materialCode }),
-      });
-      const data = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(data.error || "‡∏•‡∏ö Part ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setNotice({ type: "success", text: `‡∏•‡∏ö Part ${part.materialCode} ‡πÅ‡∏•‡πâ‡∏ß` });
-      await loadStock();
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏•‡∏ö Part ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setDeletingPartCode("");
-    }
-  }
-
-  async function deleteUnusedStockParts() {
-    if (!window.confirm("‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡∏•‡∏ö Part ‡∏ó‡∏∏‡∏Å‡∏ï‡∏±‡∏ß‡∏ó‡∏µ‡πà‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡πÄ‡∏Ñ‡∏¢‡∏™‡∏£‡πâ‡∏≤‡∏á Tag ‡∏´‡∏£‡∏∑‡∏≠‡∏°‡∏µ‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥ Stock ‡∏´‡∏£‡∏∑‡∏≠‡πÑ‡∏°‡πà?")) return;
-    setDeletingPartCode("__ALL__");
-    try {
-      const response = await fetch("/api/stock", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "delete_unused_parts" }),
-      });
-      const data = await response.json() as { deleted?: number; error?: string };
-      if (!response.ok) throw new Error(data.error || "‡∏•‡∏ö Part ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setNotice({ type: "success", text: `‡∏•‡∏ö Part ‡∏ó‡∏µ‡πà‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡πÄ‡∏Ñ‡∏¢‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡πÅ‡∏•‡πâ‡∏ß ${fmt(data.deleted || 0)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£` });
-      await loadStock();
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏•‡∏ö Part ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setDeletingPartCode("");
-    }
-  }
-
-  async function createStockTag(event: FormEvent) {
-    event.preventDefault();
-    setStockSaving(true);
-    try {
-      const response = await fetch("/api/stock", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "create_tag", ...stockTagForm, qty: Number(stockTagForm.qty) }),
-      });
-      const data = await response.json() as { tags?: StockTag[]; totalQty?: number; packQty?: number; boxCount?: number; error?: string };
-      if (!response.ok || !data.tags?.length) throw new Error(data.error || "‡∏™‡∏£‡πâ‡∏≤‡∏á Tag ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setCreatedStockTags(data.tags);
-      setStockTagForm((current) => ({ ...current, qty: "", jobNo: "" }));
-      const fullBoxes = Math.floor(Number(data.totalQty || 0) / Number(data.packQty || 1));
-      const remainder = Number(data.totalQty || 0) % Number(data.packQty || 1);
-      setNotice({
-        type: "success",
-        text: `‡∏™‡∏£‡πâ‡∏≤‡∏á ${fmt(data.boxCount || data.tags.length)} Tag ‡πÅ‡∏•‡πâ‡∏ß ¬∑ ‡∏Å‡∏•‡πà‡∏≠‡∏á‡πÄ‡∏ï‡πá‡∏° ${fmt(fullBoxes)} ‡∏Å‡∏•‡πà‡∏≠‡∏á${remainder ? ` ¬∑ ‡πÄ‡∏®‡∏© 1 ‡∏Å‡∏•‡πà‡∏≠‡∏á ${fmt(remainder)} ‡∏ä‡∏¥‡πâ‡∏ô` : ""}`,
-      });
-      await loadStock();
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏™‡∏£‡πâ‡∏≤‡∏á Tag ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setStockSaving(false);
-    }
-  }
-
-  function updateStockScannerValue(value: string) {
-    setStockScan(value);
-    if (stockScanTimerRef.current !== null) window.clearTimeout(stockScanTimerRef.current);
-    if (value.trim().length < 4) return;
-    stockScanTimerRef.current = window.setTimeout(() => {
-      stockScanTimerRef.current = null;
-      void receiveStockTag(value);
-    }, 320);
-  }
-
-  async function selectStockLocation(rawPayload: string) {
-    if (!rawPayload.trim() || stockScanRequestRef.current) return;
-    stockScanRequestRef.current = true;
-    setStockSaving(true);
-    setNotice(null);
-    try {
-      const response = await fetch("/api/stock", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "validate_location", rawPayload: rawPayload.trim() }),
-      });
-      const data = await response.json() as { locationCode?: string; partCount?: number; error?: string };
-      if (!response.ok || !data.locationCode) throw new Error(data.error || "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏ä‡∏±‡πâ‡∏ô‡∏à‡∏±‡∏î‡πÄ‡∏Å‡πá‡∏ö‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setStockLocation({ code: data.locationCode, partCount: Number(data.partCount || 0) });
-      setStockLocationActivity(Date.now());
-      setStockScan("");
-      setLastStockReceipt(null);
-      setNotice({ type: "success", text: `‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ä‡∏±‡πâ‡∏ô ${data.locationCode} ‡πÅ‡∏•‡πâ‡∏ß ¬∑ ‡∏™‡πÅ‡∏Å‡∏ô KIT Tag ‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡πÑ‡∏î‡πâ‡∏ï‡πà‡∏≠‡πÄ‡∏ô‡∏∑‡πà‡∏≠‡∏á` });
-      window.setTimeout(() => stockScanInputRef.current?.focus(), 80);
-    } catch (caught) {
-      setStockScan("");
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏ä‡∏±‡πâ‡∏ô‡∏à‡∏±‡∏î‡πÄ‡∏Å‡πá‡∏ö‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-      window.setTimeout(() => stockScanInputRef.current?.focus(), 80);
-    } finally {
-      stockScanRequestRef.current = false;
-      setStockSaving(false);
-    }
-  }
-
-  async function receiveStockTag(input: FormEvent | string) {
-    if (typeof input !== "string") input.preventDefault();
-    if (stockScanTimerRef.current !== null) {
-      window.clearTimeout(stockScanTimerRef.current);
-      stockScanTimerRef.current = null;
-    }
-    const rawPayload = (typeof input === "string" ? input : stockScan).trim();
-    if (!rawPayload || stockScanRequestRef.current) return;
-    if (!stockLocation) {
-      await selectStockLocation(rawPayload);
-      return;
-    }
-
-    stockScanRequestRef.current = true;
-    setStockSaving(true);
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 12_000);
-    try {
-      const response = await fetch("/api/stock", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "receive", mode: "preview", rawPayload, locationCode: stockLocation.code }),
-        signal: controller.signal,
-      });
-      const contentType = response.headers.get("content-type") || "";
-      const data = contentType.includes("application/json")
-        ? await response.json() as StockReceivePreview & { error?: string }
-        : { error: response.redirected ? "‡πÄ‡∏ã‡∏™‡∏ä‡∏±‡∏ô‡∏´‡∏°‡∏î‡∏≠‡∏≤‡∏¢‡∏∏ ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡πÄ‡∏Ç‡πâ‡∏≤‡∏™‡∏π‡πà‡∏£‡∏∞‡∏ö‡∏ö‡πÉ‡∏´‡∏°‡πà" : "‡∏£‡∏∞‡∏ö‡∏ö‡∏ï‡∏≠‡∏ö‡∏Å‡∏•‡∏±‡∏ö‡πÑ‡∏°‡πà‡∏ñ‡∏π‡∏Å‡∏ï‡πâ‡∏≠‡∏á ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏•‡∏≠‡∏á‡∏™‡πÅ‡∏Å‡∏ô‡πÉ‡∏´‡∏°‡πà" };
-      if (!response.ok || !("tag" in data) || !data.tag) throw new Error(data.error || "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö Tag ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setStockScan(rawPayload);
-      setStockReceiveQty(String(data.tag.qty));
-      setStockReceiveProductionDate(bangkokDateTimeKey().slice(0, 10));
-      setStockReceivePreview(data);
-    } catch (caught) {
-      const message = caught instanceof DOMException && caught.name === "AbortError"
-        ? "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö Tag ‡πÉ‡∏ä‡πâ‡πÄ‡∏ß‡∏•‡∏≤‡∏ô‡∏≤‡∏ô‡πÄ‡∏Å‡∏¥‡∏ô‡πÑ‡∏õ ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏•‡∏≠‡∏á‡∏™‡πÅ‡∏Å‡∏ô‡πÉ‡∏´‡∏°‡πà"
-        : caught instanceof Error ? caught.message : "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö Tag ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à";
-      setNotice({ type: "error", text: message });
-      if (!window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) {
-        window.setTimeout(() => stockScanInputRef.current?.select(), 80);
-      }
-    } finally {
-      window.clearTimeout(timeout);
-      stockScanRequestRef.current = false;
-      setStockSaving(false);
-    }
-  }
-
-  async function confirmReceiveStockTag() {
-    if (!stockReceivePreview || stockSaving) return;
-    const receivedQty = Number(stockReceiveQty);
-    const totalQty = Number(stockReceivePreview.tag.qty);
-    const productionDate = stockReceiveProductionDate;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(productionDate)) {
-      setNotice({ type: "error", text: "‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏ú‡∏•‡∏¥‡∏ï" });
-      return;
-    }
-    if (!Number.isInteger(receivedQty) || receivedQty < 0 || receivedQty > totalQty) {
-      setNotice({ type: "error", text: `‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡∏ï‡πâ‡∏≠‡∏á‡∏≠‡∏¢‡∏π‡πà‡∏£‡∏∞‡∏´‡∏ß‡πà‡∏≤‡∏á 0 ‡∏ñ‡∏∂‡∏á ${fmt(totalQty)} ‡∏ä‡∏¥‡πâ‡∏ô` });
-      return;
-    }
-    setStockSaving(true);
-    try {
-      const response = await fetch("/api/stock", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "receive", rawPayload: stockReceivePreview.rawPayload, locationCode: stockReceivePreview.selectedLocation, receivedQty, productionDate }),
-      });
-      const data = await response.json() as { tag?: StockTag; receivedQty?: number; ngQty?: number; error?: string };
-      if (!response.ok) throw new Error(data.error || "‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Stock ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setStockScan("");
-      setStockReceivePreview(null);
-      setStockReceiveQty("");
-      setStockReceiveProductionDate("");
-      setStockLocationActivity(Date.now());
-      const ngQty = Number(data.ngQty || 0);
-      setLastStockReceipt({
-        tagId: data.tag?.tagId || stockReceivePreview.tag.tagId,
-        materialCode: data.tag?.materialCode || stockReceivePreview.tag.materialCode,
-        jobNo: data.tag?.jobNo || stockReceivePreview.tag.jobNo,
-        qty: Number(data.receivedQty || receivedQty),
-        locationCode: stockReceivePreview.selectedLocation,
-      });
-      setNotice({ type: "success", text: `‡∏£‡∏±‡∏ö Tag ${data.tag?.tagId || ""} ‡πÄ‡∏Ç‡πâ‡∏≤ Stock ${fmt(Number(data.receivedQty || receivedQty))} ‡∏ä‡∏¥‡πâ‡∏ô${ngQty ? ` ¬∑ NG ${fmt(ngQty)} ‡∏ä‡∏¥‡πâ‡∏ô` : ""} ¬∑ ‡∏™‡πÅ‡∏Å‡∏ô Tag ‡πÉ‡∏ö‡∏ñ‡∏±‡∏î‡πÑ‡∏õ‡πÑ‡∏î‡πâ‡πÄ‡∏•‡∏¢` });
-      void loadStock();
-      if (!window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) {
-        window.setTimeout(() => stockScanInputRef.current?.focus(), 120);
-      }
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Stock ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setStockSaving(false);
-    }
-  }
-
-  async function printStockLocationQrs() {
-    const locations = [...new Set(stock.parts.filter((part) => part.active).map((part) => part.location.trim().toUpperCase()).filter(Boolean))].sort();
-    if (!locations.length) return setNotice({ type: "error", text: "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏£‡∏´‡∏±‡∏™ Location ‡πÉ‡∏ô‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô Part" });
-    const popup = window.open("", "_blank", "width=1000,height=900");
-    if (!popup) return setNotice({ type: "error", text: "‡πÄ‡∏ö‡∏£‡∏≤‡∏ß‡πå‡πÄ‡∏ã‡∏≠‡∏£‡πå‡∏ö‡∏•‡πá‡∏≠‡∏Å‡∏´‡∏ô‡πâ‡∏≤‡∏û‡∏¥‡∏°‡∏û‡πå ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏≠‡∏ô‡∏∏‡∏ç‡∏≤‡∏ï Pop-up" });
-    popup.document.write("<!doctype html><html><head><meta charset='utf-8'><title>‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏™‡∏£‡πâ‡∏≤‡∏á QR ‡∏ä‡∏±‡πâ‡∏ô‡∏à‡∏±‡∏î‡πÄ‡∏Å‡πá‡∏ö</title></head><body>‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏™‡∏£‡πâ‡∏≤‡∏á QR ‡∏ä‡∏±‡πâ‡∏ô‡∏à‡∏±‡∏î‡πÄ‡∏Å‡πá‡∏ö‚Ä¶</body></html>");
-    try {
-      const qrcode = await import("qrcode");
-      const labels = await Promise.all(locations.map(async (code) => ({ code, qr: await qrcode.toDataURL(`KITLOC|${code}`, { width: 560, margin: 1, errorCorrectionLevel: "M" }) })));
-      const safe = (value: string) => value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[char] || char);
-      popup.document.open();
-      popup.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>QR ‡∏ä‡∏±‡πâ‡∏ô‡∏à‡∏±‡∏î‡πÄ‡∏Å‡πá‡∏ö KIT</title><style>@page{size:A4;margin:8mm}*{box-sizing:border-box}body{margin:0;font-family:Arial,"Noto Sans Thai",sans-serif;color:#102b59}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8mm}.label{height:132mm;border:3px solid #185ed1;border-radius:18px;padding:10mm;display:grid;place-items:center;text-align:center;break-inside:avoid;page-break-inside:avoid}.label:nth-child(4n+1){page-break-before:auto}.label img{width:72mm;height:72mm}.label small{font-size:14px;font-weight:800;color:#5b7191}.label h1{margin:2mm 0;font-size:34px}.label p{margin:0;font-size:14px}.payload{font-family:monospace;font-size:11px;color:#718096}@media print{.grid{gap:8mm}}</style></head><body><main class="grid">${labels.map((item) => `<section class="label"><small>KIT STOCK LOCATION</small><img src="${item.qr}" alt="QR ${safe(item.code)}"><h1>${safe(item.code)}</h1><p>‡∏™‡πÅ‡∏Å‡∏ô‡∏ä‡∏±‡πâ‡∏ô‡∏Å‡πà‡∏≠‡∏ô‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Stock</p><span class="payload">KITLOC|${safe(item.code)}</span></section>`).join("")}</main><script>window.onload=()=>setTimeout(()=>window.print(),300)<\/script></body></html>`);
-      popup.document.close();
-    } catch (caught) {
-      popup.close();
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏™‡∏£‡πâ‡∏≤‡∏á QR ‡∏ä‡∏±‡πâ‡∏ô‡∏à‡∏±‡∏î‡πÄ‡∏Å‡πá‡∏ö‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    }
-  }
-
-  async function closeStockJob(jobNo: string, materialCode: string, totalQty: number, receivedQty: number, ngQty: number) {
-    const reason = window.prompt("‡∏£‡∏∞‡∏ö‡∏∏‡∏™‡∏≤‡πÄ‡∏´‡∏ï‡∏∏‡∏ó‡∏µ‡πà‡∏õ‡∏¥‡∏î‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡πÅ‡∏•‡∏∞‡∏ï‡∏µ‡∏á‡∏≤‡∏ô‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠‡πÄ‡∏õ‡πá‡∏ô NG", "‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡πÑ‡∏°‡πà‡∏Ñ‡∏£‡∏ö‡∏ï‡∏≤‡∏°‡∏à‡∏≥‡∏ô‡∏ß‡∏ô Tag");
-    if (reason === null) return;
-    if (!reason.trim()) return setNotice({ type: "error", text: "‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏£‡∏∞‡∏ö‡∏∏‡∏™‡∏≤‡πÄ‡∏´‡∏ï‡∏∏‡∏ó‡∏µ‡πà‡∏õ‡∏¥‡∏î‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Job" });
-    const confirmed = window.confirm(`‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡∏õ‡∏¥‡∏î‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Job ${jobNo}\nPart ${materialCode}\n\nTag ‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î ${fmt(totalQty)} ‡∏ä‡∏¥‡πâ‡∏ô\n‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡πÅ‡∏•‡πâ‡∏ß ${fmt(receivedQty)} ‡∏ä‡∏¥‡πâ‡∏ô\n‡∏ï‡∏µ‡πÄ‡∏õ‡πá‡∏ô NG ${fmt(ngQty)} ‡∏ä‡∏¥‡πâ‡∏ô\n\nTag NG ‡∏à‡∏∞‡πÑ‡∏°‡πà‡∏™‡∏≤‡∏°‡∏≤‡∏£‡∏ñ‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Stock ‡∏´‡∏£‡∏∑‡∏≠‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡πÑ‡∏î‡πâ`);
-    if (!confirmed) return;
-    const key = jobNo + "|" + materialCode;
-    setJobClosingKey(key);
-    try {
-      const response = await fetch("/api/stock", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "close_job", jobNo, materialCode, reason: reason.trim() }),
-      });
-      const data = await response.json() as { ngQty?: number; error?: string };
-      if (!response.ok) throw new Error(data.error || "‡∏õ‡∏¥‡∏î‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Job ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setNotice({ type: "success", text: `‡∏õ‡∏¥‡∏î Job ${jobNo} ‡πÅ‡∏•‡πâ‡∏ß ¬∑ ‡∏ï‡∏µ‡πÄ‡∏õ‡πá‡∏ô NG ${fmt(Number(data.ngQty || ngQty))} ‡∏ä‡∏¥‡πâ‡∏ô` });
-      await loadStock();
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏õ‡∏¥‡∏î‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Job ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setJobClosingKey("");
-    }
-  }
-
-  async function reopenNgStockJob(jobNo: string, materialCode: string, ngQty: number) {
-    if (!window.confirm(`‡πÄ‡∏õ‡∏¥‡∏î‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Job ${jobNo} ‡∏Ñ‡∏∑‡∏ô‡∏´‡∏£‡∏∑‡∏≠‡πÑ‡∏°‡πà?\nTag NG ${fmt(ngQty)} ‡∏ä‡∏¥‡πâ‡∏ô‡∏à‡∏∞‡∏Å‡∏•‡∏±‡∏ö‡πÄ‡∏õ‡πá‡∏ô‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏£‡∏≠‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤`)) return;
-    const key = jobNo + "|" + materialCode;
-    setJobClosingKey(key);
-    try {
-      const response = await fetch("/api/stock", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "reopen_ng_job", jobNo, materialCode }),
-      });
-      const data = await response.json() as { reopenedTags?: number; error?: string };
-      if (!response.ok) throw new Error(data.error || "‡πÄ‡∏õ‡∏¥‡∏î Job ‡∏Ñ‡∏∑‡∏ô‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setNotice({ type: "success", text: `‡πÄ‡∏õ‡∏¥‡∏î Job ${jobNo} ‡∏Ñ‡∏∑‡∏ô‡πÅ‡∏•‡πâ‡∏ß ${fmt(Number(data.reopenedTags || 0))} Tag` });
-      await loadStock();
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡πÄ‡∏õ‡∏¥‡∏î Job ‡∏Ñ‡∏∑‡∏ô‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setJobClosingKey("");
-    }
-  }
-
-  function openJobQuantityAdjustment(job: JobQuantityAdjustment) {
-    setJobQtyAdjustment(job);
-    setJobQtyTarget(String(job.currentQty));
-    setJobQtyReason("");
-    setJobQtyPreview(null);
-    setJobQtyCreatedTags([]);
-    setJobQtyAdjusted(false);
-  }
-
-  function closeJobQuantityAdjustment() {
-    if (jobQtySaving) return;
-    setJobQtyAdjustment(null);
-    setJobQtyPreview(null);
-    setJobQtyCreatedTags([]);
-    setJobQtyAdjusted(false);
-  }
-
-  async function previewJobQuantity(event: FormEvent) {
-    event.preventDefault();
-    if (!jobQtyAdjustment) return;
-    const targetQty = Number(jobQtyTarget);
-    if (!Number.isSafeInteger(targetQty) || targetQty < 0) return setNotice({ type: "error", text: "‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏Å‡∏£‡∏≠‡∏Å‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ú‡∏•‡∏¥‡∏ï‡∏à‡∏£‡∏¥‡∏á‡πÄ‡∏õ‡πá‡∏ô‡πÄ‡∏•‡∏Ç‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡πÄ‡∏ï‡πá‡∏°‡∏ï‡∏±‡πâ‡∏á‡πÅ‡∏ï‡πà 0 ‡∏ä‡∏¥‡πâ‡∏ô‡∏Ç‡∏∂‡πâ‡∏ô‡πÑ‡∏õ" });
-    if (!jobQtyReason.trim()) return setNotice({ type: "error", text: "‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏£‡∏∞‡∏ö‡∏∏‡∏™‡∏≤‡πÄ‡∏´‡∏ï‡∏∏‡∏ó‡∏µ‡πà‡∏õ‡∏£‡∏±‡∏ö‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ú‡∏•‡∏¥‡∏ï‡∏à‡∏£‡∏¥‡∏á" });
-    setJobQtySaving(true);
-    try {
-      const response = await fetch("/api/stock", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "preview_job_qty_adjustment", jobNo: jobQtyAdjustment.jobNo, materialCode: jobQtyAdjustment.materialCode, targetQty }),
-      });
-      const data = await response.json() as { preview?: JobQuantityAdjustmentPreview; error?: string };
-      if (!response.ok || !data.preview) throw new Error(data.error || "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏Å‡∏≤‡∏£‡∏õ‡∏£‡∏±‡∏ö‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setJobQtyPreview(data.preview);
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏Å‡∏≤‡∏£‡∏õ‡∏£‡∏±‡∏ö‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setJobQtySaving(false);
-    }
-  }
-
-  async function confirmJobQuantityAdjustment() {
-    if (!jobQtyAdjustment || !jobQtyPreview) return;
-    setJobQtySaving(true);
-    try {
-      const response = await fetch("/api/stock", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "adjust_job_qty", jobNo: jobQtyAdjustment.jobNo, materialCode: jobQtyAdjustment.materialCode,
-          targetQty: jobQtyPreview.targetQty, expectedCurrentQty: jobQtyPreview.currentQty, reason: jobQtyReason.trim(),
-        }),
-      });
-      const data = await response.json() as { tags?: StockTag[]; preview?: JobQuantityAdjustmentPreview; error?: string };
-      if (!response.ok) throw new Error(data.error || "‡∏õ‡∏£‡∏±‡∏ö‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ú‡∏•‡∏¥‡∏ï‡∏à‡∏£‡∏¥‡∏á‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setJobQtyCreatedTags(data.tags || []);
-      setJobQtyAdjusted(true);
-      setNotice({ type: "success", text: `‡∏õ‡∏£‡∏±‡∏ö Job ${jobQtyAdjustment.jobNo} ‡πÄ‡∏õ‡πá‡∏ô ${fmt(jobQtyPreview.targetQty)} ‡∏ä‡∏¥‡πâ‡∏ô‡πÅ‡∏•‡πâ‡∏ß${data.tags?.length ? ` ¬∑ ‡∏™‡∏£‡πâ‡∏≤‡∏á Tag ‡πÉ‡∏´‡∏°‡πà ${fmt(data.tags.length)} ‡πÉ‡∏ö` : ""}` });
-      await loadStock();
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏õ‡∏£‡∏±‡∏ö‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ú‡∏•‡∏¥‡∏ï‡∏à‡∏£‡∏¥‡∏á‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-      setJobQtyPreview(null);
-    } finally {
-      setJobQtySaving(false);
-    }
-  }
-
-  async function deleteStockTag(tag: StockTag) {
-    if (!window.confirm(`‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡∏•‡∏ö Tag ${tag.tagId}\nPart ${tag.materialCode} ¬∑ Job ${tag.jobNo} ‡∏´‡∏£‡∏∑‡∏≠‡πÑ‡∏°‡πà?\n\n‡∏•‡∏ö‡πÑ‡∏î‡πâ‡πÄ‡∏â‡∏û‡∏≤‡∏∞ Tag ‡∏ó‡∏µ‡πà‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡πÄ‡∏Ñ‡∏¢‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Stock ‡πÄ‡∏ó‡πà‡∏≤‡∏ô‡∏±‡πâ‡∏ô`)) return;
-    setDeletingStockTagId(tag.tagId);
-    try {
-      const response = await fetch("/api/stock", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "delete_tag", tagId: tag.tagId }),
-      });
-      const data = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(data.error || "‡∏•‡∏ö Tag ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setCreatedStockTags((current) => current.filter((item) => item.tagId !== tag.tagId));
-      setNotice({ type: "success", text: `‡∏•‡∏ö Tag ${tag.tagId} ‡πÅ‡∏•‡πâ‡∏ß` });
-      await loadStock();
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏•‡∏ö Tag ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setDeletingStockTagId("");
-    }
-  }
-
-  async function printStockTags(input: StockTag | StockTag[], paper: "a4" | "100x55" = "a4") {
-    const tags = Array.isArray(input) ? input : [input];
-    if (!tags.length) return;
-    const directLabel = paper === "100x55";
-    const rpp04SessionPromise = directLabel
-      ? prepareRpp04Bluetooth().then((session) => ({ session, error: null as unknown })).catch((error: unknown) => ({ session: null, error }))
-      : null;
-    const popup = directLabel ? null : window.open("", "_blank", "width=900,height=950");
-    if (!directLabel && !popup) return setNotice({ type: "error", text: "‡πÄ‡∏ö‡∏£‡∏≤‡∏ß‡πå‡πÄ‡∏ã‡∏≠‡∏£‡πå‡∏ö‡∏•‡πá‡∏≠‡∏Å‡∏´‡∏ô‡πâ‡∏≤‡∏û‡∏¥‡∏°‡∏û‡πå ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏≠‡∏ô‡∏∏‡∏ç‡∏≤‡∏ï Pop-up" });
-    popup?.document.write('<!doctype html><html lang="th"><head><meta charset="utf-8"><title>‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö Tag</title></head><body style="font-family:Arial,sans-serif;padding:32px"><b>‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡∏û‡∏¥‡∏°‡∏û‡πå Tag‚Ä¶</b></body></html>');
-    popup?.document.close();
-    try {
-      const authorization = await fetch("/api/stock", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "authorize_tag_print", tagIds: tags.map((tag) => tag.tagId) }),
-      });
-      const result = await authorization.json() as { allowed?: boolean; error?: string; blockedTagId?: string; splitLabelId?: string };
-      if (!authorization.ok || !result.allowed) {
-        popup?.close();
-        if (result.splitLabelId) setSplitTagRequest({ labelId: result.splitLabelId });
-        setNotice({ type: "error", text: result.error || "Tag ‡∏ô‡∏µ‡πâ‡πÑ‡∏°‡πà‡∏™‡∏≤‡∏°‡∏≤‡∏£‡∏ñ‡∏û‡∏¥‡∏°‡∏û‡πå‡πÑ‡∏î‡πâ" });
-        await loadStock();
-        return;
-      }
-    } catch (caught) {
-      popup?.close();
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡∏û‡∏¥‡∏°‡∏û‡πå Tag ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-      return;
-    }
-    const qrcode = await import("qrcode");
-    let imageUrl = "";
-    try {
-      const imageResponse = await fetch(`/api/part-images?materialCode=${encodeURIComponent(tags[0].materialCode)}`, { cache: "no-store" });
-      if (imageResponse.ok) {
-        const imageBlob = await imageResponse.blob();
-        imageUrl = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result || ""));
-          reader.onerror = () => reject(reader.error);
-          reader.readAsDataURL(imageBlob);
-        });
-      }
-    } catch {
-      imageUrl = "";
-    }
-    const tagMarkups = await Promise.all(tags.map(async (tag) => {
-      const payloadValue = tag.payload || `KITSTOCK|${tag.tagId}|${tag.materialCode}|${tag.qty}|${tag.jobNo}|${tag.productionDate}`;
-      const qr = await qrcode.toDataURL(payloadValue, { width: 440, margin: 1, errorCorrectionLevel: "M" });
-      const boxMatch = tag.tagId.match(/-B(\d+)OF(\d+)$/);
-      const boxNo = tag.boxNo || Number(boxMatch?.[1] || 1);
-      const boxCount = tag.boxCount || Number(boxMatch?.[2] || 1);
-      const batchCode = tag.tagId.replace(/-B\d+OF\d+$/, "");
-      const tagPart = stock.parts.find((part) => part.materialCode === tag.materialCode);
-      const packQty = Number(tagPart?.standardQty || 0);
-      const location = tagPart?.location || "‚Äî";
-      const isFullBox = packQty > 0 ? tag.qty >= packQty : boxNo < boxCount;
-      const boxTypeThai = isFullBox ? "TAG ‡πÄ‡∏ï‡πá‡∏°" : "TAG ‡πÄ‡∏®‡∏©";
-      const boxTypeEnglish = isFullBox ? "FULL TAG" : "REMAINDER TAG";
-      const deliveryQty = tag.deliveryQty || stock.tags
-        .filter((item) => item.tagId.replace(/-B\d+OF\d+$/, "") === batchCode)
-        .reduce((sum, item) => sum + Number(item.qty), 0) || tag.qty;
-      const markup = `<section class="tag"><header><div class="brand">KiT<small>CONTROL STOCK KIT</small></div><div class="tag-title"><b>STOCK RECEIVING TAG</b><small>TAG ‡∏£‡∏±‡∏ö‡∏á‡∏≤‡∏ô‡πÄ‡∏Ç‡πâ‡∏≤ STOCK</small></div></header>
-        <div class="product"><div class="photo-wrap">${imageUrl ? `<img class="photo" src="${imageUrl}" alt="‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô ${html(tag.materialCode)}" />` : `<div class="photo-fallback"><strong>‚óá</strong>‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô</div>`}</div><div class="qr-wrap"><img class="qr" src="${qr}" alt="QR"><small>QR / BARCODE</small></div><div class="main"><small>CUSTOMER</small><p class="customer">${html(tag.customer || "‚Äî")}</p><small>PART NO. / MATERIAL</small><b>${html(tag.materialCode)}</b><small>PART NAME</small><p>${html(tag.partName)}</p></div></div>
-        <div class="grid"><div><small>DELIVERY QTY / ‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏á‡∏≤‡∏ô‡∏£‡∏ß‡∏°</small><b class="qty">${fmt(deliveryQty)}</b> <span class="unit">PC</span></div><div><small>QTY IN BOX / ‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á</small><b class="qty">${fmt(tag.qty)}</b> <span class="unit">PC</span></div><div class="box-cell"><small>BOX / ‡∏Å‡∏•‡πà‡∏≠‡∏á</small><b>${fmt(boxNo)} / ${fmt(boxCount)}</b><span class="box-type ${isFullBox ? "full" : "remainder"}"><strong>${boxTypeThai}</strong><small>${boxTypeEnglish}</small></span></div><div><small>JOB NO.</small><b>${html(tag.jobNo)}</b></div><div><small>TAG ISSUE DATE / ‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏≠‡∏≠‡∏Å TAG</small><b>${html(formatDateOnly(tag.createdAt))}</b></div><div><small>LOCATION / ‡∏ï‡∏≥‡πÅ‡∏´‡∏ô‡πà‡∏á‡∏à‡∏±‡∏î‡πÄ‡∏Å‡πá‡∏ö</small><b>${html(location)}</b></div></div>
-        <footer><b class="code">${html(tag.tagId)}</b><p class="payload">${html(payloadValue)}</p><div class="hint">‡∏¢‡∏¥‡∏á QR ‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏£‡∏±‡∏ö‡∏á‡∏≤‡∏ô‡πÄ‡∏Ç‡πâ‡∏≤ Stock</div></footer>
-      </section>`;
-      const rpp04Tag: Rpp04Tag = {
-        customer: tag.customer || "‚Äî",
-        materialCode: tag.materialCode,
-        partName: tag.partName,
-        deliveryQty,
-        qty: tag.qty,
-        boxNo,
-        boxCount,
-        isFullBox,
-        jobNo: tag.jobNo,
-        issueDate: formatDateOnly(tag.createdAt),
-        location,
-        tagId: tag.tagId,
-        payload: payloadValue,
-        qrDataUrl: qr,
-        imageDataUrl: imageUrl || undefined,
-      };
-      return { markup, rpp04Tag };
-    }));
-    if (directLabel) {
-      const connection = await rpp04SessionPromise;
-      if (!connection?.session) {
-        setNotice({ type: "error", text: connection?.error instanceof Error ? connection.error.message : "‡πÄ‡∏ä‡∏∑‡πà‡∏≠‡∏°‡∏ï‡πà‡∏≠ RPP04 ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-        return;
-      }
-      try {
-        setNotice({ type: "success", text: `‡πÄ‡∏ä‡∏∑‡πà‡∏≠‡∏°‡∏ï‡πà‡∏≠ ${connection.session.deviceName} ‡πÅ‡∏•‡πâ‡∏ß ¬∑ ‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏û‡∏¥‡∏°‡∏û‡πå 0 / ${fmt(tagMarkups.length)} Tag` });
-        await printRpp04Tags(connection.session, tagMarkups.map((item) => item.rpp04Tag), (completed, total) => {
-          setNotice({ type: "success", text: `‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏û‡∏¥‡∏°‡∏û‡πå RPP04 ${fmt(completed)} / ${fmt(total)} Tag` });
-        });
-        setNotice({ type: "success", text: `‡∏û‡∏¥‡∏°‡∏û‡πå RPP04 ‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à ${fmt(tagMarkups.length)} Tag ¬∑ ‡∏Ç‡∏ô‡∏≤‡∏î 100 √ó 55 ‡∏°‡∏°.` });
-      } catch (caught) {
-        setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏û‡∏¥‡∏°‡∏û‡πå RPP04 ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-      }
-      return;
-    }
-    const tagsPerPage = 10;
-    const pages = Array.from({ length: Math.ceil(tagMarkups.length / tagsPerPage) }, (_, pageIndex) =>
-      `<div class="sheet">${tagMarkups.slice(pageIndex * tagsPerPage, pageIndex * tagsPerPage + tagsPerPage).map((item) => item.markup).join("")}</div>`,
-    ).join("");
-    popup?.document.open();
-    popup?.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${html(tags[0].jobNo)} ¬∑ ${fmt(tags.length)} Tag</title><style>
-      @page{size:${directLabel ? "100mm 55mm" : "A4 portrait"};margin:${directLabel ? "0" : "5mm"}}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;font-family:Arial,"Noto Sans Thai",sans-serif;color:#071a35;font-weight:500}
-      .sheet{width:${directLabel ? "100mm" : "200mm"};height:${directLabel ? "55mm" : "283mm"};display:grid;grid-template-columns:${directLabel ? "100mm" : "repeat(2,100mm)"};grid-template-rows:${directLabel ? "55mm" : "repeat(5,55mm)"};column-gap:0;row-gap:${directLabel ? "0" : "2mm"};break-after:page}.sheet:last-child{break-after:auto}.tag{width:100mm;height:55mm;min-width:0;min-height:0;border:1.6px solid #003f98;border-radius:2mm;overflow:hidden;display:grid;grid-template-rows:auto auto 1fr auto;break-inside:avoid;background:#fff;box-shadow:inset 0 0 0 .25mm #c5d7ed}
-      header{display:flex;justify-content:space-between;align-items:center;padding:.8mm 1.6mm;color:#fff;background:#003f98}.brand{font-size:15px;font-weight:900;line-height:.78}.brand small{display:block;margin-top:.5mm;font-size:3.8px;font-weight:800;letter-spacing:.55px;color:#fff}.tag-title{text-align:right}.tag-title b{display:block;font-size:6.8px;font-weight:900;letter-spacing:.2px}.tag-title small{font-size:4.7px;font-weight:800;color:#fff}
-      .product{display:grid;grid-template-columns:27mm 16mm 1fr;gap:1.2mm;padding:.8mm 1.6mm;border-bottom:1.4px solid #48688d;background:#e7f0fc}.photo-wrap{height:19mm;display:grid;place-items:center;border:1.4px solid #2e5f9a;border-radius:1.6mm;background:#fff;overflow:hidden}.photo{width:100%;height:100%;object-fit:contain;padding:.5mm}.photo-fallback{color:#344b68;text-align:center;font-size:5px;font-weight:700}.photo-fallback strong{display:block;font-size:13px;color:#48688d}.qr-wrap{height:19mm;display:grid;place-items:center;align-content:center;border:1.2px solid #48688d;border-radius:1.3mm;background:#fff}.qr{width:14mm;height:14mm}.qr-wrap small{font-size:3.6px;font-weight:800;color:#071a35}
-      .main{align-self:center;min-width:0}.main small{font-size:4.5px;font-weight:800;letter-spacing:.1px;color:#243e60}.main b{display:block;margin:.2mm 0;font-size:9px;font-weight:900;color:#071a35;overflow-wrap:anywhere}.main p{margin:0;color:#071a35;font-size:6px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.customer{margin-top:.25mm!important;color:#003f98!important;font-size:6.6px!important;font-weight:900!important}
-      .grid{display:grid;grid-template-columns:1fr 1fr;margin:.6mm 1.6mm;border:1.3px solid #48688d;background:#fff}.grid div{min-height:5.7mm;padding:.4mm .7mm;border-right:1.1px solid #48688d;border-bottom:1.1px solid #48688d;overflow:hidden}.grid div:nth-child(even){border-right:0}.grid div:nth-last-child(-n+2){border-bottom:0}.grid small{display:block;color:#243e60;font-size:4px;font-weight:800;letter-spacing:0}.grid b{font-size:6.2px;font-weight:900;color:#071a35;overflow-wrap:anywhere}.qty,.box-cell b{font-size:10.8px!important;color:#003f98}.unit{font-size:4.6px;font-weight:800;color:#071a35}.box-cell{position:relative;padding-right:29mm!important}.box-type{position:absolute;right:.7mm;top:50%;transform:translateY(-50%);display:inline-grid;min-width:27mm;padding:.55mm 1mm;border:1.4px solid;border-radius:1mm;line-height:1;text-align:center}.box-type strong{font-size:7.2px;font-weight:900;letter-spacing:.15px}.box-type small{margin-top:.35mm;font-size:3.6px;font-weight:900;color:inherit}.box-type.full{color:#075b2a;background:#dff6e7;border-color:#198754}.box-type.remainder{color:#7a3700;background:#fff0d5;border-color:#d97706}
-      footer{display:grid;grid-template-columns:1fr auto;gap:.35mm 1mm;align-items:center;padding:.55mm 1.6mm;border-top:1.5px solid #003f98;min-width:0;background:#f1f5fa}.code{display:block;font-size:5.4px;font-weight:900;color:#071a35;overflow-wrap:anywhere}.payload{grid-column:1/-1;margin:0;font-size:3.1px;font-weight:600;line-height:1.05;color:#243e60;overflow-wrap:anywhere}.hint{display:inline-block;padding:.55mm .9mm;color:#fff;background:#003f98;border-radius:.8mm;font-size:4.2px;font-weight:900;white-space:nowrap}
-      @media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
-      ${directLabel ? ".tag{break-after:page}.tag:last-child{break-after:auto}" : ""}
-    </style></head><body>${pages}<script>window.onload=()=>{const images=[...document.images];Promise.all(images.map((image)=>image.complete?Promise.resolve():new Promise((resolve)=>{image.onload=resolve;image.onerror=resolve}))).finally(()=>setTimeout(()=>window.print(),250))}<\/script></body></html>`);
-    popup?.document.close();
-  }
-
-  const dates = useMemo(() => [...new Set(payload.dues.map((due) => due.deliveryDate))].sort().reverse(), [payload.dues]);
-  const facts = useMemo(() => [...new Set(payload.dues.map((due) => due.fact))].filter(Boolean).sort(), [payload.dues]);
-  const times = useMemo(() => [...new Set(payload.dues.filter((due) => !filterDate || due.deliveryDate === filterDate).map((due) => due.deliveryTime))].filter(Boolean).sort(), [payload.dues, filterDate]);
-  const filtered = useMemo(() => payload.dues.filter((due) => {
-    const search = query.trim().toUpperCase();
-    return (!filterDate || due.deliveryDate === filterDate)
-      && (filterFact === "ALL" || due.fact === filterFact)
-      && (filterTime === "ALL" || due.deliveryTime === filterTime)
-      && (dashboardStatusFilter === "all"
-        || (dashboardStatusFilter === "completed" && stateOf(due, new Date(deadlineClock)) === "completed")
-        || (dashboardStatusFilter === "pending" && stateOf(due, new Date(deadlineClock)) !== "completed")
-        || (dashboardStatusFilter === "over" && stateOf(due, new Date(deadlineClock)) === "over"))
-      && (!search || [due.materialCode, due.materialDescription, due.doNo, String(due.seq), due.line, due.shop].some((value) => value.toUpperCase().includes(search)));
-  }), [payload.dues, filterDate, filterFact, filterTime, query, dashboardStatusFilter, deadlineClock]);
-
-  const overdueDues = useMemo(() => {
-    if (!deadlineClock) return [];
-    const now = new Date(deadlineClock);
-    return payload.dues.filter((due) => isDeliveryOverdue(due, now)).sort((left, right) =>
-      left.deliveryDate.localeCompare(right.deliveryDate) || left.deliveryTime.localeCompare(right.deliveryTime),
-    );
-  }, [payload.dues, deadlineClock]);
-
-  useEffect(() => {
-    if (!dueLoadedAt) return;
-    const currentIds = new Set(overdueDues.map((due) => due.id));
-    const previousIds = previousOverdueIdsRef.current;
-    if (!overdueSoundEnabled || previousIds === null) {
-      previousOverdueIdsRef.current = currentIds;
-      return;
-    }
-    if (!overdueDues.some((due) => !previousIds.has(due.id))) {
-      previousOverdueIdsRef.current = currentIds;
-      return;
-    }
-
-    let cancelled = false;
-    void playOverdueAlertTone(overdueAudioContextRef).then((played) => {
-      if (cancelled) return;
-      previousOverdueIdsRef.current = currentIds;
-      if (!played) {
-        setOverdueSoundEnabled(false);
-        setNotice({ type: "error", text: "‡πÄ‡∏™‡∏µ‡∏¢‡∏á‡πÅ‡∏à‡πâ‡∏á‡πÄ‡∏ï‡∏∑‡∏≠‡∏ô‡∏ñ‡∏π‡∏Å‡∏£‡∏∞‡∏á‡∏±‡∏ö ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏Å‡∏î‡πÄ‡∏õ‡∏¥‡∏î‡πÄ‡∏™‡∏µ‡∏¢‡∏á‡∏≠‡∏µ‡∏Å‡∏Ñ‡∏£‡∏±‡πâ‡∏á" });
-      }
-    });
-    return () => { cancelled = true; };
-  }, [overdueDues, overdueSoundEnabled, dueLoadedAt]);
-
-  const summary = useMemo(() => {
-    const now = new Date(deadlineClock);
-    return filtered.reduce((total, due) => {
-      total.items += 1;
-      total.plan += Number(due.reqQty);
-      total.sent += Number(due.scannedQty);
-      total[stateOf(due, now)] += 1;
-      return total;
-    }, { items: 0, plan: 0, sent: 0, completed: 0, partial: 0, pending: 0, over: 0 });
-  }, [filtered, deadlineClock]);
-  const completePct = summary.items ? Math.round((summary.completed / summary.items) * 100) : 0;
-
-  const facStats = useMemo(() => {
-    const now = new Date(deadlineClock);
-    return facts.map((fact) => {
-      const rows = payload.dues.filter((due) => due.fact === fact && (!filterDate || due.deliveryDate === filterDate));
-      return {
-        fact,
-        items: rows.length,
-        plan: rows.reduce((sum, row) => sum + Number(row.reqQty), 0),
-        sent: rows.reduce((sum, row) => sum + Number(row.scannedQty), 0),
-        completed: rows.filter((row) => stateOf(row, now) === "completed").length,
-        remaining: rows.filter((row) => ["pending", "partial", "over"].includes(stateOf(row, now))).length,
-      };
-    }).sort((a, b) => b.items - a.items);
-  }, [facts, payload.dues, filterDate, deadlineClock]);
-
-  const dailyStats = useMemo(() => {
-    const now = new Date(deadlineClock);
-    return dates.map((date) => {
-      const rows = payload.dues.filter((due) => due.deliveryDate === date);
-      return { date, items: rows.length, completed: rows.filter((row) => stateOf(row, now) === "completed").length, partial: rows.filter((row) => stateOf(row, now) === "partial").length, pending: rows.filter((row) => stateOf(row, now) === "pending").length, over: rows.filter((row) => stateOf(row, now) === "over").length, qty: rows.reduce((sum, row) => sum + Number(row.scannedQty), 0) };
-    });
-  }, [dates, payload.dues, deadlineClock]);
-
-  const arrangeableDues = useMemo(() => payload.dues.filter((due) =>
-    Number(due.reqQty) > Number(due.scannedQty) + Number(due.arrangedQty || 0)
-  ), [payload.dues]);
-  const arrangeDueDates = useMemo(() => [...new Set(payload.dues.map((due) => due.deliveryDate))].sort(), [payload.dues]);
-  const effectiveArrangeDueDate = arrangeDueDate
-    ? arrangeDueDate
-    : arrangeDueDates.includes(bangkokDateTimeKey().slice(0, 10))
-      ? bangkokDateTimeKey().slice(0, 10)
-      : arrangeableDues.map((due) => due.deliveryDate).sort()[0] || arrangeDueDates[0] || "";
-  const arrangeDueTimes = useMemo(() => [...new Set(payload.dues
-    .filter((due) => due.deliveryDate === effectiveArrangeDueDate)
-    .map((due) => due.deliveryTime))].filter(Boolean).sort(), [payload.dues, effectiveArrangeDueDate]);
-  const arrangeDueFacts = useMemo(() => [...new Set(payload.dues
-    .filter((due) => due.deliveryDate === effectiveArrangeDueDate && (!arrangeDueTime || due.deliveryTime === arrangeDueTime))
-    .map((due) => due.fact))].filter(Boolean).sort(), [payload.dues, effectiveArrangeDueDate, arrangeDueTime]);
-  const arrangeScopeDues = useMemo(() => arrangeableDues.filter((due) =>
-    due.deliveryDate === effectiveArrangeDueDate
-    && (!arrangeDueTime || due.deliveryTime === arrangeDueTime)
-    && (!arrangeDueFact || due.fact === arrangeDueFact)
-  ), [arrangeableDues, effectiveArrangeDueDate, arrangeDueTime, arrangeDueFact]);
-  const dispatchableDues = useMemo(() => payload.dues.filter((due) =>
-    Number(due.reqQty) > Number(due.scannedQty)
-    && Number(due.arrangedQty || 0) > 0
-  ), [payload.dues]);
-  const dispatchDueDates = useMemo(() => [...new Set(payload.dues.map((due) => due.deliveryDate))].sort(), [payload.dues]);
-  const effectiveDispatchDueDate = dispatchDueDate
-    ? dispatchDueDate
-    : dispatchDueDates.includes(bangkokDateTimeKey().slice(0, 10))
-      ? bangkokDateTimeKey().slice(0, 10)
-      : dispatchDueDates[0] || "";
-  const dispatchDueTimes = useMemo(() => [...new Set(payload.dues
-    .filter((due) => due.deliveryDate === effectiveDispatchDueDate)
-    .map((due) => due.deliveryTime))].filter(Boolean).sort(), [payload.dues, effectiveDispatchDueDate]);
-  const dispatchDueFacts = useMemo(() => [...new Set(payload.dues
-    .filter((due) => due.deliveryDate === effectiveDispatchDueDate && (!dispatchDueTime || due.deliveryTime === dispatchDueTime))
-    .map((due) => due.fact))].filter(Boolean).sort(), [payload.dues, effectiveDispatchDueDate, dispatchDueTime]);
-  const dispatchScopeDues = useMemo(() => dispatchableDues.filter((due) =>
-    due.deliveryDate === effectiveDispatchDueDate
-    && (!dispatchDueTime || due.deliveryTime === dispatchDueTime)
-    && (!dispatchDueFact || due.fact === dispatchDueFact)
-  ), [dispatchableDues, effectiveDispatchDueDate, dispatchDueTime, dispatchDueFact]);
-
-
-
-  function go(next: PageKey) {
-    if (!allowedPages.has(next)) {
-      setNotice({ type: "error", text: "‡∏ö‡∏±‡∏ç‡∏ä‡∏µ‡∏ô‡∏µ‡πâ‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡πÄ‡∏õ‡∏¥‡∏î‡∏´‡∏ô‡πâ‡∏≤‡∏ô‡∏µ‡πâ ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏ï‡∏¥‡∏î‡∏ï‡πà‡∏≠ Admin" });
-      setMenuOpen(false);
-      return;
-    }
-    setArrangeConfirmation(null);
-    closeSplitTag();
-    setPage(next);
-    if (next !== "stock") {
-      setStockLocation(null);
-      setStockLocationActivity(0);
-      setStockScan("");
-    }
-    updatePageLocation(next);
-    if (next === "parts" || next === "settings") void loadPartImages();
-    if (next === "replacement") void loadReplacements();
-    setMenuOpen(false);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
-
-  function showOverduePlan() {
-    if (!allowedPages.has("plan")) {
-      setNotice({ type: "error", text: "‡∏ö‡∏±‡∏ç‡∏ä‡∏µ‡∏ô‡∏µ‡πâ‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡∏î‡∏π‡∏´‡∏ô‡πâ‡∏≤‡πÅ‡∏ú‡∏ô‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏ï‡∏¥‡∏î‡∏ï‡πà‡∏≠ Admin" });
-      return;
-    }
-    setFilterDate("");
-    setFilterFact("ALL");
-    setFilterTime("ALL");
-    setQuery("");
-    setPlanPage(1);
-    go("plan");
-  }
-
-  async function toggleOverdueSound() {
-    if (overdueSoundEnabled) {
-      setOverdueSoundEnabled(false);
-      setNotice({ type: "success", text: "‡∏õ‡∏¥‡∏î‡πÄ‡∏™‡∏µ‡∏¢‡∏á‡πÅ‡∏à‡πâ‡∏á‡πÄ‡∏ï‡∏∑‡∏≠‡∏ô‡∏á‡∏≤‡∏ô‡πÄ‡∏Å‡∏¥‡∏ô Due ‡πÅ‡∏•‡πâ‡∏ß" });
-      return;
-    }
-    const played = await playOverdueAlertTone(overdueAudioContextRef);
-    if (!played) {
-      setNotice({ type: "error", text: "‡πÄ‡∏ö‡∏£‡∏≤‡∏ß‡πå‡πÄ‡∏ã‡∏≠‡∏£‡πå‡∏ô‡∏µ‡πâ‡πÑ‡∏°‡πà‡∏™‡∏≤‡∏°‡∏≤‡∏£‡∏ñ‡πÄ‡∏õ‡∏¥‡∏î‡πÄ‡∏™‡∏µ‡∏¢‡∏á‡πÅ‡∏à‡πâ‡∏á‡πÄ‡∏ï‡∏∑‡∏≠‡∏ô‡πÑ‡∏î‡πâ" });
-      return;
-    }
-    previousOverdueIdsRef.current = dueLoadedAt ? new Set(overdueDues.map((due) => due.id)) : null;
-    setOverdueSoundEnabled(true);
-    setNotice({ type: "success", text: "‡πÄ‡∏õ‡∏¥‡∏î‡πÄ‡∏™‡∏µ‡∏¢‡∏á‡πÅ‡∏à‡πâ‡∏á‡πÄ‡∏ï‡∏∑‡∏≠‡∏ô‡πÅ‡∏•‡πâ‡∏ß ‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡∏î‡∏±‡∏á‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏°‡∏µ‡∏á‡∏≤‡∏ô‡πÄ‡∏Å‡∏¥‡∏ô Due ‡πÉ‡∏´‡∏°‡πà" });
-  }
-
-  function renderOverdueSoundControl() {
-    return <button type="button" className={`overdue-sound-toggle ${overdueSoundEnabled ? "enabled" : ""}`} onClick={() => void toggleOverdueSound()} aria-pressed={overdueSoundEnabled}>
-      <span>{overdueSoundEnabled ? "üîî" : "üîï"}</span><b>{overdueSoundEnabled ? "‡πÄ‡∏õ‡∏¥‡∏î‡πÄ‡∏™‡∏µ‡∏¢‡∏á‡πÅ‡∏•‡πâ‡∏ß" : "‡πÄ‡∏õ‡∏¥‡∏î‡πÄ‡∏™‡∏µ‡∏¢‡∏á‡πÅ‡∏à‡πâ‡∏á‡πÄ‡∏ï‡∏∑‡∏≠‡∏ô"}</b><small>{overdueSoundEnabled ? "‡∏Å‡∏î‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏õ‡∏¥‡∏î‡πÄ‡∏™‡∏µ‡∏¢‡∏á" : "‡∏Å‡∏î‡∏´‡∏ô‡∏∂‡πà‡∏á‡∏Ñ‡∏£‡∏±‡πâ‡∏á‡∏ï‡πà‡∏≠‡∏Å‡∏≤‡∏£‡πÄ‡∏õ‡∏¥‡∏î‡∏´‡∏ô‡πâ‡∏≤‡∏ô‡∏µ‡πâ"}</small>
-    </button>;
-  }
-
-  function exportCsv() {
-    const rows = filtered.filter((due) => Number(due.scannedQty) > 0);
-    const csv = [
-      ["Delivery Date", "Time", "FAC", "Line", "DO", "Material", "Plan Qty", "Sent Qty", "Remaining", "Status"],
-      ...rows.map((due) => [due.deliveryDate, due.deliveryTime, due.fact, due.line, due.doNo, due.materialCode, due.reqQty, due.scannedQty, Math.max(due.reqQty - due.scannedQty, 0), stateLabel(due)]),
-    ].map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
-    const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }));
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `KIT-delivery-${new Date().toISOString().slice(0, 10)}.csv`;
-    anchor.click();
-    URL.revokeObjectURL(url);
-    void recordClientAudit("export_delivery_csv", `‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å CSV ${rows.length} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£`, { itemCount: rows.length, filterDate, filterFact, filterTime });
-    setNotice({ type: "success", text: `‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ CSV ‡πÅ‡∏•‡πâ‡∏ß ${fmt(rows.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£` });
-  }
-
-  async function exportDeliveryExcel() {
-    const rows = filtered.filter((due) => Number(due.scannedQty) > 0);
-    try {
-      const xlsx = await import("xlsx");
-      const workbook = xlsx.utils.book_new();
-      const sheet = xlsx.utils.aoa_to_sheet([
-        ["‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å", "‡πÄ‡∏ß‡∏•‡∏≤", "FAC", "Line", "DO / ‡πÄ‡∏•‡∏Ç‡∏ó‡∏µ‡πà‡πÄ‡∏≠‡∏Å‡∏™‡∏≤‡∏£", "Material / Part No.", "‡∏£‡∏≤‡∏¢‡∏•‡∏∞‡πÄ‡∏≠‡∏µ‡∏¢‡∏î", "‡πÅ‡∏ú‡∏ô", "‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß", "‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠", "‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞"],
-        ...rows.map((due) => [due.deliveryDate, due.deliveryTime, due.fact, due.line, due.doNo, due.materialCode, due.materialDescription, due.reqQty, due.scannedQty, Math.max(due.reqQty - due.scannedQty, 0), stateLabel(due)]),
-      ]);
-      sheet["!cols"] = [13, 9, 12, 12, 24, 24, 36, 12, 12, 12, 18].map((wch) => ({ wch }));
-      xlsx.utils.book_append_sheet(workbook, sheet, "‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å");
-      xlsx.writeFile(workbook, `KIT-delivery-${new Date().toISOString().slice(0, 10)}.xlsx`);
-      void recordClientAudit("export_delivery_excel", `‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å Excel ${rows.length} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£`, { itemCount: rows.length, filterDate, filterFact, filterTime });
-      setNotice({ type: "success", text: `‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ Excel ‡πÅ‡∏•‡πâ‡∏ß ${fmt(rows.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£` });
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å Excel ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    }
-  }
-
-  function reportFileName(extension: string) {
-    const scope = [filterDate || "all-dates", filterFact === "ALL" ? "all-fac" : filterFact, filterTime === "ALL" ? "all-times" : filterTime.replace(":", "-")].join("_");
-    return `KIT-delivery-report_${scope}.${extension}`;
-  }
-
-  function reportTableRows() {
-    return [
-      ["‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô", "‡πÄ‡∏ß‡∏•‡∏≤", "FAC", "Line", "Shop", "DO No.", "Seq", "Material / Part No.", "‡∏£‡∏≤‡∏¢‡∏•‡∏∞‡πÄ‡∏≠‡∏µ‡∏¢‡∏î", "‡πÅ‡∏ú‡∏ô (‡∏ä‡∏¥‡πâ‡∏ô)", "‡∏à‡∏±‡∏î‡∏£‡∏≠‡∏Ç‡∏≤‡∏¢ (‡∏ä‡∏¥‡πâ‡∏ô)", "‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß (‡∏ä‡∏¥‡πâ‡∏ô)", "‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠ (‡∏ä‡∏¥‡πâ‡∏ô)", "‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞"],
-      ...filtered.map((due) => [due.deliveryDate, due.deliveryTime, due.fact, due.line, due.shop, due.doNo, due.seq, due.materialCode, due.materialDescription, due.reqQty, due.arrangedQty || 0, due.scannedQty, Math.max(due.reqQty - due.scannedQty, 0), stateLabel(due)]),
-    ];
-  }
-
-  function exportReportCsv() {
-    const csv = reportTableRows().map((row) => row.map((cell) => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
-    const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }));
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = reportFileName("csv");
-    anchor.click();
-    URL.revokeObjectURL(url);
-    void recordClientAudit("export_report_csv", `‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡∏£‡∏≤‡∏¢‡∏á‡∏≤‡∏ô CSV ${filtered.length} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£`, { itemCount: filtered.length, filterDate, filterFact, filterTime });
-    setNotice({ type: "success", text: `‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡∏£‡∏≤‡∏¢‡∏á‡∏≤‡∏ô CSV ‡πÅ‡∏•‡πâ‡∏ß ${fmt(filtered.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£` });
-  }
-
-  async function exportReportExcel() {
-    try {
-      const xlsx = await import("xlsx");
-      const workbook = xlsx.utils.book_new();
-      const summarySheet = xlsx.utils.aoa_to_sheet([
-        ["Control Stock KIT ‚Äî ‡∏™‡∏£‡∏∏‡∏õ‡∏£‡∏≤‡∏¢‡∏á‡∏≤‡∏ô"],
-        ["‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô", filterDate ? formatDate(filterDate) : "‡∏ó‡∏∏‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà"],
-        ["FAC", filterFact === "ALL" ? "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î" : filterFact],
-        ["‡πÄ‡∏ß‡∏•‡∏≤", filterTime === "ALL" ? "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î" : filterTime],
-        ["‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£", summary.items], ["‡πÅ‡∏ú‡∏ô‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î (‡∏ä‡∏¥‡πâ‡∏ô)", summary.plan], ["‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß (‡∏ä‡∏¥‡πâ‡∏ô)", summary.sent],
-        ["‡∏Ñ‡∏£‡∏ö‡∏ï‡∏≤‡∏°‡πÅ‡∏ú‡∏ô", summary.completed], ["‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠", summary.partial + summary.pending], ["‡πÄ‡∏Å‡∏¥‡∏ô‡∏î‡∏¥‡∏ß‡∏à‡∏±‡∏î‡∏™‡πà‡∏á", summary.over],
-      ]);
-      const detailSheet = xlsx.utils.aoa_to_sheet(reportTableRows());
-      detailSheet["!cols"] = [12, 8, 12, 12, 12, 24, 8, 24, 36, 14, 14, 14, 14, 20].map((wch) => ({ wch }));
-      const traceSheet = xlsx.utils.aoa_to_sheet([
-        ["Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤", "KIT Stock Tag", "Job", "Material", "DO", "FAC", "Line", "‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏ú‡∏•‡∏¥‡∏ï", "‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Stock", "‡∏à‡∏≥‡∏ô‡∏ß‡∏ô", "‡∏ú‡∏π‡πâ‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô", "‡πÄ‡∏ß‡∏•‡∏≤‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô", "‡∏ú‡∏π‡πâ‡∏ï‡∏£‡∏ß‡∏à", "‡πÄ‡∏ß‡∏•‡∏≤‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å"],
-        ...stock.dispatchLinks.map((item) => [
-          item.customerTagId, item.stockTagCode, item.jobNo, item.materialCode, item.doNo,
-          item.fact, item.line, item.productionDate, item.receivedAt || "", item.qty,
-          item.pickedByName, item.pickedAt, item.dispatchedByName, item.dispatchedAt,
-        ]),
-      ]);
-      traceSheet["!cols"] = [28, 24, 18, 22, 24, 12, 12, 14, 22, 12, 18, 22, 18, 22].map((wch) => ({ wch }));
-      xlsx.utils.book_append_sheet(workbook, summarySheet, "‡∏™‡∏£‡∏∏‡∏õ‡∏£‡∏≤‡∏¢‡∏á‡∏≤‡∏ô");
-      xlsx.utils.book_append_sheet(workbook, detailSheet, "‡∏£‡∏≤‡∏¢‡∏•‡∏∞‡πÄ‡∏≠‡∏µ‡∏¢‡∏î Due");
-      xlsx.utils.book_append_sheet(workbook, traceSheet, "Job Traceability");
-      xlsx.writeFile(workbook, reportFileName("xlsx"));
-      void recordClientAudit("export_report_excel", `‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡∏£‡∏≤‡∏¢‡∏á‡∏≤‡∏ô Excel ${filtered.length} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£`, { itemCount: filtered.length, filterDate, filterFact, filterTime });
-      setNotice({ type: "success", text: `‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡∏£‡∏≤‡∏¢‡∏á‡∏≤‡∏ô Excel ‡πÅ‡∏•‡πâ‡∏ß ${fmt(filtered.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£` });
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å Excel ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    }
-  }
-
-  function exportReportPdf() {
-    const popup = window.open("", "_blank", "width=1200,height=850");
-    if (!popup) return setNotice({ type: "error", text: "‡πÄ‡∏ö‡∏£‡∏≤‡∏ß‡πå‡πÄ‡∏ã‡∏≠‡∏£‡πå‡∏ö‡∏•‡πá‡∏≠‡∏Å‡∏´‡∏ô‡πâ‡∏≤‡∏ï‡πà‡∏≤‡∏á‡∏£‡∏≤‡∏¢‡∏á‡∏≤‡∏ô ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏≠‡∏ô‡∏∏‡∏ç‡∏≤‡∏ï Pop-up ‡πÅ‡∏•‡πâ‡∏ß‡∏•‡∏≠‡∏á‡πÉ‡∏´‡∏°‡πà" });
-    const escape = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character] || character);
-    const rows = filtered.map((due) => `<tr><td>${escape(formatDate(due.deliveryDate))}</td><td>${escape(due.deliveryTime)}</td><td>${escape(due.fact)} / ${escape(due.line || "‚Äî")}</td><td>${escape(due.materialCode)}<small>${escape(due.materialDescription)}</small></td><td>${fmt(due.reqQty)}</td><td>${fmt(due.scannedQty)}</td><td>${fmt(Math.max(due.reqQty - due.scannedQty, 0))}</td><td>${escape(stateLabel(due))}</td></tr>`).join("");
-    popup.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>Control Stock KIT Report</title><style>@page{size:A4 landscape;margin:12mm}body{font:12px Arial,sans-serif;color:#132647}header{display:flex;justify-content:space-between;border-bottom:3px solid #075fd7;padding-bottom:12px}h1{margin:0;color:#075fd7}.scope{color:#64748b}.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:14px 0}.metrics div{padding:10px;border:1px solid #dbe5f2;border-radius:8px}.metrics b{display:block;font-size:20px}table{width:100%;border-collapse:collapse}th{background:#eaf3ff;color:#123765}th,td{padding:7px;border:1px solid #dbe3ed;text-align:left}td:nth-last-child(-n+4){text-align:right}small{display:block;color:#718096;margin-top:3px}footer{margin-top:10px;color:#718096;text-align:right}@media print{button{display:none}}</style></head><body><header><div><h1>Control Stock KIT</h1><b>‡∏£‡∏≤‡∏¢‡∏á‡∏≤‡∏ô‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏Å‡∏≤‡∏£‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô</b></div><div class="scope">‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà ${escape(filterDate ? formatDate(filterDate) : "‡∏ó‡∏∏‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà")} ¬∑ FAC ${escape(filterFact === "ALL" ? "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î" : filterFact)} ¬∑ ‡πÄ‡∏ß‡∏•‡∏≤ ${escape(filterTime === "ALL" ? "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î" : filterTime)}</div></header><section class="metrics"><div>‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î<b>${fmt(summary.items)}</b></div><div>‡πÅ‡∏ú‡∏ô‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î<b>${fmt(summary.plan)}</b></div><div>‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß<b>${fmt(summary.sent)}</b></div><div>‡∏Ñ‡∏£‡∏ö‡∏ï‡∏≤‡∏°‡πÅ‡∏ú‡∏ô<b>${fmt(summary.completed)}</b></div><div>‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠<b>${fmt(summary.partial + summary.pending)}</b></div></section><table><thead><tr><th>‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà</th><th>‡πÄ‡∏ß‡∏•‡∏≤</th><th>FAC / Line</th><th>Material / Part No.</th><th>‡πÅ‡∏ú‡∏ô</th><th>‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß</th><th>‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠</th><th>‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞</th></tr></thead><tbody>${rows || '<tr><td colspan="8">‡πÑ‡∏°‡πà‡∏û‡∏ö‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏ï‡∏≤‡∏°‡∏ï‡∏±‡∏ß‡∏Å‡∏£‡∏≠‡∏á</td></tr>'}</tbody></table><footer>‡∏™‡∏£‡πâ‡∏≤‡∏á‡∏£‡∏≤‡∏¢‡∏á‡∏≤‡∏ô ${escape(new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date()))}</footer><script>window.onload=()=>setTimeout(()=>window.print(),300)<\/script></body></html>`);
-    popup.document.close();
-    void recordClientAudit("export_report_pdf", `‡∏û‡∏¥‡∏°‡∏û‡πå‡∏´‡∏£‡∏∑‡∏≠‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡∏£‡∏≤‡∏¢‡∏á‡∏≤‡∏ô PDF ${filtered.length} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£`, { itemCount: filtered.length, filterDate, filterFact, filterTime });
-  }
-
-  async function recordClientAudit(action: string, summary: string, details?: Record<string, unknown>) {
-    await fetch("/api/audit-logs", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action, summary, details }),
-    }).catch(() => undefined);
-  }
-
-  function saveSettings() {
-    window.localStorage.setItem("kit-due-settings", JSON.stringify(settings));
-    void recordClientAudit("save_settings", "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡∏Å‡∏≤‡∏£‡∏ï‡∏±‡πâ‡∏á‡∏Ñ‡πà‡∏≤‡∏Å‡∏≤‡∏£‡∏ï‡∏±‡∏î‡∏¢‡∏≠‡∏î‡πÅ‡∏•‡∏∞‡∏Å‡∏≤‡∏£‡∏™‡πÅ‡∏Å‡∏ô‡∏ö‡∏ô‡∏≠‡∏∏‡∏õ‡∏Å‡∏£‡∏ì‡πå‡∏ô‡∏µ‡πâ", settings);
-    setNotice({ type: "success", text: "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡∏Å‡∏≤‡∏£‡∏ï‡∏±‡πâ‡∏á‡∏Ñ‡πà‡∏≤‡∏ö‡∏ô‡∏≠‡∏∏‡∏õ‡∏Å‡∏£‡∏ì‡πå‡∏ô‡∏µ‡πâ‡πÅ‡∏•‡πâ‡∏ß" });
-  }
-
-  async function clearTestStock() {
-    if (!window.confirm(`‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡∏•‡πâ‡∏≤‡∏á‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏• Stock ‡∏ó‡∏î‡∏•‡∏≠‡∏á‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î‡∏´‡∏£‡∏∑‡∏≠‡πÑ‡∏°‡πà?\n\n‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡∏•‡∏ö Tag Stock ${stock.tags.length} ‡πÉ‡∏ö ‡πÅ‡∏•‡∏∞‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡∏Å‡∏≤‡∏£‡∏à‡∏±‡∏î/‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‡∏ó‡∏µ‡πà‡πÄ‡∏ä‡∏∑‡πà‡∏≠‡∏°‡πÇ‡∏¢‡∏á\n‡πÅ‡∏ï‡πà‡∏à‡∏∞‡πÑ‡∏°‡πà‡∏•‡∏ö‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô Part, ‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô, ‡πÅ‡∏ú‡∏ô Due ‡∏´‡∏£‡∏∑‡∏≠‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô\n\n‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ó‡∏µ‡πà‡∏•‡∏ö‡πÅ‡∏•‡πâ‡∏ß‡πÑ‡∏°‡πà‡∏™‡∏≤‡∏°‡∏≤‡∏£‡∏ñ‡∏Å‡∏π‡πâ‡∏Ñ‡∏∑‡∏ô‡∏à‡∏≤‡∏Å‡∏´‡∏ô‡πâ‡∏≤‡∏£‡∏∞‡∏ö‡∏ö‡πÑ‡∏î‡πâ`)) return;
-    setClearingTestStock(true);
-    try {
-      const response = await fetch("/api/stock", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "clear_test_stock" }),
-      });
-      const data = await response.json() as { error?: string; deleted?: { tags?: number; picks?: number; allocations?: number; dispatchLinks?: number } };
-      if (!response.ok) throw new Error(data.error || "‡∏•‡πâ‡∏≤‡∏á‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏• Stock ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setCreatedStockTags([]);
-      setNotice({ type: "success", text: `‡∏•‡πâ‡∏≤‡∏á‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏• Stock ‡∏ó‡∏î‡∏•‡∏≠‡∏á‡πÅ‡∏•‡πâ‡∏ß ${fmt(data.deleted?.tags || 0)} Tag` });
-      await loadStock();
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏•‡πâ‡∏≤‡∏á‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏• Stock ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setClearingTestStock(false);
-    }
-  }
-
-  const Filters = () => (<>
-    <button className="mobile-filter-toggle" type="button" onClick={() => setFiltersOpen((open) => !open)} aria-expanded={filtersOpen}><span>‚åÑ</span>{filtersOpen ? "‡∏ã‡πà‡∏≠‡∏ô‡∏ï‡∏±‡∏ß‡∏Å‡∏£‡∏≠‡∏á" : "‡πÅ‡∏™‡∏î‡∏á‡∏ï‡∏±‡∏ß‡∏Å‡∏£‡∏≠‡∏á"}<b>{[filterDate, filterFact !== "ALL" ? filterFact : "", filterTime !== "ALL" ? filterTime : "", query].filter(Boolean).length || ""}</b></button>
-    <div className={`filter-grid ${filtersOpen ? "mobile-open" : ""}`}>
-      <label><span>‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô</span><select value={filterDate} onChange={(e) => setFilterDate(e.target.value)}><option value="">‡∏ó‡∏∏‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà</option>{dates.map((date) => <option key={date} value={date}>{formatDate(date)}</option>)}</select></label>
-      <label><span>‡πÇ‡∏£‡∏á‡∏á‡∏≤‡∏ô (FAC)</span><select value={filterFact} onChange={(e) => setFilterFact(e.target.value)}><option value="ALL">‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î</option>{facts.map((fact) => <option key={fact}>{fact}</option>)}</select></label>
-      <label><span>‡πÄ‡∏ß‡∏•‡∏≤</span><select value={filterTime} onChange={(e) => setFilterTime(e.target.value)}><option value="ALL">‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î</option>{times.map((time) => <option key={time}>{time}</option>)}</select></label>
-      <label className="search-field"><span>‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Material / Part No. / DO" /></label>
-      <button className="button secondary filter-reset" onClick={() => { setFilterFact("ALL"); setFilterTime("ALL"); setQuery(""); }}>‚Üª ‡∏•‡πâ‡∏≤‡∏á‡∏Ñ‡πà‡∏≤</button>
-    </div>
-  </>);
-
-  const DueTable = ({ rows, limit }: { rows: DueLine[]; limit?: number }) => {
-    const shown = typeof limit === "number" ? rows.slice(0, limit) : rows;
-    if (!shown.length) return <Empty text="‡πÑ‡∏°‡πà‡∏û‡∏ö‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ï‡∏≤‡∏°‡∏ï‡∏±‡∏ß‡∏Å‡∏£‡∏≠‡∏á‡∏ó‡∏µ‡πà‡πÄ‡∏•‡∏∑‡∏≠‡∏Å" />;
-    return (
-      <div className="table-wrap mobile-table-wrap">
-        <table className="mobile-card-table due-table">
-          <thead><tr><th>‡πÄ‡∏ß‡∏•‡∏≤</th><th>FAC / Line</th><th>Material / Part No.</th><th>‡∏£‡∏≤‡∏¢‡∏•‡∏∞‡πÄ‡∏≠‡∏µ‡∏¢‡∏î</th><th className="num">‡πÅ‡∏ú‡∏ô</th><th className="num">‡∏à‡∏±‡∏î‡∏£‡∏≠‡∏Ç‡∏≤‡∏¢</th><th className="num">‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß</th><th className="num">‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠</th><th>‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞</th><th /></tr></thead>
-          <tbody>{shown.map((due) => <tr key={due.id}>
-            <td data-label="‡πÄ‡∏ß‡∏•‡∏≤"><b>{due.deliveryTime}</b><small>{formatDate(due.deliveryDate)}</small></td>
-            <td data-label="FAC / Line"><b>{due.fact}</b><small>{[due.line, due.shop].filter(Boolean).join(" / ") || "‚Äî"}</small></td>
-            <td data-label="Part No."><b>{due.materialCode}</b><small>{due.doNo} ¬∑ Seq {due.seq}</small></td>
-            <td data-label="‡∏£‡∏≤‡∏¢‡∏•‡∏∞‡πÄ‡∏≠‡∏µ‡∏¢‡∏î">{due.materialDescription || "‚Äî"}</td>
-            <td data-label="‡πÅ‡∏ú‡∏ô" className="num"><b>{fmt(due.reqQty)}</b></td>
-            <td data-label="‡∏à‡∏±‡∏î‡∏£‡∏≠‡∏Ç‡∏≤‡∏¢" className="num warning"><b>{fmt(due.arrangedQty || 0)}</b></td>
-            <td data-label="‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß" className="num sent"><b>{fmt(due.scannedQty)}</b></td>
-            <td data-label="‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠" className={`num ${stateOf(due) === "over" ? "danger" : "warning"}`}><b>{fmt(Math.max(due.reqQty - due.scannedQty, 0))}</b></td>
-            <td data-label="‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞"><span className={`status ${Number(due.arrangedQty) > 0 && stateOf(due) === "pending" ? "partial" : stateOf(due)}`}>{stateLabel(due)}</span></td>
-            <td data-label="‡∏à‡∏±‡∏î‡∏Å‡∏≤‡∏£">{workflowPage && <button className="tiny-button" onClick={() => {
-              setArrangeDueDate(due.deliveryDate);
-              go(workflowPage);
-            }}>{Number(due.scannedQty) < due.reqQty ? (workflowPage === "dispatch" ? "‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å" : "‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô") : "‡∏î‡∏π"}</button>}</td>
-          </tr>)}</tbody>
-        </table>
-      </div>
-    );
-  };
-
-  async function createReplacementRequest(event: FormEvent) {
-    event.preventDefault();
-    setReplacementSaving(true);
-    setNotice(null);
-    try {
-      const response = await fetch("/api/replacements", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "create", ...replacementForm }),
-      });
-      const data = await response.json() as { request?: ReplacementRequest; error?: string };
-      if (!response.ok) throw new Error(data.error || "‡∏™‡∏£‡πâ‡∏≤‡∏á‡πÉ‡∏ö‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setReplacementForm({ materialCode: "", customer: "", requestedQty: "", reasonType: "shortage", reasonDetail: "", neededDate: "" });
-      if (data.request) setReplacementSelectedId(String(data.request.id));
-      setNotice({ type: "success", text: `‡∏™‡∏£‡πâ‡∏≤‡∏á‡πÉ‡∏ö‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å ${data.request?.requestNo || ""} ‡πÅ‡∏•‡πâ‡∏ß ‡∏ó‡∏µ‡∏°‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡∏™‡∏≤‡∏°‡∏≤‡∏£‡∏ñ‡∏™‡πÅ‡∏Å‡∏ô KIT Tag ‡πÑ‡∏î‡πâ‡∏ó‡∏±‡∏ô‡∏ó‡∏µ` });
-      await Promise.all([loadReplacements(), loadStock()]);
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏™‡∏£‡πâ‡∏≤‡∏á‡πÉ‡∏ö‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setReplacementSaving(false);
-    }
-  }
-
-  async function previewReplacementIssue(rawValue?: string) {
-    const rawPayload = (rawValue || replacementTag).trim();
-    if (!replacementSelectedId) return setNotice({ type: "error", text: "‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡πÉ‡∏ö‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å‡∏Å‡πà‡∏≠‡∏ô‡∏™‡πÅ‡∏Å‡∏ô KIT Tag" });
-    if (!rawPayload || replacementSaving) return;
-    setReplacementSaving(true);
-    setNotice(null);
-    try {
-      const response = await fetch("/api/replacements", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "preview_issue", requestId: Number(replacementSelectedId), rawPayload }),
-      });
-      const data = await response.json() as ReplacementIssuePreview & { error?: string };
-      if (!response.ok) throw new Error(data.error || "‡∏ï‡∏£‡∏ß‡∏à KIT Tag ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setReplacementTag(rawPayload);
-      setReplacementPreview(data);
-      setReplacementQty(String(data.suggestedQty || ""));
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏ï‡∏£‡∏ß‡∏à KIT Tag ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-      setReplacementTag("");
-      if (!window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) {
-        window.setTimeout(() => replacementInputRef.current?.focus(), 80);
-      }
-    } finally {
-      setReplacementSaving(false);
-    }
-  }
-
-  async function confirmReplacementIssue() {
-    if (!replacementPreview) return;
-    const qty = Number(replacementQty || 0);
-    setReplacementSaving(true);
-    try {
-      const response = await fetch("/api/replacements", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "confirm_issue", requestId: replacementPreview.request.id,
-          rawPayload: replacementTag, qty,
-        }),
-      });
-      const data = await response.json() as { request?: ReplacementRequest; issue?: ReplacementIssue; error?: string };
-      if (!response.ok) throw new Error(data.error || "‡πÄ‡∏ö‡∏¥‡∏Å‡∏á‡∏≤‡∏ô‡∏ó‡∏î‡πÅ‡∏ó‡∏ô‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      setReplacementPreview(null);
-      setReplacementTag("");
-      setReplacementQty("");
-      setNotice({ type: "success", text: `‡πÄ‡∏ö‡∏¥‡∏Å‡∏á‡∏≤‡∏ô‡∏ó‡∏î‡πÅ‡∏ó‡∏ô ${fmt(qty)} ‡∏ä‡∏¥‡πâ‡∏ô‡πÅ‡∏•‡πâ‡∏ß ‡πÅ‡∏•‡∏∞‡∏ï‡∏±‡∏î‡∏¢‡∏≠‡∏î Stock/‡πÉ‡∏ö‡∏Ç‡∏≠‡πÄ‡∏£‡∏µ‡∏¢‡∏ö‡∏£‡πâ‡∏≠‡∏¢` });
-      await Promise.all([loadReplacements(), loadStock()]);
-      if (!window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) {
-        window.setTimeout(() => replacementInputRef.current?.focus(), 100);
-      }
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡πÄ‡∏ö‡∏¥‡∏Å‡∏á‡∏≤‡∏ô‡∏ó‡∏î‡πÅ‡∏ó‡∏ô‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally {
-      setReplacementSaving(false);
-    }
-  }
-
-  async function cancelReplacementRequest(item: ReplacementRequest) {
-    if (!window.confirm(`‡∏¢‡∏Å‡πÄ‡∏•‡∏¥‡∏Å‡πÉ‡∏ö‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å ${item.requestNo} ‡πÉ‡∏ä‡πà‡∏´‡∏£‡∏∑‡∏≠‡πÑ‡∏°‡πà?`)) return;
-    const response = await fetch("/api/replacements", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "cancel", requestId: item.id }),
-    });
-    const data = await response.json() as { error?: string };
-    if (!response.ok) return setNotice({ type: "error", text: data.error || "‡∏¢‡∏Å‡πÄ‡∏•‡∏¥‡∏Å‡πÉ‡∏ö‡∏Ç‡∏≠‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    setNotice({ type: "success", text: `‡∏¢‡∏Å‡πÄ‡∏•‡∏¥‡∏Å‡πÉ‡∏ö‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å ${item.requestNo} ‡πÅ‡∏•‡πâ‡∏ß` });
-    await loadReplacements();
-  }
-
-  async function printReplacementIssue(issue: ReplacementIssue) {
-    const item = replacement.requests.find((request) => request.id === issue.requestId);
-    if (!item) return setNotice({ type: "error", text: "‡πÑ‡∏°‡πà‡∏û‡∏ö‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡πÉ‡∏ö‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å‡∏™‡∏≥‡∏´‡∏£‡∏±‡∏ö‡∏û‡∏¥‡∏°‡∏û‡πå" });
-    const popup = window.open("", "_blank", "width=900,height=900");
-    if (!popup) return setNotice({ type: "error", text: "‡πÄ‡∏ö‡∏£‡∏≤‡∏ß‡πå‡πÄ‡∏ã‡∏≠‡∏£‡πå‡∏ö‡∏•‡πá‡∏≠‡∏Å‡∏´‡∏ô‡πâ‡∏≤‡∏û‡∏¥‡∏°‡∏û‡πå ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏≠‡∏ô‡∏∏‡∏ç‡∏≤‡∏ï Pop-up" });
-    const entities: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" };
-    const safe = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (character) => entities[character] || character);
-    const reason = item.reasonType === "defect" ? "‡∏á‡∏≤‡∏ô‡πÄ‡∏™‡∏µ‡∏¢" : item.reasonType === "shortage" ? "‡∏á‡∏≤‡∏ô‡∏Ç‡∏≤‡∏î" : "‡∏≠‡∏∑‡πà‡∏ô ‡πÜ";
-    const qrcode = await import("qrcode");
-    const replacementPayload = `KITREPL|${issue.noticeNo}|${item.materialCode}|${issue.qty}|${issue.stockTagCode}`;
-    const replacementQr = await qrcode.toDataURL(replacementPayload, { width: 420, margin: 1, errorCorrectionLevel: "M" });
-    popup.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${safe(issue.noticeNo)}</title><style>
-      @page{size:100mm 55mm;margin:0}*{box-sizing:border-box}html,body{width:100mm;height:55mm;margin:0;font-family:Arial,"Noto Sans Thai",sans-serif;color:#10234a}.sheet{width:100mm;height:55mm;border:1.5px solid #1767df;border-radius:2mm;overflow:hidden;display:grid;grid-template-rows:8mm 1fr 6mm}.head{padding:.8mm 2mm;color:#fff;background:linear-gradient(135deg,#096fe8,#753fe0);display:flex;justify-content:space-between;align-items:center}.head h1{margin:0;font-size:12px}.head p,.head b{margin:0;font-size:5.8px}.body{min-height:0;display:grid;grid-template-columns:1fr 21mm;gap:1.2mm;padding:1.1mm 2mm}.part small,.cell small{display:block;color:#65789d;font-size:5.7px;font-weight:800}.part h2{font-size:15px;line-height:1.05;margin:.2mm 0;overflow-wrap:anywhere}.part p{margin:0;font-size:6.6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.55mm 2mm;margin-top:.7mm}.cell b{display:block;font-size:6.6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.qty{margin-top:.6mm;padding:.5mm;border:1px solid #1767df;border-radius:1mm}.qty small{font-size:5.6px}.qty b{font-size:17px;color:#0963da}.qr{display:grid;place-items:center;align-content:center;border:1px solid #b8cbea;border-radius:1mm}.qr img{width:17mm;height:17mm}.qr small{font-size:5px;font-weight:800;text-align:center}.foot{padding:.6mm 2mm;background:#f0f5fd;display:flex;justify-content:space-between;align-items:center;font-size:5.6px}.foot b{font-size:6.5px}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}</style></head><body>
-      <section class="sheet"><div class="head"><div><p>CONTROL STOCK KIT</p><h1>TAG ‡∏á‡∏≤‡∏ô‡∏ó‡∏î‡πÅ‡∏ó‡∏ô</h1></div><div><b>${safe(issue.noticeNo)}</b><p>${safe(formatDateTime(issue.issuedAt))}</p></div></div>
-      <div class="body"><div><div class="part"><small>PART / MATERIAL</small><h2>${safe(item.materialCode)}</h2><p>${safe(item.partName || "‚Äî")}</p></div><div class="grid"><div class="cell"><small>JOB</small><b>${safe(issue.jobNo || "‚Äî")}</b></div><div class="cell"><small>‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤</small><b>${safe(item.customer || "‚Äî")}</b></div><div class="cell"><small>‡πÉ‡∏ö‡∏Ç‡∏≠ QC</small><b>${safe(item.requestNo)}</b></div><div class="cell"><small>‡∏™‡∏≤‡πÄ‡∏´‡∏ï‡∏∏</small><b>${safe(reason)}</b></div><div class="cell"><small>KIT STOCK TAG</small><b>${safe(issue.stockTagCode)}</b></div><div class="qty"><small>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ó‡∏î‡πÅ‡∏ó‡∏ô</small><b>${safe(fmt(issue.qty))} PCS</b></div></div></div><div class="qr"><img src="${replacementQr}" alt="QR"><small>REPLACEMENT TAG</small></div></div>
-      <div class="foot"><b>${safe(issue.issuedByName)} (${safe(issue.issuedByCode)})</b><span>‡∏â‡∏•‡∏≤‡∏Å 100 √ó 55 mm ¬∑ ‡πÑ‡∏°‡πà‡∏°‡∏µ Customer Tag</span></div></section>
-      <script>window.onload=()=>{const image=document.querySelector('img');const print=()=>setTimeout(()=>window.print(),150);if(image&&!image.complete){image.onload=print;image.onerror=print}else print()}<\/script></body></html>`);
-    popup.document.close();
-    void fetch("/api/replacements", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "mark_printed", issueId: issue.id }),
-    }).then(() => loadReplacements());
-  }
-
-  function renderDashboard() {
-    return <DashboardControlCenter
-      userName={user.displayName}
-      userRole={ROLE_LABELS[user.role] || user.role}
-      signOutPath={signOutPath}
-      onSignOut={signOut}
-      canOpen={(target) => allowedPages.has(target)}
-      onNavigate={(target, detail) => {
-        setFilterDate(detail?.date || "");
-        setFilterFact(detail?.fact || "ALL");
-        setFilterTime("ALL");
-        setQuery("");
-        setDashboardStatusFilter(detail?.status || "all");
-        setPlanPage(1);
-        go(target);
-      }}
-    />;
-  }
-
-  function renderParts() {
-    const partNeedle = partSearch.trim().toLowerCase();
-    const visibleParts = stock.parts.filter((item) => !partNeedle
-      || item.materialCode.toLowerCase().includes(partNeedle)
-      || item.partName.toLowerCase().includes(partNeedle)
-      || item.customer.toLowerCase().includes(partNeedle)
-      || item.location.toLowerCase().includes(partNeedle));
-    const activeParts = stock.parts.filter((item) => item.active).length;
-    const partTotalPages = Math.max(1, Math.ceil(visibleParts.length / partPageSize));
-    const safePartPage = Math.min(partPage, partTotalPages);
-    const partStartIndex = (safePartPage - 1) * partPageSize;
-    const paginatedParts = visibleParts.slice(partStartIndex, partStartIndex + partPageSize);
-    const partPageButtons: Array<number | "‚Ä¶"> = [];
-    for (let current = 1; current <= partTotalPages; current += 1) {
-      if (current === 1 || current === partTotalPages || Math.abs(current - safePartPage) <= 1) {
-        partPageButtons.push(current);
-      } else if (partPageButtons[partPageButtons.length - 1] !== "‚Ä¶") {
-        partPageButtons.push("‚Ä¶");
-      }
-    }
-    const inactiveParts = stock.parts.length - activeParts;
-    const formCode = stockPartForm.materialCode.trim().toUpperCase();
-    const formImage = partImages.find((item) => item.materialCode === formCode);
-    const formActualImage = partActualImages.find((item) => item.materialCode === formCode);
-    const bundleMasterMatched = partBundlePreview?.rows.filter((row) => row.masterFile).length || 0;
-    const bundleActualMatched = partBundlePreview?.rows.filter((row) => row.actualFile).length || 0;
-    const bundleWarningCount = (partBundlePreview?.unmatchedMaster.length || 0) + (partBundlePreview?.unmatchedActual.length || 0) + (partBundlePreview?.duplicateImages.length || 0);
-    const editPart = (part: StockPart) => {
-      setStockPartForm({ materialCode: part.materialCode, partName: part.partName, customer: part.customer, location: part.location || "", standardQty: String(part.standardQty || "") });
-      setPartImageCode(part.materialCode);
-      setPartImageFile(null);
-      setPartActualImageFile(null);
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    };
-    const clearPartForm = () => {
-      setStockPartForm({ materialCode: "", partName: "", customer: "", location: "", standardQty: "" });
-      setPartImageCode("");
-      setPartImageFile(null);
-      setPartActualImageFile(null);
-    };
-    return <div className="parts-home">
-      <div className="part-stat-row page-summary">
-        <article className="part-stat blue"><span>‚ñ¶</span><div><small>Part ‡πÉ‡∏ô‡∏£‡∏∞‡∏ö‡∏ö</small><b>{fmt(stock.parts.length)}</b><em>‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</em></div></article>
-        <article className="part-stat green"><span>‚úì</span><div><small>Active</small><b>{fmt(activeParts)}</b><em>Part</em></div></article>
-        <article className="part-stat orange"><span>‚ó∑</span><div><small>‡∏¢‡∏Å‡πÄ‡∏•‡∏¥‡∏Å</small><b>{fmt(inactiveParts)}</b><em>Part</em></div></article>
-        <article className="part-stat purple"><span>‚óá</span><div><small>‡∏°‡∏µ‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô</small><b>{fmt(partImages.length)}</b><em>‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</em></div></article>
-      </div>
-
-      {canEditPage("parts") && <Card className="part-bundle-card" title={<span className="part-bundle-title"><i>‚áß</i><span>‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô Part ‡∏à‡∏≤‡∏Å Excel<small>‡πÄ‡∏•‡∏∑‡∏≠‡∏Å Excel ‡∏≠‡∏¢‡πà‡∏≤‡∏á‡πÄ‡∏î‡∏µ‡∏¢‡∏ß ‡∏´‡∏£‡∏∑‡∏≠‡πÅ‡∏ô‡∏ö‡∏£‡∏π‡∏õ Master ‡πÅ‡∏•‡∏∞‡∏£‡∏π‡∏õ‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á‡∏´‡∏•‡∏≤‡∏¢‡πÑ‡∏ü‡∏•‡πå‡∏û‡∏£‡πâ‡∏≠‡∏°‡∏Å‡∏±‡∏ô</small></span></span>} action={partBundlePreview && <span className="part-bundle-ready">‚úì ‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡πÅ‡∏•‡πâ‡∏ß {fmt(partBundlePreview.rows.length)} Part</span>}>
-        <form className="part-bundle-form" onSubmit={previewPartBundle}>
-          <label className={partBundleExcel ? "selected" : ""}>
-            <span className="part-bundle-icon excel">X</span>
-            <span><b>1. ‡πÑ‡∏ü‡∏•‡πå‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô Part</b><small>{partBundleExcel?.name || "Excel .xlsx ‡∏´‡∏£‡∏∑‡∏≠ .xls"}</small></span>
-            <input ref={partBundleExcelInput} type="file" accept=".xlsx,.xls" disabled={partBundleRunning} onChange={(e) => { setPartBundleExcel(e.target.files?.[0] || null); setPartBundlePreview(null); setPartBundleFailed([]); }} />
-          </label>
-          <label className={partBundleMasterFiles.length ? "selected" : ""}>
-            <span className="part-bundle-icon master">‚ñß</span>
-            <span><b>2. ‡∏£‡∏π‡∏õ‡∏ï‡∏±‡∏ß‡∏≠‡∏¢‡πà‡∏≤‡∏á (Master) ‚Äî ‡πÑ‡∏°‡πà‡∏ö‡∏±‡∏á‡∏Ñ‡∏±‡∏ö</b><small>{partBundleMasterFiles.length ? `${fmt(partBundleMasterFiles.length)} ‡∏£‡∏π‡∏õ` : "‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏´‡∏•‡∏≤‡∏¢‡∏£‡∏π‡∏õ‡πÑ‡∏î‡πâ ¬∑ ‡∏ï‡∏±‡πâ‡∏á‡∏ä‡∏∑‡πà‡∏≠‡πÄ‡∏õ‡πá‡∏ô Part No."}</small></span>
-            <input ref={partBundleMasterInput} type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={partBundleRunning} onChange={(e) => { setPartBundleMasterFiles([...(e.target.files || [])]); setPartBundlePreview(null); setPartBundleFailed([]); }} />
-          </label>
-          <label className={partBundleActualFiles.length ? "selected" : ""}>
-            <span className="part-bundle-icon actual">‚óà</span>
-            <span><b>3. ‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á</b><small>{partBundleActualFiles.length ? `${fmt(partBundleActualFiles.length)} ‡∏£‡∏π‡∏õ` : "‡πÑ‡∏°‡πà‡∏ö‡∏±‡∏á‡∏Ñ‡∏±‡∏ö ¬∑ ‡πÉ‡∏ä‡πâ‡πÄ‡∏ó‡∏µ‡∏¢‡∏ö‡∏ï‡∏≠‡∏ô‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å"}</small></span>
-            <input ref={partBundleActualInput} type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={partBundleRunning} onChange={(e) => { setPartBundleActualFiles([...(e.target.files || [])]); setPartBundlePreview(null); setPartBundleFailed([]); }} />
-          </label>
-          <button className="button primary part-bundle-check" disabled={partBundleRunning || !partBundleExcel}>‚åï ‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡πÅ‡∏•‡∏∞‡∏à‡∏±‡∏ö‡∏Ñ‡∏π‡πà‡∏£‡∏π‡∏õ</button>
-        </form>
-        <p className="part-bundle-help">Part No. ‡∏ó‡∏µ‡πà‡∏°‡∏µ‡∏≠‡∏¢‡∏π‡πà‡πÉ‡∏ô‡∏£‡∏∞‡∏ö‡∏ö‡πÅ‡∏•‡πâ‡∏ß‡∏à‡∏∞‡∏ñ‡∏π‡∏Å‡∏Ç‡πâ‡∏≤‡∏°‡πÅ‡∏•‡∏∞‡∏Ñ‡∏á‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏Å‡∏±‡∏ö‡∏£‡∏π‡∏õ‡πÄ‡∏î‡∏¥‡∏°‡πÑ‡∏ß‡πâ ¬∑ ‡∏ä‡∏∑‡πà‡∏≠‡∏£‡∏π‡∏õ‡∏ï‡πâ‡∏≠‡∏á‡∏ï‡∏£‡∏á‡∏Å‡∏±‡∏ö Part No. ‡πÉ‡∏ô Excel ‡πÄ‡∏ä‡πà‡∏ô <code>BA04U385G05-F.jpg</code> ¬∑ ‡∏£‡∏≠‡∏á‡∏£‡∏±‡∏ö JPG, PNG, WebP ‡πÑ‡∏°‡πà‡πÄ‡∏Å‡∏¥‡∏ô 5MB ‡∏ï‡πà‡∏≠‡∏£‡∏π‡∏õ</p>
-
-        {partBundlePreview && <div className="part-bundle-preview">
-          <div className="part-bundle-summary">
-            <span className="blue"><small>Part ‡∏à‡∏≤‡∏Å Excel</small><b>{fmt(partBundlePreview.rows.length)}</b></span>
-            <span className="purple"><small>‡∏à‡∏±‡∏ö‡∏Ñ‡∏π‡πà‡∏£‡∏π‡∏õ Master</small><b>{fmt(bundleMasterMatched)}</b></span>
-            <span className="green"><small>‡∏à‡∏±‡∏ö‡∏Ñ‡∏π‡πà‡∏£‡∏π‡∏õ‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á</small><b>{fmt(bundleActualMatched)}</b></span>
-            <span className={bundleWarningCount ? "orange" : "green"}><small>‡∏ï‡πâ‡∏≠‡∏á‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö</small><b>{fmt(bundleWarningCount)}</b></span>
-          </div>
-          <div className="part-bundle-table">
-            <div className="part-bundle-head"><span>Part No.</span><span>‡∏ä‡∏∑‡πà‡∏≠‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô / Location</span><span>‡∏£‡∏π‡∏õ Master</span><span>‡∏£‡∏π‡∏õ‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á</span></div>
-            <div className="part-bundle-body">{partBundlePreview.rows.slice(0, 100).map((row) => <div className="part-bundle-row" key={row.part.materialCode}>
-              <span><b>{row.part.materialCode}</b><small>{fmt(row.part.standardQty)} ‡∏ä‡∏¥‡πâ‡∏ô/‡∏Å‡∏•‡πà‡∏≠‡∏á</small></span>
-              <span><b>{row.part.partName}</b><small>{row.part.location || "‡πÑ‡∏°‡πà‡∏£‡∏∞‡∏ö‡∏∏ Location"}</small></span>
-              <span className={row.masterFile ? "matched" : "missing"}>{row.masterFile ? `‚úì ${row.masterFile.name}` : "‚Äî ‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏£‡∏π‡∏õ"}</span>
-              <span className={row.actualFile ? "matched" : "optional"}>{row.actualFile ? `‚úì ${row.actualFile.name}` : "‚Äî ‡πÑ‡∏°‡πà‡πÑ‡∏î‡πâ‡πÄ‡∏•‡∏∑‡∏≠‡∏Å"}</span>
-            </div>)}</div>
-            {partBundlePreview.rows.length > 100 && <p className="part-bundle-more">‡πÅ‡∏•‡∏∞‡∏≠‡∏µ‡∏Å {fmt(partBundlePreview.rows.length - 100)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</p>}
-          </div>
-          {bundleWarningCount > 0 && <div className="part-bundle-warnings"><b>‡πÑ‡∏ü‡∏•‡πå‡∏ó‡∏µ‡πà‡∏ï‡πâ‡∏≠‡∏á‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏Å‡πà‡∏≠‡∏ô‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤</b><ul>{[...partBundlePreview.unmatchedMaster, ...partBundlePreview.unmatchedActual, ...partBundlePreview.duplicateImages].map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></div>}
-          {partBundleFailed.length > 0 && <div className="part-bundle-warnings failed"><b>‡∏£‡∏π‡∏õ‡∏ó‡∏µ‡πà‡∏≠‡∏±‡∏õ‡πÇ‡∏´‡∏•‡∏î‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à</b><ul>{partBundleFailed.map((item) => <li key={item.name}><strong>{item.name}</strong> ‚Äî {item.reason}</li>)}</ul></div>}
-          <div className="part-bundle-actions">
-            <button type="button" className="button secondary" disabled={partBundleRunning} onClick={resetPartBundle}>‡∏•‡πâ‡∏≤‡∏á‡πÑ‡∏ü‡∏•‡πå</button>
-            <button type="button" className="button primary" disabled={partBundleRunning} onClick={() => void importPartBundle()}>{partBundleRunning ? `‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å ${fmt(partBundleProgress.done)}/${fmt(partBundleProgress.total)}‚Ä¶` : `‚úì ‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤ ${fmt(partBundlePreview.rows.length)} Part ‡∏û‡∏£‡πâ‡∏≠‡∏° ${fmt(bundleMasterMatched + bundleActualMatched)} ‡∏£‡∏π‡∏õ`}</button>
-          </div>
-        </div>}
-      </Card>}
-
-      {canEditPage("parts") && <Card className="part-editor-card" title={stockPartForm.materialCode ? "‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç Part" : "‡πÄ‡∏û‡∏¥‡πà‡∏° Part ‡πÉ‡∏´‡∏°‡πà"} action={<button className="button primary" form="part-editor-form" disabled={stockSaving}>‚ñ£ {stockSaving ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‚Ä¶" : "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å Part"}</button>}>
-        <form id="part-editor-form" className="part-editor-grid" onSubmit={saveStockPart}>
-          <label><span>Part / Material No. *</span><input value={stockPartForm.materialCode} onChange={(e) => { const code=e.target.value.toUpperCase(); setStockPartForm((current) => ({ ...current, materialCode: code })); setPartImageCode(code); }} required /></label>
-          <label><span>‡∏ä‡∏∑‡πà‡∏≠‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô *</span><input value={stockPartForm.partName} onChange={(e) => setStockPartForm((current) => ({ ...current, partName: e.target.value }))} required /></label>
-          <label><span>‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤</span><input value={stockPartForm.customer} onChange={(e) => setStockPartForm((current) => ({ ...current, customer: e.target.value }))} /></label>
-          <label><span>Location</span><input value={stockPartForm.location} onChange={(e) => setStockPartForm((current) => ({ ...current, location: e.target.value.toUpperCase() }))} placeholder="‡πÄ‡∏ä‡πà‡∏ô A-01 ‡∏´‡∏£‡∏∑‡∏≠ RACK-02" /></label>
-          <label><span>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏™‡∏π‡∏á‡∏™‡∏∏‡∏î‡∏ï‡πà‡∏≠‡∏Å‡∏•‡πà‡∏≠‡∏á *</span><input type="number" min="1" value={stockPartForm.standardQty} onChange={(e) => setStockPartForm((current) => ({ ...current, standardQty: e.target.value }))} required /></label>
-          <div className="part-photo-editor">
-            <div className="part-current-photo">{stockPartForm.materialCode ? <PartImage materialCode={stockPartForm.materialCode} version={formImage?.updatedAt} /> : <span>‚ñß</span>}</div>
-            <label className="part-change-photo"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setPartImageFile(e.target.files?.[0] || null)} /><b>‚áß {formImage ? "‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏£‡∏π‡∏õ‡∏ï‡∏±‡∏ß‡∏≠‡∏¢‡πà‡∏≤‡∏á" : "‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏£‡∏π‡∏õ‡∏ï‡∏±‡∏ß‡∏≠‡∏¢‡πà‡∏≤‡∏á"}</b><small>{partImageFile?.name || "‡∏£‡∏π‡∏õ Master ¬∑ JPG, PNG, WebP (‡πÑ‡∏°‡πà‡πÄ‡∏Å‡∏¥‡∏ô 5MB)"}</small></label>
-          </div>
-          <div className="part-photo-editor">
-            <div className="part-current-photo">{stockPartForm.materialCode ? <PartImage materialCode={stockPartForm.materialCode} slot="actual" version={formActualImage?.updatedAt} /> : <span>‚ñß</span>}</div>
-            <label className="part-change-photo"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setPartActualImageFile(e.target.files?.[0] || null)} /><b>‚áß {formActualImage ? "‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á" : "‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á"}</b><small>{partActualImageFile?.name || "‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô‡∏ó‡∏µ‡πà‡∏à‡∏±‡∏î‡∏ß‡∏≤‡∏á‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á ¬∑ ‡πÉ‡∏ä‡πâ‡πÄ‡∏ó‡∏µ‡∏¢‡∏ö‡∏ï‡∏≠‡∏ô‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å"}</small></label>
-          </div>
-        </form>
-        <div className="part-editor-foot"><span>Excel ‡∏£‡∏≠‡∏á‡∏£‡∏±‡∏ö‡∏Ñ‡∏≠‡∏•‡∏±‡∏°‡∏ô‡πå: Part / Material No., Part Name, Customer, Location ‡πÅ‡∏•‡∏∞ Max Qty per Box</span>{stockPartForm.materialCode && <button type="button" className="tiny-button" onClick={clearPartForm}>Ôºã ‡πÄ‡∏û‡∏¥‡πà‡∏° Part ‡πÉ‡∏´‡∏°‡πà</button>}</div>
-      </Card>}
-
-      <Card className="part-list-card" title="‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ Part ‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î" action={<div className="part-list-actions"><input value={partSearch} onChange={(e) => { setPartSearch(e.target.value); setPartPage(1); }} placeholder="‚åï ‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤ Part No., ‡∏ä‡∏∑‡πà‡∏≠‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô, ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ ‡∏´‡∏£‡∏∑‡∏≠ Location..." /><button className="button secondary" onClick={() => void downloadPartWorkbook("template")}>‚á© ‡∏î‡∏≤‡∏ß‡∏ô‡πå‡πÇ‡∏´‡∏•‡∏î Template</button><button className="button secondary" disabled={!stock.parts.length} onClick={() => void downloadPartWorkbook("export")}>‚á© ‡∏î‡∏≤‡∏ß‡∏ô‡πå‡πÇ‡∏´‡∏•‡∏î‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏• Part</button><button className="button secondary" onClick={() => void Promise.all([loadStock(), loadPartImages()])}>‚Üª ‡∏£‡∏µ‡πÄ‡∏ü‡∏£‡∏ä</button></div>}>
-        {visibleParts.length ? <div className="part-modern-table">
-          <div className="part-modern-head"><span>Part / Material No.</span><span>‡∏ä‡∏∑‡πà‡∏≠‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô</span><span>‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤</span><span>Location</span><span>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏™‡∏π‡∏á‡∏™‡∏∏‡∏î‡∏ï‡πà‡∏≠‡∏Å‡∏•‡πà‡∏≠‡∏á</span><span>‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞</span><span>‡∏à‡∏±‡∏î‡∏Å‡∏≤‡∏£</span></div>
-          <div className="part-modern-body">{paginatedParts.map((part) => {
-            const masterImage = partImages.find((item) => item.materialCode === part.materialCode);
-            const actualImage = partActualImages.find((item) => item.materialCode === part.materialCode);
-            const hasTag = stock.tags.some((tag) => tag.materialCode === part.materialCode);
-            return <div className="part-modern-row" key={part.materialCode}>
-              <span className="part-code-cell"><PartImagePair materialCode={part.materialCode} masterVersion={masterImage?.updatedAt} actualVersion={actualImage?.updatedAt} masterAvailable={Boolean(masterImage)} actualAvailable={Boolean(actualImage)} /><span><b>{part.materialCode}</b><small>‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á: {actualImage ? "‡∏°‡∏µ‡∏£‡∏π‡∏õ" : "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ"} ¬∑ Master: {masterImage ? "‡∏°‡∏µ‡∏£‡∏π‡∏õ" : "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ"}</small></span></span>
-              <span>{part.partName}</span><span>{part.customer || "‚Äî"}</span><span><b>{part.location || "‚Äî"}</b></span><span>{part.standardQty > 0 ? fmt(part.standardQty) + " ‡∏ä‡∏¥‡πâ‡∏ô" : "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏Å‡∏≥‡∏´‡∏ô‡∏î"}</span>
-              <span><em className={"part-active " + (part.active ? "on" : "off")}>{part.active ? "‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô" : "‡∏¢‡∏Å‡πÄ‡∏•‡∏¥‡∏Å"}</em></span>
-              <span className="part-row-actions">{canEditPage("parts") ? <><button className="tiny-button" onClick={() => editPart(part)}>‚úé ‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç</button>{user.role === "admin" && (hasTag ? <small>‡∏°‡∏µ‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥ Stock</small> : <button className="tiny-button danger-outline" disabled={Boolean(deletingPartCode)} onClick={() => void deleteStockPart(part)}>‚ô≤ {deletingPartCode === part.materialCode ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏•‡∏ö‚Ä¶" : "‡∏•‡∏ö"}</button>)}</> : <small>‡∏î‡∏π‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡πÄ‡∏ó‡πà‡∏≤‡∏ô‡∏±‡πâ‡∏ô</small>}</span>
-            </div>;
-          })}</div>
-          <footer>
-            <span>‡πÅ‡∏™‡∏î‡∏á {fmt(partStartIndex + 1)} - {fmt(Math.min(partStartIndex + partPageSize, visibleParts.length))} ‡∏à‡∏≤‡∏Å {fmt(visibleParts.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</span>
-            <nav className="part-pagination" aria-label="‡∏´‡∏ô‡πâ‡∏≤‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ Part">
-              <button className="part-page-button" disabled={safePartPage === 1} onClick={() => setPartPage(Math.max(1, safePartPage - 1))}>‚Äπ</button>
-              {partPageButtons.map((item, index) => item === "‚Ä¶" ? <span className="part-page-dots" key={"dots-" + index}>‚Ä¶</span> : <button className={"part-page-button " + (item === safePartPage ? "active" : "")} key={item} onClick={() => setPartPage(item)}>{item}</button>)}
-              <button className="part-page-button" disabled={safePartPage === partTotalPages} onClick={() => setPartPage(Math.min(partTotalPages, safePartPage + 1))}>‚Ä∫</button>
-            </nav>
-            <label className="part-page-size">‡πÅ‡∏™‡∏î‡∏á‡∏ï‡πà‡∏≠‡∏´‡∏ô‡πâ‡∏≤ <select value={partPageSize} onChange={(e) => { setPartPageSize(Number(e.target.value)); setPartPage(1); }}><option value={10}>10</option><option value={20}>20</option><option value={50}>50</option></select></label>
-          </footer>
-        </div> : <Empty title="‡πÑ‡∏°‡πà‡∏û‡∏ö Part" text={partNeedle ? "‡∏•‡∏≠‡∏á‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏Ñ‡∏≥‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤" : "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ Part ‡πÉ‡∏ô‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô Stock"} />}
-      </Card>
-
-      {canEditPage("parts") && <details className="part-bulk-panel"><summary>‡∏≠‡∏±‡∏õ‡πÇ‡∏´‡∏•‡∏î‡∏£‡∏π‡∏õ‡∏´‡∏•‡∏≤‡∏¢ Part ‡∏û‡∏£‡πâ‡∏≠‡∏°‡∏Å‡∏±‡∏ô ‚Äî Master ‡πÅ‡∏•‡∏∞‡∏£‡∏π‡∏õ‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á</summary>
-        <form className="part-image-upload bulk" onSubmit={uploadPartImagesBulk}>
-          <label className="part-file bulk-file"><span>‡∏£‡∏π‡∏õ‡∏ï‡∏±‡∏ß‡∏≠‡∏¢‡πà‡∏≤‡∏á (Master) ¬∑ ‡∏ä‡∏∑‡πà‡∏≠‡πÑ‡∏ü‡∏•‡πå‡∏ï‡πâ‡∏≠‡∏á‡∏ï‡∏£‡∏á‡∏Å‡∏±‡∏ö Part No.</span><input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={bulkImageRunning} onChange={(e) => { setBulkMasterImageFiles([...(e.target.files || [])]); setBulkImageFailed([]); }} /><small>{bulkMasterImageFiles.length ? `‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡πÅ‡∏•‡πâ‡∏ß ${fmt(bulkMasterImageFiles.length)} ‡∏£‡∏π‡∏õ` : "‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡πÑ‡∏î‡πâ‡∏´‡∏•‡∏≤‡∏¢‡∏£‡∏π‡∏õ"}</small></label>
-          <label className="part-file bulk-file"><span>‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á ¬∑ ‡∏ä‡∏∑‡πà‡∏≠‡πÑ‡∏ü‡∏•‡πå‡∏ï‡πâ‡∏≠‡∏á‡∏ï‡∏£‡∏á‡∏Å‡∏±‡∏ö Part No.</span><input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={bulkImageRunning} onChange={(e) => { setBulkActualImageFiles([...(e.target.files || [])]); setBulkImageFailed([]); }} /><small>{bulkActualImageFiles.length ? `‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡πÅ‡∏•‡πâ‡∏ß ${fmt(bulkActualImageFiles.length)} ‡∏£‡∏π‡∏õ` : "‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡πÑ‡∏î‡πâ‡∏´‡∏•‡∏≤‡∏¢‡∏£‡∏π‡∏õ"}</small></label>
-          <button className="button primary" disabled={bulkImageRunning || (!bulkMasterImageFiles.length && !bulkActualImageFiles.length)}>{bulkImageRunning ? `‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏≠‡∏±‡∏õ‡πÇ‡∏´‡∏•‡∏î ${fmt(bulkImageProgress.done)}/${fmt(bulkImageProgress.total)}‚Ä¶` : `‚áß ‡∏≠‡∏±‡∏õ‡πÇ‡∏´‡∏•‡∏î ${fmt(bulkMasterImageFiles.length + bulkActualImageFiles.length)} ‡∏£‡∏π‡∏õ`}</button>
-        </form>
-        <p className="part-bundle-help">‡∏ï‡∏±‡πâ‡∏á‡∏ä‡∏∑‡πà‡∏≠‡πÑ‡∏ü‡∏•‡πå‡πÄ‡∏õ‡πá‡∏ô Part No. ‡πÄ‡∏ä‡πà‡∏ô <code>BA04U385G05-F.jpg</code> ‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡πÅ‡∏¢‡∏Å‡πÄ‡∏Å‡πá‡∏ö Master ‡πÅ‡∏•‡∏∞‡∏£‡∏π‡∏õ‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á‡∏ï‡∏≤‡∏°‡∏ä‡πà‡∏≠‡∏á‡∏ó‡∏µ‡πà‡πÄ‡∏•‡∏∑‡∏≠‡∏Å</p>
-        {bulkImageFailed.length > 0 && <div className="bulk-preview failed"><b>‡πÑ‡∏ü‡∏•‡πå‡∏ó‡∏µ‡πà‡∏≠‡∏±‡∏õ‡πÇ‡∏´‡∏•‡∏î‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à</b><ul>{bulkImageFailed.map((item) => <li key={item.name}><code>{item.name}</code><small>{item.reason}</small></li>)}</ul></div>}
-      </details>}
-    </div>;
-  }
-
-  function renderTags() {
-    const awaitingReceipt = stock.tags.filter((item) => item.status === "printed").length;
-    const receivedTags = stock.tags.filter((item) => item.status === "in_stock" || item.status === "depleted").length;
-    const tagNeedle = tagSearch.trim().toLowerCase();
-    const visibleTags = stock.tags.filter((item) => !tagNeedle || [
-      item.tagId, item.materialCode, item.partName, item.customer,
-      item.jobNo, item.productionDate, item.createdAt,
-    ].some((value) => String(value || "").toLowerCase().includes(tagNeedle)));
-    const jobCount = new Set(stock.tags.map((item) => item.jobNo.trim().toUpperCase()).filter(Boolean)).size;
-    const selectedStockPart = stock.parts.find((item) => item.materialCode === stockTagForm.materialCode);
-    const selectedPartImage = partImages.find((item) => item.materialCode === stockTagForm.materialCode);
-    const activeStockParts = stock.parts.filter((item) => item.active).sort((x, y) => x.materialCode.localeCompare(y.materialCode));
-    const plannedTotalQty = Number(stockTagForm.qty || 0);
-    const plannedBoxCount = selectedStockPart?.standardQty && plannedTotalQty > 0 ? Math.ceil(plannedTotalQty / selectedStockPart.standardQty) : 0;
-    const tagTotalPages = Math.max(1, Math.ceil(visibleTags.length / tagPageSize));
-    const safeTagPage = Math.min(tagPage, tagTotalPages);
-    const tagStartIndex = (safeTagPage - 1) * tagPageSize;
-    const paginatedTags = visibleTags.slice(tagStartIndex, tagStartIndex + tagPageSize);
-    const tagPageButtons: Array<number | "‚Ä¶"> = [];
-    for (let current = 1; current <= tagTotalPages; current += 1) {
-      if (current === 1 || current === tagTotalPages || Math.abs(current - safeTagPage) <= 1) tagPageButtons.push(current);
-      else if (tagPageButtons[tagPageButtons.length - 1] !== "‚Ä¶") tagPageButtons.push("‚Ä¶");
-    }
-    const jobGroupMap = new Map<string, { jobNo: string; materialCode: string; partName: string; totalQty: number; receivedQty: number; pendingQty: number; ngQty: number; tagCount: number; cancelledQty: number }>();
-    stock.tags.forEach((tag) => {
-      const key = tag.jobNo + "|" + tag.materialCode;
-      const current = jobGroupMap.get(key) || { jobNo: tag.jobNo, materialCode: tag.materialCode, partName: tag.partName, totalQty: 0, receivedQty: 0, pendingQty: 0, ngQty: 0, tagCount: 0, cancelledQty: 0 };
-      if (tag.status === "cancelled") {
-        current.cancelledQty += Number(tag.qty);
-        jobGroupMap.set(key, current);
-        return;
-      }
-      current.totalQty += Number(tag.qty);
-      current.tagCount += 1;
-      if (tag.status === "printed") current.pendingQty += Number(tag.qty);
-      else if (tag.status === "ng") current.ngQty += Number(tag.ngQty ?? tag.qty);
-      else if (tag.status === "in_stock" || tag.status === "depleted") {
-        current.receivedQty += Number(tag.receivedQty ?? tag.qty);
-        current.ngQty += Number(tag.ngQty || 0);
-      }
-      jobGroupMap.set(key, current);
-    });
-    const closedJobKeys = new Set(stock.jobClosures.map((item) => item.jobNo + "|" + item.materialCode));
-    const stockJobGroups = [...jobGroupMap.values()].sort((a, b) => b.pendingQty - a.pendingQty || b.ngQty - a.ngQty || a.jobNo.localeCompare(b.jobNo));
-    const jobCloseNeedle = jobCloseSearch.trim().toLowerCase();
-    const filteredStockJobGroups = stockJobGroups.filter((group) => !jobCloseNeedle
-      || group.jobNo.toLowerCase().includes(jobCloseNeedle)
-      || group.materialCode.toLowerCase().includes(jobCloseNeedle)
-      || group.partName.toLowerCase().includes(jobCloseNeedle));
-    const jobClosePageSize = 10;
-    const jobCloseTotalPages = Math.max(1, Math.ceil(filteredStockJobGroups.length / jobClosePageSize));
-    const safeJobClosePage = Math.min(jobClosePage, jobCloseTotalPages);
-    const jobCloseStartIndex = (safeJobClosePage - 1) * jobClosePageSize;
-    const paginatedStockJobGroups = filteredStockJobGroups.slice(jobCloseStartIndex, jobCloseStartIndex + jobClosePageSize);
-    const jobClosePageButtons: Array<number | "‚Ä¶"> = [];
-    for (let current = 1; current <= jobCloseTotalPages; current += 1) {
-      if (current === 1 || current === jobCloseTotalPages || Math.abs(current - safeJobClosePage) <= 1) jobClosePageButtons.push(current);
-      else if (jobClosePageButtons[jobClosePageButtons.length - 1] !== "‚Ä¶") jobClosePageButtons.push("‚Ä¶");
-    }
-
-    return <div className="tag-print-home">
-      <div className="tag-stat-row page-summary">
-        <article className="tag-stat green"><span>‚ñ§</span><div><small>Tag ‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î</small><b>{fmt(stock.tags.length)}</b><em>‡πÉ‡∏ö</em></div></article>
-        <article className="tag-stat orange"><span>‚ó∑</span><div><small>‡∏£‡∏≠‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Stock</small><b>{fmt(awaitingReceipt)}</b><em>‡πÉ‡∏ö</em></div></article>
-        <article className="tag-stat purple"><span>‚úì</span><div><small>‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡πÅ‡∏•‡πâ‡∏ß</small><b>{fmt(receivedTags)}</b><em>‡πÉ‡∏ö</em></div></article>
-        <article className="tag-stat blue"><span>‚ñ£</span><div><small>Job ‡∏ó‡∏µ‡πà‡∏™‡∏£‡πâ‡∏≤‡∏á Tag</small><b>{fmt(jobCount)}</b><em>Job</em></div></article>
-      </div>
-
-      {canEditPage("tags") && <Card className="tag-create-card" title="‡∏™‡∏£‡πâ‡∏≤‡∏á‡πÅ‡∏•‡∏∞‡∏û‡∏¥‡∏°‡∏û‡πå Tag ‡∏Å‡πà‡∏≠‡∏ô‡∏™‡πà‡∏á‡πÄ‡∏Ç‡πâ‡∏≤ Stock" action={<button className="button primary" form="tag-create-form" disabled={stockSaving || !selectedStockPart || selectedStockPart.standardQty <= 0}>‚ñ£ {stockSaving ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏™‡∏£‡πâ‡∏≤‡∏á‚Ä¶" : "‡∏™‡∏£‡πâ‡∏≤‡∏á Tag"}</button>}>
-        <form id="tag-create-form" className="tag-create-form" onSubmit={createStockTag}>
-          <label className="tag-part-select"><span>‡πÄ‡∏•‡∏∑‡∏≠‡∏Å Part *</span><input list="stock-part-codes" value={stockTagForm.materialCode} onChange={(event) => setStockTagForm((current) => ({ ...current, materialCode: event.target.value.toUpperCase(), qty: "" }))} placeholder="‡∏û‡∏¥‡∏°‡∏û‡πå Part No. ‡∏´‡∏£‡∏∑‡∏≠‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£" autoComplete="off" spellCheck={false} required /></label>
-          <datalist id="stock-part-codes">{activeStockParts.map((item) => <option key={item.materialCode} value={item.materialCode}>{item.partName}{item.customer ? ` ¬∑ ${item.customer}` : ""}</option>)}</datalist>
-          <label><span>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏™‡∏π‡∏á‡∏™‡∏∏‡∏î‡∏ï‡πà‡∏≠‡∏Å‡∏•‡πà‡∏≠‡∏á</span><input value={selectedStockPart?.standardQty ? fmt(selectedStockPart.standardQty) : ""} placeholder="‡πÄ‡∏•‡∏∑‡∏≠‡∏Å Part ‡∏Å‡πà‡∏≠‡∏ô" readOnly /></label>
-          <label><span>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏á‡∏≤‡∏ô‡∏£‡∏ß‡∏° (Job) *</span><input type="number" min="1" value={stockTagForm.qty} onChange={(event) => setStockTagForm((current) => ({ ...current, qty: event.target.value }))} required /></label>
-          <label className="tag-job-field"><span>Job *</span><input value={stockTagForm.jobNo} onChange={(event) => setStockTagForm((current) => ({ ...current, jobNo: event.target.value.toUpperCase() }))} placeholder="‡∏Å‡∏£‡∏≠‡∏Å Job" required /></label>
-          <div className="tag-auto-photo">{selectedStockPart ? <PartImage materialCode={selectedStockPart.materialCode} version={selectedPartImage?.updatedAt} /> : <div className="tag-auto-photo-empty"><span>‚ñß</span><b>‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô</b><small>‡∏î‡∏∂‡∏á‡∏à‡∏≤‡∏Å‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô Part ‡∏≠‡∏±‡∏ï‡πÇ‡∏ô‡∏°‡∏±‡∏ï‡∏¥</small></div>}</div>
-          <div className="tag-create-note">
-            <span>{selectedStockPart ? "‚úì" : "‚ìò"}</span>
-            <div>{selectedStockPart ? <><b>{selectedStockPart.materialCode} ¬∑ {selectedStockPart.partName}</b><small>{plannedBoxCount > 0 ? `‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡∏™‡∏£‡πâ‡∏≤‡∏á ${fmt(plannedBoxCount)} Tag ¬∑ ‡∏Å‡∏•‡πà‡∏≠‡∏á‡∏•‡∏∞‡∏™‡∏π‡∏á‡∏™‡∏∏‡∏î ${fmt(selectedStockPart.standardQty)} ‡∏ä‡∏¥‡πâ‡∏ô` : "‡∏Å‡∏£‡∏≠‡∏Å‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏á‡∏≤‡∏ô‡∏£‡∏ß‡∏°‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏Ñ‡∏≥‡∏ô‡∏ß‡∏ì‡∏à‡∏≥‡∏ô‡∏ß‡∏ô Tag"}</small></> : <><b>{stockTagForm.materialCode ? "‡πÑ‡∏°‡πà‡∏û‡∏ö Part ‡∏ô‡∏µ‡πâ‡πÉ‡∏ô‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô" : "‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ Part ‡πÄ‡∏û‡∏∑‡πà‡∏≠‡πÄ‡∏£‡∏¥‡πà‡∏°‡∏™‡∏£‡πâ‡∏≤‡∏á Tag"}</b><small>‡∏£‡∏π‡∏õ‡πÅ‡∏•‡∏∞‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ï‡πà‡∏≠‡∏Å‡∏•‡πà‡∏≠‡∏á‡∏à‡∏∞‡∏î‡∏∂‡∏á‡∏à‡∏≤‡∏Å‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô Part</small></>}</div>
-          </div>
-          <button className="button primary tag-create-submit" disabled={stockSaving || !selectedStockPart || selectedStockPart.standardQty <= 0}>‚ñ£ ‡∏™‡∏£‡πâ‡∏≤‡∏á Tag ‡∏ï‡∏≤‡∏°‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á</button>
-        </form>
-        {createdStockTags.length > 0 && <div className="tag-created-banner"><PartImage materialCode={createdStockTags[0].materialCode} compact /><div><small>‡∏™‡∏£‡πâ‡∏≤‡∏á‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à ¬∑ Tag ‡∏Ç‡∏ô‡∏≤‡∏î 10 √ó 5.5 ‡∏ã‡∏°.</small><b>{fmt(createdStockTags.length)} Tag / {fmt(createdStockTags.reduce((sum, item) => sum + item.qty, 0))} ‡∏ä‡∏¥‡πâ‡∏ô</b><p>{createdStockTags[0].materialCode} ¬∑ Job {createdStockTags[0].jobNo}</p></div><div className="tag-print-actions"><button className="button secondary" onClick={() => void printStockTags(createdStockTags, "a4")}>‚ñ§ A4 (10 Tag)</button><button className="button primary" onClick={() => void printStockTags(createdStockTags, "100x55")}>Bluetooth ¬∑ RPP04 ‡∏û‡∏¥‡∏°‡∏û‡πå‡∏ï‡∏£‡∏á</button></div></div>}
-      </Card>}
-
-      {canPrintTags && <Card className="tag-list-card" title="Tag ‡∏ó‡∏µ‡πà‡∏™‡∏£‡πâ‡∏≤‡∏á‡πÅ‡∏•‡πâ‡∏ß" action={<button className="button secondary" onClick={() => void loadStock()}>‚Üª ‡∏£‡∏µ‡πÄ‡∏ü‡∏£‡∏ä</button>}>
-        <div className="tag-list-toolbar"><input value={tagSearch} onChange={(event) => { setTagSearch(event.target.value); setTagPage(1); }} placeholder="‚åï ‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤ Tag ID, Part No., Job, ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ ‡∏´‡∏£‡∏∑‡∏≠‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏≠‡∏≠‡∏Å Tag" />{tagSearch && <button type="button" className="button secondary" onClick={() => { setTagSearch(""); setTagPage(1); }}>‡∏•‡πâ‡∏≤‡∏á</button>}</div>
-        <p className="tag-list-help">‡∏û‡∏ö {fmt(visibleTags.length)} ‡∏à‡∏≤‡∏Å {fmt(stock.tags.length)} Tag ¬∑ Tag ‡∏ó‡∏µ‡πà‡∏™‡∏£‡πâ‡∏≤‡∏á‡πÅ‡∏•‡πâ‡∏ß‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç‡πÑ‡∏°‡πà‡πÑ‡∏î‡πâ ¬∑ ‡∏´‡∏≤‡∏Å‡∏≠‡∏≠‡∏Å Tag ‡πÅ‡∏ö‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß ‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡∏•‡πá‡∏≠‡∏Å‡∏Å‡∏≤‡∏£‡∏û‡∏¥‡∏°‡∏û‡πå Tag ‡∏ï‡πâ‡∏ô‡∏â‡∏ö‡∏±‡∏ö‡πÅ‡∏•‡∏∞‡πÉ‡∏´‡πâ‡∏û‡∏¥‡∏°‡∏û‡πå‡∏ã‡πâ‡∏≥‡∏à‡∏≤‡∏Å Tag ‡πÅ‡∏ö‡πà‡∏á‡πÄ‡∏ó‡πà‡∏≤‡∏ô‡∏±‡πâ‡∏ô</p>
-        {stockLoading ? <div className="inline-loading">‡∏Å‡∏≥‡∏•‡∏±‡∏á‡πÇ‡∏´‡∏•‡∏î Tag‚Ä¶</div> : visibleTags.length ? <div className="tag-modern-table">
-          <div className="tag-modern-head"><span>Tag ID</span><span>Part / ‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô</span><span>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô/‡∏Å‡∏•‡πà‡∏≠‡∏á</span><span>Job</span><span>‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏≠‡∏≠‡∏Å Tag / ‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Stock</span><span>‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞</span><span>‡∏à‡∏±‡∏î‡∏Å‡∏≤‡∏£</span></div>
-          <div className="tag-modern-body">{paginatedTags.map((item) => {
-            const image = partImages.find((entry) => entry.materialCode === item.materialCode);
-            const boxMatch = item.tagId.match(/-B(\d+)OF(\d+)$/);
-            const statusText = item.status === "cancelled" ? "‡∏¢‡∏Å‡πÄ‡∏•‡∏¥‡∏Å‡πÅ‡∏•‡πâ‡∏ß" : item.status === "ng" ? "NG / ‡∏õ‡∏¥‡∏î‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤" : item.status === "depleted" ? "‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‡∏´‡∏°‡∏î" : item.status === "printed" ? "‡∏£‡∏≠‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤" : item.reservedQty ? "‡∏£‡∏≠‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å" : "‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡πÅ‡∏•‡πâ‡∏ß";
-            const statusClass = item.status === "cancelled" || item.status === "ng" || item.status === "depleted" ? "over" : item.status === "printed" || item.reservedQty ? "partial" : "completed";
-            return <div className="tag-modern-row" key={item.id}>
-              <span className="tag-id-cell"><b>{item.tagId}</b><small>{item.splitLabelId ? "‡∏ñ‡∏π‡∏Å‡πÅ‡∏ö‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß ¬∑ ‡∏•‡πá‡∏≠‡∏Å Tag ‡∏ï‡πâ‡∏ô‡∏â‡∏ö‡∏±‡∏ö" : boxMatch ? `‡∏Å‡∏•‡πà‡∏≠‡∏á ${Number(boxMatch[1])} / ${Number(boxMatch[2])}` : "Tag ‡∏á‡∏≤‡∏ô"}</small></span>
-              <span className="tag-product-cell"><PartImage materialCode={item.materialCode} compact version={image?.updatedAt} /><span><b>{item.materialCode}</b><small>{item.partName}</small><small>{item.customer || "‡πÑ‡∏°‡πà‡∏£‡∏∞‡∏ö‡∏∏‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤"}</small></span></span>
-              <span><b>{fmt(item.qty)} ‡∏ä‡∏¥‡πâ‡∏ô</b></span>
-              <span><b>{item.jobNo}</b></span>
-              <span><b>‡∏≠‡∏≠‡∏Å Tag: {formatDateOnly(item.createdAt)}</b><small>{item.receivedAt ? `‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Stock: ${formatDateTime(item.receivedAt)}` : "‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏ú‡∏•‡∏¥‡∏ï: ‡∏£‡∏≠‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Stock"}</small></span>
-              <span><em className={`status ${statusClass}`}>{statusText}</em></span>
-              <span className="tag-row-actions">{item.status === "cancelled" ? <small>‡∏´‡πâ‡∏≤‡∏°‡πÉ‡∏ä‡πâ Tag ‡πÉ‡∏ö‡∏ô‡∏µ‡πâ</small> : item.splitLabelId ? <button className="tiny-button" type="button" onClick={() => setSplitTagRequest({ labelId: item.splitLabelId })}>‚ñ§ ‡∏î‡∏π Tag ‡πÅ‡∏ö‡πà‡∏á</button> : <><button className="tiny-button" onClick={() => void printStockTags(item, "a4")}>A4</button><button className="tiny-button" onClick={() => void printStockTags(item, "100x55")}>RPP04 ‡∏ï‡∏£‡∏á</button></>}{user.role === "admin" && item.status === "printed" && <button type="button" className="tiny-button danger-outline" disabled={Boolean(deletingStockTagId)} onClick={() => void deleteStockTag(item)}>{deletingStockTagId === item.tagId ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏•‡∏ö‚Ä¶" : "‚ô≤ ‡∏•‡∏ö"}</button>}</span>
-            </div>;
-          })}</div>
-          <footer>
-            <span>‡πÅ‡∏™‡∏î‡∏á {fmt(tagStartIndex + 1)} - {fmt(Math.min(tagStartIndex + tagPageSize, visibleTags.length))} ‡∏à‡∏≤‡∏Å {fmt(visibleTags.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</span>
-            <nav className="part-pagination" aria-label="‡∏´‡∏ô‡πâ‡∏≤‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ Tag"><button className="part-page-button" disabled={safeTagPage === 1} onClick={() => setTagPage(Math.max(1, safeTagPage - 1))}>‚Äπ</button>{tagPageButtons.map((item, index) => item === "‚Ä¶" ? <span className="part-page-dots" key={"tag-dots-" + index}>‚Ä¶</span> : <button className={"part-page-button " + (item === safeTagPage ? "active" : "")} key={item} onClick={() => setTagPage(item)}>{item}</button>)}<button className="part-page-button" disabled={safeTagPage === tagTotalPages} onClick={() => setTagPage(Math.min(tagTotalPages, safeTagPage + 1))}>‚Ä∫</button></nav>
-            <label className="part-page-size">‡πÅ‡∏™‡∏î‡∏á‡∏ï‡πà‡∏≠‡∏´‡∏ô‡πâ‡∏≤ <select value={tagPageSize} onChange={(event) => { setTagPageSize(Number(event.target.value)); setTagPage(1); }}><option value={10}>10</option><option value={20}>20</option><option value={50}>50</option></select></label>
-          </footer>
-        </div> : <Empty title={tagNeedle ? "‡πÑ‡∏°‡πà‡∏û‡∏ö Tag ‡∏ó‡∏µ‡πà‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤" : "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ Tag"} text={tagNeedle ? "‡∏•‡∏≠‡∏á‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏Ñ‡∏≥‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤" : "‡πÄ‡∏•‡∏∑‡∏≠‡∏Å Part ‡πÅ‡∏•‡∏∞‡∏™‡∏£‡πâ‡∏≤‡∏á Tag ‡∏™‡∏≥‡∏´‡∏£‡∏±‡∏ö‡∏ô‡∏≥‡∏á‡∏≤‡∏ô‡πÄ‡∏Ç‡πâ‡∏≤ Stock"} />}
-      </Card>}
-      {canEditPage("stock") && <Card className="stock-job-close-card" title="‡∏õ‡∏¥‡∏î‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Job / ‡∏à‡∏±‡∏î‡∏Å‡∏≤‡∏£‡∏á‡∏≤‡∏ô NG">
-        <p className="stock-job-close-help">‡∏Å‡πà‡∏≠‡∏ô‡∏õ‡∏¥‡∏î Job ‡∏™‡∏≤‡∏°‡∏≤‡∏£‡∏ñ‡∏Å‡∏î ‚Äú‡∏õ‡∏£‡∏±‡∏ö‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ú‡∏•‡∏¥‡∏ï‡∏à‡∏£‡∏¥‡∏á‚Äù ‡πÑ‡∏î‡πâ: ‡∏ú‡∏•‡∏¥‡∏ï‡πÄ‡∏Å‡∏¥‡∏ô‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡∏™‡∏£‡πâ‡∏≤‡∏á Tag ‡πÄ‡∏û‡∏¥‡πà‡∏° ‡∏™‡πà‡∏ß‡∏ô‡∏ú‡∏•‡∏¥‡∏ï‡πÑ‡∏°‡πà‡∏ñ‡∏∂‡∏á‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡∏¢‡∏Å‡πÄ‡∏•‡∏¥‡∏Å‡πÄ‡∏â‡∏û‡∏≤‡∏∞ Tag ‡∏ó‡∏µ‡πà‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡πÅ‡∏•‡∏∞‡∏≠‡∏≠‡∏Å Tag ‡πÄ‡∏®‡∏©‡πÉ‡∏´‡∏°‡πà ‡πÇ‡∏î‡∏¢‡πÑ‡∏°‡πà‡πÅ‡∏Å‡πâ Tag ‡πÄ‡∏î‡∏¥‡∏°</p>
-        <div className="stock-job-close-search"><span>‚åï</span><input value={jobCloseSearch} onChange={(event) => { setJobCloseSearch(event.target.value); setJobClosePage(1); }} placeholder="‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤ Job, Part No. ‡∏´‡∏£‡∏∑‡∏≠‡∏ä‡∏∑‡πà‡∏≠‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô..." />{jobCloseSearch && <button type="button" onClick={() => { setJobCloseSearch(""); setJobClosePage(1); }}>√ó</button>}</div>
-        {filteredStockJobGroups.length ? <><div className="stock-job-close-summary">{paginatedStockJobGroups.map((group) => {
-          const key = group.jobNo + "|" + group.materialCode;
-          return <div className="stock-job-close-row" key={key}>
-            <span><b>{group.jobNo}</b><small>{fmt(group.tagCount)} Tag</small></span>
-            <span><b>{group.materialCode}</b><small>{group.partName}</small></span>
-            <span className="job-metric"><small>‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î</small><b>{fmt(group.totalQty)}</b></span>
-            <span className="job-metric received"><small>‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡πÅ‡∏•‡πâ‡∏ß</small><b>{fmt(group.receivedQty)}</b></span>
-            <span className="job-metric waiting"><small>‡∏£‡∏≠‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤</small><b>{fmt(group.pendingQty)}</b></span>
-            <span className="job-metric ng"><small>NG</small><b>{fmt(group.ngQty)}</b></span>
-            <span className="job-actions">{group.ngQty === 0 && !closedJobKeys.has(key) && <button className="button secondary" disabled={Boolean(jobClosingKey)} onClick={() => openJobQuantityAdjustment({ jobNo: group.jobNo, materialCode: group.materialCode, partName: group.partName, currentQty: group.totalQty })}>¬± ‡∏õ‡∏£‡∏±‡∏ö‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ú‡∏•‡∏¥‡∏ï‡∏à‡∏£‡∏¥‡∏á</button>}{group.pendingQty > 0 && <button className="button danger" disabled={Boolean(jobClosingKey)} onClick={() => void closeStockJob(group.jobNo, group.materialCode, group.totalQty, group.receivedQty, group.pendingQty)}>{jobClosingKey === key ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏õ‡∏¥‡∏î‚Ä¶" : "‡∏õ‡∏¥‡∏î‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Job"}</button>}{group.ngQty > 0 && user.role === "admin" && <button className="button secondary" disabled={Boolean(jobClosingKey)} onClick={() => void reopenNgStockJob(group.jobNo, group.materialCode, group.ngQty)}>‡πÄ‡∏õ‡∏¥‡∏î Job ‡∏Ñ‡∏∑‡∏ô</button>}{group.pendingQty === 0 && group.ngQty === 0 && <em className="stock-job-complete">‚úì ‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡∏Ñ‡∏£‡∏ö‡πÅ‡∏•‡πâ‡∏ß</em>}</span>
-          </div>;
-        })}</div><footer className="stock-job-close-pagination"><span>‡πÅ‡∏™‡∏î‡∏á {fmt(jobCloseStartIndex + 1)} - {fmt(Math.min(jobCloseStartIndex + jobClosePageSize, filteredStockJobGroups.length))} ‡∏à‡∏≤‡∏Å {fmt(filteredStockJobGroups.length)} Job</span><nav aria-label="‡∏´‡∏ô‡πâ‡∏≤‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏õ‡∏¥‡∏î‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Job"><button disabled={safeJobClosePage === 1} onClick={() => setJobClosePage(Math.max(1, safeJobClosePage - 1))}>‚Äπ</button>{jobClosePageButtons.map((item, index) => item === "‚Ä¶" ? <span key={"job-dots-" + index}>‚Ä¶</span> : <button className={item === safeJobClosePage ? "active" : ""} key={item} onClick={() => setJobClosePage(item)}>{item}</button>)}<button disabled={safeJobClosePage === jobCloseTotalPages} onClick={() => setJobClosePage(Math.min(jobCloseTotalPages, safeJobClosePage + 1))}>‚Ä∫</button></nav><b>10 Job / ‡∏´‡∏ô‡πâ‡∏≤</b></footer></> : <Empty title={jobCloseSearch ? "‡πÑ‡∏°‡πà‡∏û‡∏ö Job ‡∏ó‡∏µ‡πà‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤" : "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ Job"} text={jobCloseSearch ? "‡∏•‡∏≠‡∏á‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤‡∏î‡πâ‡∏ß‡∏¢ Job, Part No. ‡∏´‡∏£‡∏∑‡∏≠‡∏ä‡∏∑‡πà‡∏≠‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô" : "‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏™‡∏£‡πâ‡∏≤‡∏á Tag ‡πÅ‡∏•‡πâ‡∏ß Job ‡∏à‡∏∞‡πÅ‡∏™‡∏î‡∏á‡πÉ‡∏ô‡∏™‡πà‡∏ß‡∏ô‡∏ô‡∏µ‡πâ"} />}
-        {stock.jobClosures.length > 0 && <div className="stock-job-close-history"><b>‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡∏õ‡∏¥‡∏î‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡∏•‡πà‡∏≤‡∏™‡∏∏‡∏î</b><ul>{stock.jobClosures.slice(0, 5).map((item) => <li key={item.id}><b>{item.jobNo}</b><span>{item.materialCode}</span><em>NG {fmt(item.ngQty)} ‡∏ä‡∏¥‡πâ‡∏ô</em><span>{item.reason}</span><span>{item.closedByName} ¬∑ {formatDateTime(item.closedAt)}</span></li>)}</ul></div>}
-      </Card>}
-    </div>;
-  }
-
-  function renderManualStock() {
-    const activeStockParts = stock.parts.filter((part) => part.active).sort((left, right) => left.materialCode.localeCompare(right.materialCode));
-    const selectedPart = activeStockParts.find((part) => part.materialCode === manualStockForm.materialCode.trim().toUpperCase());
-    const totalQty = Number(manualStockForm.qty || 0);
-    const packQty = Number(selectedPart?.standardQty || 0);
-    const tagCount = packQty > 0 && totalQty > 0 ? Math.ceil(totalQty / packQty) : 0;
-    const tagQtys = tagCount ? Array.from({ length: tagCount }, (_, index) => index < tagCount - 1 ? packQty : totalQty - (packQty * (tagCount - 1))) : [];
-    const tagTotal = tagQtys.reduce((sum, qty) => sum + qty, 0);
-    const canSubmit = Boolean(selectedPart && packQty > 0 && totalQty > 0 && manualStockForm.jobNo.trim() && manualStockForm.productionDate && tagTotal === totalQty);
-
-    const transactions = Array.from(stock.manualReceipts.reduce((map, item) => {
-      const key = item.transactionNo || `legacy-${item.id}`;
-      const current = map.get(key);
-      if (current) current.items.push(item);
-      else map.set(key, { key, items: [item] });
-      return map;
-    }, new Map<string, { key: string; items: StockManualReceipt[] }>()).values()).slice(0, 20);
-    const openedTransaction = transactions.find((item) => item.key === manualTransactionOpen);
-
-    return <div className="stock-home manual-stock-page">
-      <Card className="stock-management-card manual-stock-card" title="‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Stock ‡πÅ‡∏ö‡∏ö‡∏Ñ‡∏µ‡∏¢‡πå‡πÄ‡∏≠‡∏á">
-        {canEditPage("manual-stock") && <form onSubmit={saveManualStockReceipt}>
-          <div className="manual-stock-workspace">
-            <section className="manual-stock-entry">
-              <header><span>1</span><div><b>‡∏Ñ‡∏µ‡∏¢‡πå‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡πÅ‡∏•‡∏∞‡∏™‡∏£‡πâ‡∏≤‡∏á KIT Tag</b><small>‡πÄ‡∏•‡∏∑‡∏≠‡∏Å Part ‡∏£‡∏∞‡∏ö‡∏∏‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ ‡πÅ‡∏•‡∏∞‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡πÅ‡∏ö‡πà‡∏á Tag ‡∏ï‡∏≤‡∏°‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ö‡∏£‡∏£‡∏à‡∏∏‡∏ï‡πà‡∏≠‡∏Å‡∏•‡πà‡∏≠‡∏á</small></div></header>
-              <div className="stock-management-fields">
-                <label className="wide"><span>Part / Material *</span><input required list="manual-stock-part-options" value={manualStockForm.materialCode} onChange={(event) => setManualStockForm((current) => ({ ...current, materialCode: event.target.value.toUpperCase() }))} placeholder="‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤ Part No. / Material Code / Description" autoComplete="off" spellCheck={false} /><datalist id="manual-stock-part-options">{activeStockParts.map((part) => <option key={part.materialCode} value={part.materialCode}>{part.partName}{part.customer ? ` ¬∑ ${part.customer}` : ""}</option>)}</datalist></label>
-                {selectedPart && <div className="manual-part-summary wide"><PartImage materialCode={selectedPart.materialCode} compact /><span><b>{selectedPart.materialCode}</b><small>{selectedPart.partName}</small><em>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ö‡∏£‡∏£‡∏à‡∏∏‡∏ï‡πà‡∏≠‡∏Å‡∏•‡πà‡∏≠‡∏á: {packQty > 0 ? `${fmt(packQty)} ‡∏ä‡∏¥‡πâ‡∏ô` : "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡πÑ‡∏î‡πâ‡∏Å‡∏≥‡∏´‡∏ô‡∏î"}</em></span></div>}
-                {selectedPart && packQty <= 0 && <p className="manual-stock-error wide">Part ‡∏ô‡∏µ‡πâ‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡πÑ‡∏î‡πâ‡∏Å‡∏≥‡∏´‡∏ô‡∏î‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ö‡∏£‡∏£‡∏à‡∏∏‡∏ï‡πà‡∏≠‡∏Å‡∏•‡πà‡∏≠‡∏á ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏ï‡∏±‡πâ‡∏á‡∏Ñ‡πà‡∏≤‡πÉ‡∏ô‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô Part ‡∏Å‡πà‡∏≠‡∏ô</p>}
-                <label><span>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ *</span><input required type="number" min={1} step={1} inputMode="numeric" value={manualStockForm.qty} onChange={(event) => setManualStockForm((current) => ({ ...current, qty: event.target.value.replace(/[^0-9]/g, "") }))} placeholder="‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ä‡∏¥‡πâ‡∏ô" /></label>
-                <label><span>Job / ‡πÄ‡∏≠‡∏Å‡∏™‡∏≤‡∏£‡∏≠‡πâ‡∏≤‡∏á‡∏≠‡∏¥‡∏á *</span><input required value={manualStockForm.jobNo} onChange={(event) => setManualStockForm((current) => ({ ...current, jobNo: event.target.value.toUpperCase() }))} placeholder="‡πÄ‡∏ä‡πà‡∏ô JOB-260918-001" /></label>
-                <label><span>‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏ú‡∏•‡∏¥‡∏ï *</span><input required type="date" value={manualStockForm.productionDate} onChange={(event) => setManualStockForm((current) => ({ ...current, productionDate: event.target.value }))} /></label>
-                <label><span>‡πÄ‡∏•‡∏Ç‡∏ó‡∏µ‡πà‡πÉ‡∏ö‡∏£‡∏±‡∏ö / ‡∏≠‡πâ‡∏≤‡∏á‡∏≠‡∏¥‡∏á</span><input value={manualStockForm.referenceNo} onChange={(event) => setManualStockForm((current) => ({ ...current, referenceNo: event.target.value }))} placeholder="‡πÑ‡∏°‡πà‡∏ö‡∏±‡∏á‡∏Ñ‡∏±‡∏ö" /></label>
-                <label className="wide"><span>‡∏´‡∏°‡∏≤‡∏¢‡πÄ‡∏´‡∏ï‡∏∏</span><input value={manualStockForm.note} onChange={(event) => setManualStockForm((current) => ({ ...current, note: event.target.value }))} placeholder="‡∏£‡∏∞‡∏ö‡∏∏‡∏´‡∏°‡∏≤‡∏¢‡πÄ‡∏´‡∏ï‡∏∏ (‡∏ñ‡πâ‡∏≤‡∏°‡∏µ)" /></label>
-              </div>
-            </section>
-
-            <section className="manual-tag-preview">
-              <header><span>2</span><div><b>‡∏™‡∏£‡∏∏‡∏õ‡∏Å‡∏≤‡∏£‡∏™‡∏£‡πâ‡∏≤‡∏á Tag</b><small>Preview ‡∏Ñ‡∏≥‡∏ô‡∏ß‡∏ì‡∏à‡∏≤‡∏Å Part Master ‡πÅ‡∏•‡∏∞‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡∏à‡∏£‡∏¥‡∏á</small></div></header>
-              <div className="manual-preview-kpis">
-                <span><small>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤</small><b>{fmt(totalQty)}</b><em>‡∏ä‡∏¥‡πâ‡∏ô</em></span>
-                <span><small>‡∏ö‡∏£‡∏£‡∏à‡∏∏‡∏ï‡πà‡∏≠‡∏Å‡∏•‡πà‡∏≠‡∏á</small><b>{fmt(packQty)}</b><em>‡∏ä‡∏¥‡πâ‡∏ô/‡∏Å‡∏•‡πà‡∏≠‡∏á</em></span>
-                <span><small>‡∏™‡∏£‡πâ‡∏≤‡∏á‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î</small><b>{fmt(tagCount)}</b><em>Tag</em></span>
-              </div>
-              <div className="manual-preview-list">
-                <b>‡∏£‡∏≤‡∏¢‡∏•‡∏∞‡πÄ‡∏≠‡∏µ‡∏¢‡∏î Tag ‡∏ó‡∏µ‡πà‡∏à‡∏∞‡∏™‡∏£‡πâ‡∏≤‡∏á</b>
-                {tagQtys.length ? <div className="manual-preview-scroll"><table><thead><tr><th>‡∏•‡∏≥‡∏î‡∏±‡∏ö</th><th>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ï‡πà‡∏≠ Tag</th><th>‡∏´‡∏°‡∏≤‡∏¢‡πÄ‡∏´‡∏ï‡∏∏</th></tr></thead><tbody>{tagQtys.map((qty, index) => <tr key={index}><td>{index + 1}</td><td>{fmt(qty)} ‡∏ä‡∏¥‡πâ‡∏ô</td><td>{qty === packQty ? "‡πÄ‡∏ï‡πá‡∏°‡∏Å‡∏•‡πà‡∏≠‡∏á" : "‡∏Å‡∏•‡πà‡∏≠‡∏á‡πÑ‡∏°‡πà‡πÄ‡∏ï‡πá‡∏° (‡∏™‡πà‡∏ß‡∏ô‡∏ó‡∏µ‡πà‡πÄ‡∏´‡∏•‡∏∑‡∏≠)"}</td></tr>)}</tbody></table></div> : <p>‡πÄ‡∏•‡∏∑‡∏≠‡∏Å Part ‡πÅ‡∏•‡∏∞‡∏Å‡∏£‡∏≠‡∏Å‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏î‡∏π Preview</p>}
-              </div>
-              {tagQtys.length > 0 && <div className={tagTotal === totalQty ? "manual-total-ok" : "manual-stock-error"}>{tagTotal === totalQty ? "‚úì" : "!"} ‡∏ú‡∏•‡∏£‡∏ß‡∏°‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ó‡∏∏‡∏Å Tag = {fmt(tagTotal)} ‡∏ä‡∏¥‡πâ‡∏ô</div>}
-            </section>
-          </div>
-          <button className="button primary stock-management-submit manual-stock-submit" disabled={!canSubmit || stockManagementSaving}>{stockManagementSaving ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‚Ä¶" : canSubmit ? `‚úì ‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Stock ${fmt(totalQty)} ‡∏ä‡∏¥‡πâ‡∏ô ‡πÅ‡∏•‡∏∞‡∏™‡∏£‡πâ‡∏≤‡∏á ${fmt(tagCount)} Tag` : !selectedPart ? "‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡πÄ‡∏•‡∏∑‡∏≠‡∏Å Part" : packQty <= 0 ? "Part ‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ Packing Qty" : totalQty <= 0 ? "‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏Å‡∏£‡∏≠‡∏Å‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤" : !manualStockForm.jobNo.trim() ? "‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏Å‡∏£‡∏≠‡∏Å Job" : "‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏Å‡∏£‡∏≠‡∏Å‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡πÉ‡∏´‡πâ‡∏Ñ‡∏£‡∏ö"}</button>
-        </form>}
-
-        <section className="manual-receipt-history">
-          <header><b>‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡πÅ‡∏ö‡∏ö‡∏Ñ‡∏µ‡∏¢‡πå‡∏•‡πà‡∏≤‡∏™‡∏∏‡∏î</b><small>‡πÅ‡∏™‡∏î‡∏á‡∏•‡πà‡∏≤‡∏™‡∏∏‡∏î {Math.min(transactions.length, 20)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</small></header>
-          <div className="manual-history-scroll"><table><thead><tr><th>‡πÄ‡∏ß‡∏•‡∏≤</th><th>Part / Description</th><th>Job</th><th>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤</th><th>‡∏ö‡∏£‡∏£‡∏à‡∏∏‡∏ï‡πà‡∏≠‡∏Å‡∏•‡πà‡∏≠‡∏á</th><th>Tag ‡∏ó‡∏µ‡πà‡∏™‡∏£‡πâ‡∏≤‡∏á</th><th>‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏ú‡∏•‡∏¥‡∏ï</th><th>‡∏ú‡∏π‡πâ‡∏ó‡∏≥‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</th><th>‡∏à‡∏±‡∏î‡∏Å‡∏≤‡∏£</th></tr></thead><tbody>{transactions.map((transaction) => { const first = transaction.items[0]; return <tr key={transaction.key}><td>{formatTime(first.receivedAt)}</td><td><b>{first.materialCode}</b><small>{first.partName}</small></td><td>{first.jobNo}{first.duplicateConfirmed ? <small className="duplicate-badge">‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô Job ‡∏ã‡πâ‡∏≥</small> : null}</td><td>{fmt(first.transactionTotalQty || transaction.items.reduce((sum, item) => sum + Number(item.qty), 0))}</td><td>{fmt(first.packQty)}</td><td><button type="button" className="link-button" onClick={() => setManualTransactionOpen(transaction.key)}>{fmt(first.tagCount || transaction.items.length)} Tag</button></td><td>{formatDate(first.productionDate)}</td><td>{first.receivedByName}</td><td><button type="button" className="icon-button" onClick={() => setManualTransactionOpen(transaction.key)}>‚Ä¢‚Ä¢‚Ä¢</button></td></tr>; })}</tbody></table>{!transactions.length && <p className="manual-empty">‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡πÅ‡∏ö‡∏ö‡∏Ñ‡∏µ‡∏¢‡πå</p>}</div>
-        </section>
-      </Card>
-
-      {manualDuplicateJob && <div className="modal-backdrop"><section className="manual-confirm-modal"><header><span>!</span><div><b>‡∏û‡∏ö Job ‡∏ã‡πâ‡∏≥</b><small>‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏Å‡πà‡∏≠‡∏ô‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡πÄ‡∏û‡∏¥‡πà‡∏°</small></div></header><p>Job <b>{manualDuplicateJob.jobNo}</b> ‡∏Ç‡∏≠‡∏á Part <b>{manualDuplicateJob.materialCode}</b> ‡πÄ‡∏Ñ‡∏¢‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡πÅ‡∏•‡πâ‡∏ß</p><div className="duplicate-summary"><span>‡∏£‡∏±‡∏ö‡πÅ‡∏•‡πâ‡∏ß<b>{fmt(manualDuplicateJob.previousQty)} ‡∏ä‡∏¥‡πâ‡∏ô</b><small>{fmt(manualDuplicateJob.previousTagCount)} Tag</small></span><span>‡∏Ñ‡∏£‡∏±‡πâ‡∏á‡∏ô‡∏µ‡πâ<b>+{fmt(manualDuplicateJob.incomingQty)} ‡∏ä‡∏¥‡πâ‡∏ô</b><small>{fmt(manualDuplicateJob.incomingTagCount)} Tag</small></span><span>‡∏´‡∏•‡∏±‡∏á‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô<b>{fmt(manualDuplicateJob.totalAfter)} ‡∏ä‡∏¥‡πâ‡∏ô</b></span></div><footer><button type="button" className="button secondary" disabled={stockManagementSaving} onClick={() => setManualDuplicateJob(null)}>‡∏¢‡∏Å‡πÄ‡∏•‡∏¥‡∏Å</button><button type="button" className="button primary" disabled={stockManagementSaving} onClick={() => void submitManualStockReceipt(true)}>{stockManagementSaving ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‚Ä¶" : "‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡πÄ‡∏û‡∏¥‡πà‡∏°"}</button></footer></section></div>}
-
-      {manualReceiptSuccess && <div className="modal-backdrop"><section className="manual-success-modal"><header><span>‚úì</span><div><b>‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Stock ‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à</b><small>{manualReceiptSuccess.transactionNo}</small></div></header><dl><div><dt>Part</dt><dd>{manualReceiptSuccess.tags[0]?.materialCode}</dd></div><div><dt>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤</dt><dd>{fmt(manualReceiptSuccess.totalQty)} ‡∏ä‡∏¥‡πâ‡∏ô</dd></div><div><dt>‡∏™‡∏£‡πâ‡∏≤‡∏á KIT Tag</dt><dd>{fmt(manualReceiptSuccess.boxCount)} Tag</dd></div></dl><footer><button type="button" className="button secondary" onClick={() => void printStockTags(manualReceiptSuccess.tags, "a4")}>‡∏û‡∏¥‡∏°‡∏û‡πå A4</button><button type="button" className="button primary" onClick={() => void printStockTags(manualReceiptSuccess.tags, "100x55")}>‡∏û‡∏¥‡∏°‡∏û‡πå RPP04</button><button type="button" className="button secondary" onClick={() => { setManualTransactionOpen(manualReceiptSuccess.transactionNo); setManualReceiptSuccess(null); }}>‡∏î‡∏π Tag</button><button type="button" className="button secondary" onClick={() => setManualReceiptSuccess(null)}>‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡πÉ‡∏´‡∏°‡πà</button></footer></section></div>}
-
-      {openedTransaction && <div className="modal-backdrop" onMouseDown={() => setManualTransactionOpen("")}><section className="manual-tags-modal" onMouseDown={(event) => event.stopPropagation()}><header><div><b>Tag ‡∏à‡∏≤‡∏Å‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ {openedTransaction.items[0].transactionNo || "‡πÄ‡∏î‡∏¥‡∏°"}</b><small>{openedTransaction.items[0].materialCode} ¬∑ Job {openedTransaction.items[0].jobNo}</small></div><button type="button" onClick={() => setManualTransactionOpen("")}>√ó</button></header><div>{openedTransaction.items.map((item) => <article key={item.id}><b>{item.tagId}</b><span>{fmt(item.qty)} ‡∏ä‡∏¥‡πâ‡∏ô</span></article>)}</div><footer><button type="button" className="button secondary" onClick={() => { const ids = new Set(openedTransaction.items.map((item) => item.tagId)); void printStockTags(stock.tags.filter((tag) => ids.has(tag.tagId)), "a4"); }}>‡∏û‡∏¥‡∏°‡∏û‡πå A4</button><button type="button" className="button primary" onClick={() => { const ids = new Set(openedTransaction.items.map((item) => item.tagId)); void printStockTags(stock.tags.filter((tag) => ids.has(tag.tagId)), "100x55"); }}>‡∏û‡∏¥‡∏°‡∏û‡πå RPP04</button></footer></section></div>}
-    </div>;
-  }
-
-  function renderStockCount() {
-    const preview = stockCountPreview;
-    return <div className="stock-home">
-      <Card className="stock-management-card" title="‡∏ï‡∏£‡∏ß‡∏à‡∏ô‡∏±‡∏ö‡πÅ‡∏•‡∏∞‡∏õ‡∏£‡∏±‡∏ö‡∏¢‡∏≠‡∏î‡∏™‡∏¥‡πâ‡∏ô‡πÄ‡∏î‡∏∑‡∏≠‡∏ô">
-        {canEditPage("stock-count") && <form className="stock-management-panel count" onSubmit={previewStockCount}>
-          <header><span>‚âã</span><div><b>‡∏™‡πÅ‡∏Å‡∏ô‡∏ï‡∏£‡∏ß‡∏à‡∏ô‡∏±‡∏ö‡∏ó‡∏µ‡∏•‡∏∞ KIT Stock Tag</b><small>‡∏¢‡∏≠‡∏î‡∏Ç‡∏≠‡∏á Tag ‡πÅ‡∏•‡∏∞‡∏¢‡∏≠‡∏î Stock ‡∏£‡∏ß‡∏°‡∏à‡∏∞‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏´‡∏£‡∏∑‡∏≠‡∏•‡∏î‡∏û‡∏£‡πâ‡∏≠‡∏°‡∏Å‡∏±‡∏ô ‡∏û‡∏£‡πâ‡∏≠‡∏°‡πÄ‡∏Å‡πá‡∏ö‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡∏ú‡∏π‡πâ‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç</small></div></header>
-          <button type="button" className="stock-camera-zone" onClick={() => { setCameraPurpose("stock-count"); setCameraOpen(true); }}><span>‚åó</span><b>‡∏™‡πÅ‡∏Å‡∏ô Tag ‡∏ó‡∏µ‡πà‡∏ï‡πâ‡∏≠‡∏á‡∏Å‡∏≤‡∏£‡∏ï‡∏£‡∏ß‡∏à‡∏ô‡∏±‡∏ö</b><small>‡∏™‡πÅ‡∏Å‡∏ô‡πÅ‡∏•‡∏∞‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡πÉ‡∏´‡πâ‡πÄ‡∏™‡∏£‡πá‡∏à‡∏ó‡∏µ‡∏•‡∏∞ Tag</small></button>
-          <div className="stock-management-fields">
-            <label className="wide"><span>KIT Stock Tag *</span><div className="stock-receive-form"><input ref={stockCountInputRef} required value={stockCountForm.rawPayload} onChange={(event) => { setStockCountPreview(null); setStockCountForm((current) => ({ ...current, rawPayload: event.target.value.toUpperCase() })); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void loadStockCountTag(value); } }} placeholder="‡∏™‡πÅ‡∏Å‡∏ô‡∏´‡∏£‡∏∑‡∏≠‡∏û‡∏¥‡∏°‡∏û‡πå‡∏£‡∏´‡∏±‡∏™ KIT Stock Tag" autoComplete="off" /><button type="button" className="button secondary" disabled={!stockCountForm.rawPayload.trim() || stockManagementSaving} onClick={() => void loadStockCountTag()}>{stockManagementSaving ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‚Ä¶" : "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö Tag"}</button></div></label>
-            {preview && <><label><span>Part / Material</span><input value={`${preview.materialCode} ¬∑ ${preview.partName}`} readOnly /></label><label><span>Job</span><input value={preview.jobNo || "‚Äî"} readOnly /></label><label><span>‡∏Ñ‡∏ß‡∏£‡∏≠‡∏¢‡∏π‡πà‡πÉ‡∏ô‡∏û‡∏∑‡πâ‡∏ô‡∏ó‡∏µ‡πà Stock</span><input value={`${fmt(preview.stockAreaSystemQty)} ‡∏ä‡∏¥‡πâ‡∏ô`} readOnly /></label><label><span>‡∏ô‡∏≥‡πÑ‡∏õ‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô/‡∏à‡∏≠‡∏á‡πÑ‡∏ß‡πâ</span><input value={`${fmt(preview.reservedQty)} ‡∏ä‡∏¥‡πâ‡∏ô`} readOnly /></label><label><span>‡∏¢‡∏≠‡∏î‡∏£‡∏ß‡∏°‡πÉ‡∏ô‡∏£‡∏∞‡∏ö‡∏ö‡∏Å‡πà‡∏≠‡∏ô‡∏õ‡∏£‡∏±‡∏ö</span><input value={`${fmt(preview.systemQty)} ‡∏ä‡∏¥‡πâ‡∏ô`} readOnly /></label><label><span>‡∏¢‡∏≠‡∏î Stock ‡∏£‡∏ß‡∏°‡∏ó‡∏∏‡∏Å Tag</span><input value={`${fmt(preview.materialTotalQty)} ‡∏ä‡∏¥‡πâ‡∏ô`} readOnly /></label></>}
-            <label><span>‡∏¢‡∏≠‡∏î‡∏ó‡∏µ‡πà‡∏ô‡∏±‡∏ö‡πÑ‡∏î‡πâ‡πÉ‡∏ô‡∏û‡∏∑‡πâ‡∏ô‡∏ó‡∏µ‡πà Stock *</span><input required disabled={!preview} type="number" min={0} step={1} inputMode="numeric" value={stockCountForm.countedQty} onChange={(event) => { const countedQty = event.target.value.replace(/[^0-9]/g, ""); const difference = Number(countedQty || 0) - Number(preview?.stockAreaSystemQty || 0); setStockCountForm((current) => ({ ...current, countedQty, reason: defaultStockCountReason(difference) })); }} placeholder="‡∏ô‡∏±‡∏ö‡πÄ‡∏â‡∏û‡∏≤‡∏∞‡∏™‡∏¥‡∏ô‡∏Ñ‡πâ‡∏≤‡∏ó‡∏µ‡πà‡∏≠‡∏¢‡∏π‡πà‡πÉ‡∏ô‡∏û‡∏∑‡πâ‡∏ô‡∏ó‡∏µ‡πà Stock" /></label>
-            <label><span>‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏ï‡∏£‡∏ß‡∏à‡∏ô‡∏±‡∏ö *</span><input required type="date" value={stockCountForm.countDate} onChange={(event) => setStockCountForm((current) => ({ ...current, countDate: event.target.value }))} /></label>
-            <label className="wide"><span>‡∏™‡∏≤‡πÄ‡∏´‡∏ï‡∏∏‡∏Å‡∏≤‡∏£‡∏õ‡∏£‡∏±‡∏ö‡∏¢‡∏≠‡∏î *</span><input required value={stockCountForm.reason} onChange={(event) => setStockCountForm((current) => ({ ...current, reason: event.target.value }))} /></label>
-          </div>
-          {preview && <div className="stock-count-safety"><b>Tag ‡∏ô‡∏µ‡πâ‡∏ô‡∏≥‡∏≠‡∏≠‡∏Å‡πÑ‡∏õ‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô/‡∏à‡∏≠‡∏á‡πÅ‡∏•‡πâ‡∏ß {fmt(preview.reservedQty)} ‡∏ä‡∏¥‡πâ‡∏ô</b><span>‡∏Å‡∏£‡∏≠‡∏Å‡πÄ‡∏â‡∏û‡∏≤‡∏∞‡∏¢‡∏≠‡∏î‡∏ó‡∏µ‡πà‡∏û‡∏ö‡πÉ‡∏ô‡∏û‡∏∑‡πâ‡∏ô‡∏ó‡∏µ‡πà Stock ‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡∏ô‡∏≥‡∏¢‡∏≠‡∏î‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô/‡∏à‡∏≠‡∏á‡∏°‡∏≤‡∏£‡∏ß‡∏°‡πÉ‡∏´‡πâ‡∏≠‡∏±‡∏ï‡πÇ‡∏ô‡∏°‡∏±‡∏ï‡∏¥ ‡πÅ‡∏•‡∏∞‡πÑ‡∏°‡πà‡∏≠‡∏ô‡∏∏‡∏ç‡∏≤‡∏ï‡πÉ‡∏´‡πâ‡πÅ‡∏Å‡πâ‡∏¢‡∏≠‡∏î‡∏à‡∏≠‡∏á‡∏à‡∏≤‡∏Å‡∏´‡∏ô‡πâ‡∏≤‡∏ô‡∏µ‡πâ</span></div>}
-          <button className="button stock-count-preview-button" disabled={!preview || stockManagementSaving || stockCountForm.countedQty === ""}>{stockManagementSaving ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‚Ä¶" : "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏¢‡∏≠‡∏î‡∏Å‡πà‡∏≠‡∏ô‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å ‚Üí"}</button>
-        </form>}
-        <div className="stock-management-history"><div><b>‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡∏õ‡∏£‡∏±‡∏ö‡∏¢‡∏≠‡∏î‡∏ó‡∏µ‡∏•‡∏∞ Tag ‡∏•‡πà‡∏≤‡∏™‡∏∏‡∏î</b>{stock.countAdjustments.slice(0, 10).map((item) => { const line = stock.countAdjustmentLines.find((entry) => entry.adjustmentId === item.id); return <article key={item.id}><span><b>{line?.stockTagCode || item.materialCode}</b><small>{item.adjustmentNo} ¬∑ {item.reason}</small></span><em className={item.difference < 0 ? "minus" : item.difference > 0 ? "plus" : "equal"}>{item.difference > 0 ? "+" : ""}{fmt(item.difference)}</em><small>{item.adjustedByName} ¬∑ {formatDateTime(item.adjustedAt)}</small></article>; })}{!stock.countAdjustments.length && <p>‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</p>}</div></div>
-      </Card>
-    </div>;
-  }
-
-  async function exportStockExcel() {
-    try {
-      const xlsx = await import("xlsx");
-      const stockTags = stock.tags.filter((item) => item.status === "in_stock" || item.status === "depleted");
-      const summaryByPart = new Map<string, {
-        materialCode: string; partName: string; customer: string; location: string;
-        tagCount: number; totalQty: number; reservedQty: number; stockAreaQty: number;
-      }>();
-      for (const tag of stockTags) {
-        const totalQty = Number(tag.remainingQty || 0);
-        const reservedQty = Number(tag.reservedQty || 0);
-        const current = summaryByPart.get(tag.materialCode) || {
-          materialCode: tag.materialCode, partName: tag.partName || "", customer: tag.customer || "",
-          location: tag.location || "", tagCount: 0, totalQty: 0, reservedQty: 0, stockAreaQty: 0,
-        };
-        current.tagCount += 1;
-        current.totalQty += totalQty;
-        current.reservedQty += reservedQty;
-        current.stockAreaQty += Math.max(totalQty - reservedQty, 0);
-        if (!current.location && tag.location) current.location = tag.location;
-        summaryByPart.set(tag.materialCode, current);
-      }
-      const generatedAt = new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date());
-      const summaryRows = [
-        ["Control Stock KIT ‚Äî ‡∏™‡∏£‡∏∏‡∏õ‡∏¢‡∏≠‡∏î Stock"],
-        ["‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡πÅ‡∏•‡∏∞‡πÄ‡∏ß‡∏•‡∏≤‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å", generatedAt],
-        ["‡∏à‡∏≥‡∏ô‡∏ß‡∏ô Part", summaryByPart.size],
-        ["‡∏à‡∏≥‡∏ô‡∏ß‡∏ô Tag", stockTags.length],
-        ["‡∏¢‡∏≠‡∏î‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠‡∏£‡∏ß‡∏° (‡∏ä‡∏¥‡πâ‡∏ô)", stockTags.reduce((sum, tag) => sum + Number(tag.remainingQty || 0), 0)],
-        [],
-        ["Material Code", "‡∏ä‡∏∑‡πà‡∏≠‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô", "‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤", "Location", "‡∏à‡∏≥‡∏ô‡∏ß‡∏ô Tag", "‡∏¢‡∏≠‡∏î‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠‡∏£‡∏ß‡∏°", "‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô/‡∏à‡∏≠‡∏á‡πÑ‡∏ß‡πâ", "‡∏≠‡∏¢‡∏π‡πà‡πÉ‡∏ô‡∏û‡∏∑‡πâ‡∏ô‡∏ó‡∏µ‡πà Stock"],
-        ...[...summaryByPart.values()]
-          .sort((left, right) => left.materialCode.localeCompare(right.materialCode))
-          .map((item) => [item.materialCode, item.partName, item.customer, item.location, item.tagCount, item.totalQty, item.reservedQty, item.stockAreaQty]),
-      ];
-      const detailRows = [
-        ["KIT Stock Tag", "Material Code", "‡∏ä‡∏∑‡πà‡∏≠‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô", "‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤", "Location", "Job", "‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏ú‡∏•‡∏¥‡∏ï", "‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤", "‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡πÄ‡∏£‡∏¥‡πà‡∏°‡∏ï‡πâ‡∏ô", "‡∏¢‡∏≠‡∏î‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠‡∏£‡∏ß‡∏°", "‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô/‡∏à‡∏≠‡∏á‡πÑ‡∏ß‡πâ", "‡∏≠‡∏¢‡∏π‡πà‡πÉ‡∏ô‡∏û‡∏∑‡πâ‡∏ô‡∏ó‡∏µ‡πà Stock", "‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞"],
-        ...stockTags.map((tag) => {
-          const totalQty = Number(tag.remainingQty || 0);
-          const reservedQty = Number(tag.reservedQty || 0);
-          return [
-            tag.tagId, tag.materialCode, tag.partName || "", tag.customer || "", tag.location || "",
-            tag.jobNo, tag.productionDate, tag.receivedAt || "", Number(tag.qty || 0), totalQty,
-            reservedQty, Math.max(totalQty - reservedQty, 0),
-            tag.status === "depleted" ? "‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‡∏´‡∏°‡∏î" : reservedQty > 0 ? "‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô/‡∏à‡∏≠‡∏á‡∏ö‡∏≤‡∏á‡∏™‡πà‡∏ß‡∏ô" : "‡∏û‡∏£‡πâ‡∏≠‡∏°‡πÉ‡∏ä‡πâ",
-          ];
-        }),
-      ];
-      const workbook = xlsx.utils.book_new();
-      const summarySheet = xlsx.utils.aoa_to_sheet(summaryRows);
-      const detailSheet = xlsx.utils.aoa_to_sheet(detailRows);
-      summarySheet["!cols"] = [22, 34, 22, 18, 14, 18, 18, 20].map((wch) => ({ wch }));
-      detailSheet["!cols"] = [30, 22, 34, 22, 18, 20, 14, 22, 16, 18, 18, 20, 20].map((wch) => ({ wch }));
-      xlsx.utils.book_append_sheet(workbook, summarySheet, "‡∏™‡∏£‡∏∏‡∏õ‡∏ï‡∏≤‡∏° Part");
-      xlsx.utils.book_append_sheet(workbook, detailSheet, "‡∏£‡∏≤‡∏¢‡∏•‡∏∞‡πÄ‡∏≠‡∏µ‡∏¢‡∏î‡∏ï‡∏≤‡∏° Tag");
-      const dateKey = new Date().toISOString().slice(0, 10);
-      xlsx.writeFile(workbook, `KIT_Stock_${dateKey}.xlsx`);
-      void recordClientAudit("export_stock_excel", `‡∏î‡∏≤‡∏ß‡∏ô‡πå‡πÇ‡∏´‡∏•‡∏î Excel ‡∏¢‡∏≠‡∏î Stock ${stockTags.length} Tag`, {
-        partCount: summaryByPart.size, tagCount: stockTags.length,
-        totalQty: stockTags.reduce((sum, tag) => sum + Number(tag.remainingQty || 0), 0),
-      });
-      setNotice({ type: "success", text: `‡∏î‡∏≤‡∏ß‡∏ô‡πå‡πÇ‡∏´‡∏•‡∏î Excel ‡∏¢‡∏≠‡∏î Stock ‡πÅ‡∏•‡πâ‡∏ß ${fmt(summaryByPart.size)} Part ¬∑ ${fmt(stockTags.length)} Tag` });
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏î‡∏≤‡∏ß‡∏ô‡πå‡πÇ‡∏´‡∏•‡∏î Excel ‡∏¢‡∏≠‡∏î Stock ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    }
-  }
-
-  function renderStock() {
-    const receivedStockTags = stock.tags.filter((item) => item.status === "in_stock" || item.status === "depleted");
-    const reserved = receivedStockTags.reduce((sum, item) => sum + Number(item.reservedQty), 0);
-    const available = receivedStockTags.reduce((sum, item) => sum + Math.max(Number(item.remainingQty) - Number(item.reservedQty), 0), 0);
-    const awaitingReceipt = stock.tags.filter((item) => item.status === "printed").length;
-    const abnormalTags = stock.tags.filter((item) => item.status === "ng"
-      || Number(item.remainingQty) < 0 || Number(item.remainingQty) > Number(item.qty)
-      || Number(item.reservedQty) < 0 || Number(item.reservedQty) > Number(item.remainingQty));
-    const ngQty = stock.tags.reduce((sum, item) => sum + Number(item.ngQty || 0), 0);
-    const todayKey = bangkokDateTimeKey().slice(0, 10);
-    const todayMovement = stock.movementDays.find((item) => item.date === todayKey) || { date: todayKey, receivedQty: 0, arrangedQty: 0, adjustedQty: 0 };
-    const stockNeedle = tagSearch.trim().toLowerCase();
-    const matchingStock = stock.tags.filter((item) => !stockNeedle || [item.tagId, item.materialCode, item.partName, item.jobNo].some((value) => String(value || "").toLowerCase().includes(stockNeedle)));
-    const recentStock = matchingStock.slice(0, stockListExpanded || stockNeedle ? 50 : 6);
-    const totalForChart = Math.max(available + reserved + ngQty, 1);
-    const readyPercent = Math.round((available / totalForChart) * 100);
-    const reservedPercent = Math.round((reserved / totalForChart) * 100);
-    const ngPercent = Math.max(100 - readyPercent - reservedPercent, 0);
-    const trendDays = stock.movementDays.map((item) => ({ ...item,
-      receivedQty: Number(item.receivedQty || 0), arrangedQty: Number(item.arrangedQty || 0), adjustedQty: Number(item.adjustedQty || 0),
-      label: formatDate(item.date).replace(/\s/g, ""),
-    }));
-    const trendMax = Math.max(...trendDays.flatMap((item) => [item.receivedQty, item.arrangedQty, Math.abs(item.adjustedQty)]), 1);
-    return <div className="stock-home">
-      <div className="stock-stat-row page-summary">
-        <article className="stock-stat blue"><span>‚ñ¶</span><div><small>Tag ‡∏£‡∏≠‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤</small><b>{fmt(awaitingReceipt)}</b><em>‡πÉ‡∏ö</em></div><button onClick={() => { setTagSearch(""); setStockListExpanded(true); }}>‡∏î‡∏π‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ‚Üí</button></article>
-        <article className="stock-stat green"><span>‚ñ£</span><div><small>Stock ‡∏û‡∏£‡πâ‡∏≠‡∏°‡πÉ‡∏ä‡πâ</small><b>{fmt(available)}</b><em>‡∏ä‡∏¥‡πâ‡∏ô ¬∑ ‡∏≠‡∏¢‡∏π‡πà‡πÉ‡∏ô‡∏û‡∏∑‡πâ‡∏ô‡∏ó‡∏µ‡πà Stock ‡∏à‡∏£‡∏¥‡∏á</em></div><button onClick={() => { setTagSearch(""); setStockListExpanded(true); }}>‡∏î‡∏π‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ‚Üí</button></article>
-        <article className="stock-stat orange"><span>‚á•</span><div><small>‡∏ñ‡∏π‡∏Å‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡πÅ‡∏•‡πâ‡∏ß</small><b>{fmt(reserved)}</b><em>‡∏ä‡∏¥‡πâ‡∏ô ¬∑ ‡∏≠‡∏≠‡∏Å‡∏à‡∏≤‡∏Å‡∏û‡∏∑‡πâ‡∏ô‡∏ó‡∏µ‡πà Stock ‡πÅ‡∏•‡πâ‡∏ß</em></div><button onClick={() => go("arrange")}>‡∏î‡∏π‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ‚Üí</button></article>
-        <article className="stock-stat red"><span>!</span><div><small>Stock ‡∏ú‡∏¥‡∏î‡∏õ‡∏Å‡∏ï‡∏¥</small><b>{fmt(abnormalTags.length)}</b><em>‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</em></div><button onClick={() => { setTagSearch(""); setStockListExpanded(true); }}>‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö ‚Üí</button></article>
-      </div>
-      <div className="stock-main-grid">
-        {canEditPage("stock") && <Card className="stock-receive-card" title={<span className="stock-card-title"><i>‚åó</i> ‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Stock (‡∏ä‡∏±‡πâ‡∏ô‡∏ß‡∏≤‡∏á + Tag)</span>} action={<span className="stock-scanner-ready"><i /> {stockLocation ? `‡∏ä‡∏±‡πâ‡∏ô ${stockLocation.code}` : "‡∏£‡∏≠‡∏™‡πÅ‡∏Å‡∏ô‡∏ä‡∏±‡πâ‡∏ô"}</span>}>
-          {stockLocation ? <div className="stock-location-session"><div><small>‡∏ä‡∏±‡πâ‡∏ô‡∏à‡∏±‡∏î‡πÄ‡∏Å‡πá‡∏ö‡∏ó‡∏µ‡πà‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤</small><b>{stockLocation.code}</b><span>‡∏£‡∏≠‡∏á‡∏£‡∏±‡∏ö {fmt(stockLocation.partCount)} Part ¬∑ ‡∏™‡πÅ‡∏Å‡∏ô KIT Tag ‡∏ó‡∏∏‡∏Å‡πÉ‡∏ö‡∏ó‡∏µ‡∏•‡∏∞‡πÉ‡∏ö</span></div><button type="button" onClick={() => { setStockLocation(null); setStockLocationActivity(0); setStockScan(""); setLastStockReceipt(null); window.setTimeout(() => stockScanInputRef.current?.focus(), 50); }}>‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏ä‡∏±‡πâ‡∏ô‡∏ß‡∏≤‡∏á</button></div> : <div className="stock-location-guide"><b>‡∏Ç‡∏±‡πâ‡∏ô‡∏ï‡∏≠‡∏ô‡∏ó‡∏µ‡πà 1 ¬∑ ‡∏™‡πÅ‡∏Å‡∏ô QR ‡∏´‡∏ô‡πâ‡∏≤‡∏ä‡∏±‡πâ‡∏ô‡∏ß‡∏≤‡∏á 1 ‡∏Ñ‡∏£‡∏±‡πâ‡∏á</b><span>‡πÄ‡∏°‡∏∑‡πà‡∏≠‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ä‡∏±‡πâ‡∏ô‡πÅ‡∏•‡πâ‡∏ß ‡πÉ‡∏´‡πâ‡∏™‡πÅ‡∏Å‡∏ô KIT Tag ‡∏ó‡∏∏‡∏Å‡∏Å‡∏•‡πà‡∏≠‡∏á‡∏ó‡∏µ‡∏•‡∏∞‡πÉ‡∏ö ‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡πÄ‡∏â‡∏û‡∏≤‡∏∞ Tag ‡∏ó‡∏µ‡πà‡∏™‡πÅ‡∏Å‡∏ô‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à</span><button type="button" onClick={() => void printStockLocationQrs()}>‚ñ¶ ‡∏û‡∏¥‡∏°‡∏û‡πå QR ‡∏ä‡∏±‡πâ‡∏ô‡∏ß‡∏≤‡∏á</button></div>}
-          <button type="button" className="stock-camera-zone" onClick={() => { setCameraPurpose("stock"); setCameraOpen(true); }}><span>‚ñ•</span><b>{stockSaving ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‚Ä¶" : stockLocation ? "‡∏Ç‡∏±‡πâ‡∏ô‡∏ï‡∏≠‡∏ô‡∏ó‡∏µ‡πà 2 ¬∑ ‡∏™‡πÅ‡∏Å‡∏ô KIT Tag ‡∏ó‡∏∏‡∏Å‡πÉ‡∏ö" : "‡∏Ç‡∏±‡πâ‡∏ô‡∏ï‡∏≠‡∏ô‡∏ó‡∏µ‡πà 1 ¬∑ ‡∏û‡∏£‡πâ‡∏≠‡∏°‡∏™‡πÅ‡∏Å‡∏ô QR ‡∏ä‡∏±‡πâ‡∏ô‡∏ß‡∏≤‡∏á"}</b><small>{stockLocation ? `‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡∏ä‡∏±‡πâ‡∏ô ${stockLocation.code} ¬∑ ‡∏£‡∏±‡∏ö‡πÄ‡∏â‡∏û‡∏≤‡∏∞ Tag ‡∏ó‡∏µ‡πà‡∏™‡πÅ‡∏Å‡∏ô‡∏ó‡∏µ‡∏•‡∏∞‡πÉ‡∏ö` : "‡∏¢‡∏¥‡∏á QR ‡∏´‡∏ô‡πâ‡∏≤‡∏ä‡∏±‡πâ‡∏ô ‡∏´‡∏£‡∏∑‡∏≠‡πÅ‡∏ï‡∏∞‡πÄ‡∏û‡∏∑‡πà‡∏≠‡πÄ‡∏õ‡∏¥‡∏î‡∏Å‡∏•‡πâ‡∏≠‡∏á"}</small></button>
-          <div className="stock-scan-separator"><span>‡∏´‡∏£‡∏∑‡∏≠</span></div>
-          <form className="stock-receive-form" onSubmit={receiveStockTag}><input ref={stockScanInputRef} value={stockScan} inputMode={stockManualEntry ? "text" : "none"} onFocus={() => { if (!stockManualEntry && window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) stockScanInputRef.current?.blur(); }} onChange={(e) => updateStockScannerValue(e.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void receiveStockTag(value); } }} placeholder={stockLocation ? "‡πÉ‡∏™‡πà‡∏£‡∏´‡∏±‡∏™ KIT Tag ‡∏î‡πâ‡∏ß‡∏¢‡∏°‡∏∑‡∏≠" : "‡πÉ‡∏™‡πà QR ‡∏ä‡∏±‡πâ‡∏ô ‡πÄ‡∏ä‡πà‡∏ô KITLOC|A-01"} autoComplete="off" /><button className="button primary" disabled={!stockScan.trim() || stockSaving}>{stockSaving ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‚Ä¶" : stockLocation ? "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡πÅ‡∏•‡∏∞‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤" : "‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ä‡∏±‡πâ‡∏ô‡∏ß‡∏≤‡∏á"}</button></form>
-          <button type="button" className="stock-manual-toggle" onClick={() => { setStockManualEntry((current) => !current); window.setTimeout(() => stockScanInputRef.current?.focus(), 50); }}>{stockManualEntry ? "‡∏õ‡∏¥‡∏î‡πÅ‡∏õ‡πâ‡∏ô‡∏û‡∏¥‡∏°‡∏û‡πå / ‡πÉ‡∏ä‡πâ Scanner" : "‚å® ‡∏Å‡∏£‡∏≠‡∏Å Tag ‡∏î‡πâ‡∏ß‡∏¢‡∏°‡∏∑‡∏≠"}</button>
-          {lastStockReceipt ? <div className="stock-receive-success"><b>‚úì ‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Stock ‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à ¬∑ ‡∏ä‡∏±‡πâ‡∏ô {lastStockReceipt.locationCode}</b><span>Tag: {lastStockReceipt.tagId}</span><span>Material: {lastStockReceipt.materialCode}</span><span>Job: {lastStockReceipt.jobNo}</span><strong>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô: {fmt(lastStockReceipt.qty)} ‡∏ä‡∏¥‡πâ‡∏ô ¬∑ ‡∏™‡πÅ‡∏Å‡∏ô‡πÉ‡∏ö‡∏ñ‡∏±‡∏î‡πÑ‡∏õ‡πÑ‡∏î‡πâ</strong></div> : <div className="stock-guide"><b>‚Ñπ {stockLocation ? `‡∏û‡∏£‡πâ‡∏≠‡∏°‡∏™‡πÅ‡∏Å‡∏ô KIT Tag ‡∏ó‡∏∏‡∏Å‡πÉ‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡∏ä‡∏±‡πâ‡∏ô ${stockLocation.code}` : "‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏™‡πÅ‡∏Å‡∏ô QR ‡∏ä‡∏±‡πâ‡∏ô‡∏à‡∏±‡∏î‡πÄ‡∏Å‡πá‡∏ö‡∏Å‡πà‡∏≠‡∏ô"}</b><p>‡∏£‡∏∞‡∏ö‡∏ö‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡πÄ‡∏â‡∏û‡∏≤‡∏∞ Tag ‡∏ó‡∏µ‡πà‡∏™‡πÅ‡∏Å‡∏ô ‡πÅ‡∏•‡∏∞‡∏ö‡∏•‡πá‡∏≠‡∏Å Tag ‡∏ã‡πâ‡∏≥‡∏´‡∏£‡∏∑‡∏≠ Location ‡πÑ‡∏°‡πà‡∏ï‡∏£‡∏á‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô Part</p></div>}
-        </Card>}
-        <Card className="stock-latest-card" title="‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ Stock ‡∏•‡πà‡∏≤‡∏™‡∏∏‡∏î" action={<div className="stock-list-tools"><button type="button" className="button users-excel-button" onClick={() => void exportStockExcel()}>‚ñ¶ Excel</button><input value={tagSearch} onChange={(e) => { setTagSearch(e.target.value); setStockListExpanded(Boolean(e.target.value)); }} placeholder="‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤ Tag / Part No. / Job..." /><button onClick={() => void loadStock()}>‚Üª</button></div>}>
-          {stockLoading ? <div className="inline-loading">‡∏Å‡∏≥‡∏•‡∏±‡∏á‡πÇ‡∏´‡∏•‡∏î Stock‚Ä¶</div> : recentStock.length ? <><div className="stock-latest-head"><span>Tag / QR</span><span>‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏™‡∏¥‡∏ô‡∏Ñ‡πâ‡∏≤</span><span>Job</span><span>‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤</span><span>‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞</span><span>‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠</span></div><div className="stock-latest-list">{recentStock.map((item) => {
-            const itemAvailable = Math.max(Number(item.remainingQty) - Number(item.reservedQty), 0);
-            const isAbnormal = item.status === "ng" || Number(item.remainingQty) < 0 || Number(item.remainingQty) > Number(item.qty) || Number(item.reservedQty) > Number(item.remainingQty);
-            const statusClass = isAbnormal ? "abnormal" : item.status === "printed" ? "waiting" : item.status === "depleted" ? "depleted" : Number(item.reservedQty) ? "reserved" : "ready";
-            const statusText = isAbnormal ? "‡∏ú‡∏¥‡∏î‡∏õ‡∏Å‡∏ï‡∏¥" : item.status === "printed" ? "‡∏£‡∏≠‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤" : item.status === "depleted" ? "‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‡∏´‡∏°‡∏î" : Number(item.reservedQty) ? (itemAvailable ? "‡∏à‡∏±‡∏î‡∏ö‡∏≤‡∏á‡∏™‡πà‡∏ß‡∏ô" : "‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡πÅ‡∏•‡πâ‡∏ß") : "‡∏û‡∏£‡πâ‡∏≠‡∏°‡πÉ‡∏ä‡πâ";
-            return <button key={item.id} className="stock-latest-row" onClick={() => { setTagSearch(item.tagId); setStockListExpanded(true); }}><span className="tag-cell"><i>‚ñ¶</i><b>{item.tagId}</b></span><span><b>{item.materialCode}</b><small>{item.partName}</small></span><span><b>{item.jobNo}</b></span><span><b>{item.receivedAt ? formatDateTime(item.receivedAt) : "‚Äî"}</b></span><span><em className={"stock-state " + statusClass}>{statusText}</em></span><span className="remain-cell"><b>{fmt(itemAvailable)}</b> ‡∏ä‡∏¥‡πâ‡∏ô <i>‚Ä∫</i></span></button>;
-          })}</div>{matchingStock.length > 6 && <button className="stock-view-all" onClick={() => { setTagSearch(""); setStockListExpanded((current) => !current); }}>{stockListExpanded ? "‡∏¢‡πà‡∏≠‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ‚Üë" : `‡∏î‡∏π‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î ${fmt(matchingStock.length)} Tag ‚Üí`}</button>}</> : <Empty title="‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ Stock" text={stockNeedle ? "‡πÑ‡∏°‡πà‡∏û‡∏ö‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ó‡∏µ‡πà‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤" : "‡∏¢‡∏¥‡∏á Tag ‡∏£‡∏±‡∏ö‡∏á‡∏≤‡∏ô‡πÄ‡∏Ç‡πâ‡∏≤ Stock ‡πÅ‡∏•‡πâ‡∏ß‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏à‡∏∞‡πÅ‡∏™‡∏î‡∏á‡∏ó‡∏µ‡πà‡∏ô‡∏µ‡πà"} />}
-        </Card>
-      </div>
-      <div className="stock-analytics-grid">
-        <Card className="stock-status-card" title="‡∏™‡∏£‡∏∏‡∏õ‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞ Stock"><div className="stock-donut-wrap"><div className="stock-donut" style={{ "--ready-stock": String(readyPercent * 3.6) + "deg", "--reserved-stock": String((readyPercent + reservedPercent) * 3.6) + "deg" } as React.CSSProperties}><span><b>{fmt(available + reserved + ngQty)}</b><small>‡∏¢‡∏≠‡∏î‡∏ï‡∏¥‡∏î‡∏ï‡∏≤‡∏°‡∏£‡∏ß‡∏°</small></span></div><ul><li><i className="ready" /><span>‡∏û‡∏£‡πâ‡∏≠‡∏°‡πÉ‡∏ä‡πâ</span><b>{fmt(available)} ‡∏ä‡∏¥‡πâ‡∏ô</b><em>{readyPercent}%</em></li><li><i className="reserved" /><span>‡∏ñ‡∏π‡∏Å‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡πÅ‡∏•‡πâ‡∏ß</span><b>{fmt(reserved)} ‡∏ä‡∏¥‡πâ‡∏ô</b><em>{reservedPercent}%</em></li><li><i className="abnormal" /><span>‡∏á‡∏≤‡∏ô NG/‡∏ú‡∏¥‡∏î‡∏õ‡∏Å‡∏ï‡∏¥</span><b>{fmt(ngQty)} ‡∏ä‡∏¥‡πâ‡∏ô</b><em>{ngPercent}%</em></li></ul></div></Card>
-        <Card className="stock-trend-card" title="Stock Movement (7 ‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏ú‡πà‡∏≤‡∏ô‡∏°‡∏≤)" action={<div className="stock-movement-legend"><span><i className="received" />‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤</span><span><i className="arranged" />‡∏à‡∏±‡∏î‡∏≠‡∏≠‡∏Å</span><span><i className="adjusted" />‡∏õ‡∏£‡∏±‡∏ö‡∏¢‡∏≠‡∏î</span></div>}><div className="stock-trend-chart">{trendDays.map((item) => <div key={item.date} className="trend-column"><span className="movement-bars"><i className="received" style={{ height: String(Math.max((item.receivedQty / trendMax) * 100, item.receivedQty ? 5 : 0)) + "%" }} /><i className="arranged" style={{ height: String(Math.max((item.arrangedQty / trendMax) * 100, item.arrangedQty ? 5 : 0)) + "%" }} /><i className="adjusted" style={{ height: String(Math.max((Math.abs(item.adjustedQty) / trendMax) * 100, item.adjustedQty ? 5 : 0)) + "%" }} /></span><small>{item.label}</small></div>)}</div></Card>
-        <aside className="stock-today-card"><header>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ï‡∏≤‡∏°‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞ (‡∏ß‡∏±‡∏ô‡∏ô‡∏µ‡πâ)</header><div><span className="green">‚á©</span><p><small>‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ (‡∏ß‡∏±‡∏ô‡∏ô‡∏µ‡πâ)</small><b>{fmt(todayMovement.receivedQty)} ‡∏ä‡∏¥‡πâ‡∏ô</b></p></div><div><span className="orange">‚áß</span><p><small>‡∏à‡∏±‡∏î‡∏≠‡∏≠‡∏Å (‡∏ß‡∏±‡∏ô‡∏ô‡∏µ‡πâ)</small><b>{fmt(todayMovement.arrangedQty)} ‡∏ä‡∏¥‡πâ‡∏ô</b></p></div><div><span className="purple">‚öô</span><p><small>‡∏õ‡∏£‡∏±‡∏ö‡∏¢‡∏≠‡∏î (‡∏ß‡∏±‡∏ô‡∏ô‡∏µ‡πâ)</small><b>{todayMovement.adjustedQty > 0 ? "+" : ""}{fmt(todayMovement.adjustedQty)} ‡∏ä‡∏¥‡πâ‡∏ô</b></p></div></aside>
-      </div>
-      <Card title="Traceability: Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ ‚Üî KIT Tag ‚Üî Job">
-        {stock.dispatchLinks.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤</th><th>KIT Tag / Job</th><th>Part / Due</th><th>‡∏ú‡∏•‡∏¥‡∏ï / ‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤</th><th className="num">‡∏à‡∏≥‡∏ô‡∏ß‡∏ô</th><th>‡∏ú‡∏π‡πâ‡∏à‡∏±‡∏î / ‡∏ú‡∏π‡πâ‡∏ï‡∏£‡∏ß‡∏à</th></tr></thead><tbody>{stock.dispatchLinks.slice(0, 50).map((item) => <tr key={item.id}><td data-label="Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤"><b>{item.customerTagId}</b></td><td data-label="KIT Tag / Job"><b>{item.stockTagCode}</b><small>Job {item.jobNo}</small></td><td data-label="Part / Due"><b>{item.materialCode}</b><small>{item.fact} / {item.line || "‚Äî"} ¬∑ DO {item.doNo}</small></td><td data-label="‡∏ú‡∏•‡∏¥‡∏ï / ‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤"><b>{formatDate(item.productionDate)}</b><small>{item.receivedAt ? formatDateTime(item.receivedAt) : "‚Äî"}</small></td><td data-label="‡∏à‡∏≥‡∏ô‡∏ß‡∏ô" className="num"><b>{fmt(item.qty)}</b></td><td data-label="‡∏ú‡∏π‡πâ‡∏à‡∏±‡∏î / ‡∏ú‡∏π‡πâ‡∏ï‡∏£‡∏ß‡∏à"><b>{item.pickedByName}</b><small>{item.dispatchedByName} ¬∑ {formatDateTime(item.dispatchedAt)}</small></td></tr>)}</tbody></table></div> : <Empty title="‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ Traceability ‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å" text="‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏ú‡∏π‡πâ‡∏ï‡∏£‡∏ß‡∏à‡∏¢‡∏¥‡∏á Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ ‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡πÅ‡∏™‡∏î‡∏á KIT Tag, Job, ‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏ú‡∏•‡∏¥‡∏ï ‡πÅ‡∏•‡∏∞‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡∏ó‡∏µ‡πà‡πÉ‡∏ä‡πâ‡∏à‡∏£‡∏¥‡∏á" />}
-      </Card>
-
-    </div>;
-  }
-
-  function openOverdueWindow() {
-    if (!allowedPages.has("overdue")) return;
-    const url = new URL("/overdue-monitor", window.location.origin);
-    const opened = window.open(url.toString(), "kit-overdue-work", "popup=yes,width=1280,height=800,resizable=yes,scrollbars=yes");
-    if (opened) opened.focus();
-    else go("overdue");
-  }
-
-  function renderOverdueWork() {
-    return <OverdueWorkPage dues={overdueDues} refreshing={loading} updatedAt={dueLoadedAt} onRefresh={() => void loadDue()} onBack={allowedPages.has("plan") ? () => go("plan") : undefined} onOpenWindow={openOverdueWindow} monitorMode={monitorMode} />;
-  }
-
-  function renderPlan() {
-    const prioritizedDues = filtered.slice().sort((left, right) =>
-      Number(isDeliveryOverdue(right)) - Number(isDeliveryOverdue(left))
-      || left.deliveryDate.localeCompare(right.deliveryDate)
-      || left.deliveryTime.localeCompare(right.deliveryTime),
-    );
-    const planTotalPages = Math.max(1, Math.ceil(prioritizedDues.length / planPageSize));
-    const safePlanPage = Math.min(planPage, planTotalPages);
-    const planStartIndex = (safePlanPage - 1) * planPageSize;
-    const paginatedDues = prioritizedDues.slice(planStartIndex, planStartIndex + planPageSize);
-    const planPageButtons: Array<number | "‚Ä¶"> = [];
-    for (let current = 1; current <= planTotalPages; current += 1) {
-      if (current === 1 || current === planTotalPages || Math.abs(current - safePlanPage) <= 1) planPageButtons.push(current);
-      else if (planPageButtons[planPageButtons.length - 1] !== "‚Ä¶") planPageButtons.push("‚Ä¶");
-    }
-    const latestImport = payload.imports[0];
-    const resetPlanFilters = () => {
-      setFilterDate(""); setFilterFact("ALL"); setFilterTime("ALL"); setQuery(""); setPlanPage(1);
-    };
-
-    return <div className="plan-home">
-      <input ref={fileInput} type="file" accept=".xlsx,.xls" hidden onChange={parseExcel} />
-      {allowedPages.has("overdue") && <div className="overdue-work-launch"><button className="button primary" type="button" onClick={openOverdueWindow}>‚Üó ‡πÄ‡∏õ‡∏¥‡∏î‡∏´‡∏ô‡πâ‡∏≤‡∏ï‡πà‡∏≤‡∏á‡∏á‡∏≤‡∏ô‡∏ï‡∏¥‡∏î‡∏•‡∏ö / ‡∏Ñ‡πâ‡∏≤‡∏á‡∏™‡πà‡∏á ¬∑ {fmt(overdueDues.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</button><small>‡∏£‡∏ß‡∏°‡∏ó‡∏∏‡∏Å Part ‡∏ó‡∏∏‡∏Å‡∏£‡∏≠‡∏ö ‡∏ó‡∏∏‡∏Å FAC</small></div>}
-      {overdueDues.length > 0 && <div className="overdue-alert-group">
-        <button className="overdue-alert plan-overdue-alert" onClick={showOverduePlan}>
-          <span>!</span><div><b>‡πÅ‡∏à‡πâ‡∏á‡πÄ‡∏ï‡∏∑‡∏≠‡∏ô‡∏á‡∏≤‡∏ô‡πÄ‡∏Å‡∏¥‡∏ô‡∏î‡∏¥‡∏ß‡∏à‡∏±‡∏î‡∏™‡πà‡∏á {fmt(overdueDues.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</b><small>‡∏£‡∏∞‡∏ö‡∏ö‡πÄ‡∏£‡∏µ‡∏¢‡∏á‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ó‡∏µ‡πà‡πÄ‡∏Å‡∏¥‡∏ô‡∏ß‡∏±‡∏ô‡πÅ‡∏•‡∏∞‡πÄ‡∏ß‡∏•‡∏≤‡∏à‡∏±‡∏î‡∏™‡πà‡∏á‡πÑ‡∏ß‡πâ‡∏î‡πâ‡∏≤‡∏ô‡∏ö‡∏ô ‡∏Å‡∏î‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏•‡πâ‡∏≤‡∏á‡∏ï‡∏±‡∏ß‡∏Å‡∏£‡∏≠‡∏á‡πÅ‡∏•‡∏∞‡∏î‡∏π‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î</small></div><strong>‡πÅ‡∏™‡∏î‡∏á‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î ‚Üí</strong>
-        </button>
-        {renderOverdueSoundControl()}
-      </div>}
-      <div className="plan-top-row page-summary">
-        <article className="plan-stat blue"><span>‚ñ§</span><div><small>‡πÅ‡∏ú‡∏ô‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î</small><b>{fmt(summary.items)}</b><em>‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</em></div></article>
-        <article className="plan-stat green"><span>‚úì</span><div><small>‡∏Ñ‡∏£‡∏ö‡∏ï‡∏≤‡∏°‡πÅ‡∏ú‡∏ô</small><b>{fmt(summary.completed)}</b><em>‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</em></div></article>
-        <article className="plan-stat orange"><span>‚ó∑</span><div><small>‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠</small><b>{fmt(summary.partial + summary.pending)}</b><em>‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</em></div></article>
-        <article className="plan-stat red"><span>!</span><div><small>‡πÄ‡∏Å‡∏¥‡∏ô‡∏î‡∏¥‡∏ß‡∏à‡∏±‡∏î‡∏™‡πà‡∏á</small><b>{fmt(overdueDues.length)}</b><em>‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î</em></div></article>
-        {canEditPage("plan") && <button className="plan-import-button" onClick={() => fileInput.current?.click()}>‚áß ‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤‡πÅ‡∏ú‡∏ô‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô Excel</button>}
-      </div>
-
-      <Card className="plan-filter-card" title="‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤‡πÅ‡∏ú‡∏ô‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô">
-        <button className="mobile-filter-toggle" type="button" onClick={() => setFiltersOpen((open) => !open)} aria-expanded={filtersOpen}><span>‚åÑ</span>{filtersOpen ? "‡∏ã‡πà‡∏≠‡∏ô‡∏ï‡∏±‡∏ß‡∏Å‡∏£‡∏≠‡∏á" : "‡πÅ‡∏™‡∏î‡∏á‡∏ï‡∏±‡∏ß‡∏Å‡∏£‡∏≠‡∏á"}</button>
-        <div className={`plan-filter-grid ${filtersOpen ? "mobile-open" : ""}`}>
-          <label><span>‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô</span><select value={filterDate} onChange={(event) => { setFilterDate(event.target.value); setPlanPage(1); }}><option value="">‡∏ó‡∏∏‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà</option>{dates.map((date) => <option key={date} value={date}>{formatDate(date)}</option>)}</select></label>
-          <label><span>‡πÇ‡∏£‡∏á‡∏á‡∏≤‡∏ô (FAC)</span><select value={filterFact} onChange={(event) => { setFilterFact(event.target.value); setPlanPage(1); }}><option value="ALL">‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î</option>{facts.map((fact) => <option key={fact}>{fact}</option>)}</select></label>
-          <label><span>‡πÄ‡∏ß‡∏•‡∏≤</span><select value={filterTime} onChange={(event) => { setFilterTime(event.target.value); setPlanPage(1); }}><option value="ALL">‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î</option>{times.map((time) => <option key={time}>{time}</option>)}</select></label>
-          <label><span>‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤</span><input value={query} onChange={(event) => { setQuery(event.target.value); setPlanPage(1); }} placeholder="Material / Part No. / DO" /></label>
-          <button className="button primary" onClick={() => setPlanPage(1)}>‚åï ‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤</button>
-          <button className="button secondary" onClick={resetPlanFilters}>‚Üª ‡∏•‡πâ‡∏≤‡∏á‡∏Ñ‡πà‡∏≤</button>
-        </div>
-        {canEditPage("plan") && (file || parsing) && <div className="import-preview plan-import-preview"><div><span>XL</span><p><b>{file?.name}</b><small>{parsing ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏≠‡πà‡∏≤‡∏ô‡πÑ‡∏ü‡∏•‡πå‚Ä¶" : `${fmt(previewRows.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ¬∑ ${fmt(previewRows.reduce((sum, row) => sum + row.reqQty, 0))} ‡∏ä‡∏¥‡πâ‡∏ô`}</small></p></div><button className="button primary" disabled={!previewRows.length || importing} onClick={importExcel}>{importing ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤‚Ä¶" : "‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤"}</button></div>}
-      </Card>
-
-      <Card className="plan-list-card" title={<span className="plan-list-title">‚ñ¶ ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡πÅ‡∏ú‡∏ô‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô <em>{fmt(filtered.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</em></span>} action={<span className="plan-last-import">{latestImport ? `‡∏≠‡∏±‡∏õ‡πÇ‡∏´‡∏•‡∏î‡∏•‡πà‡∏≤‡∏™‡∏∏‡∏î: ${formatDateTime(latestImport.createdAt)} ‡πÇ‡∏î‡∏¢ ${latestImport.importedByName}` : "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤"}</span>}>
-        {paginatedDues.length ? <div className="plan-modern-table">
-          <div className="plan-modern-head"><span>‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô</span><span>‡πÇ‡∏£‡∏á‡∏á‡∏≤‡∏ô (FAC)</span><span>‡πÄ‡∏ß‡∏•‡∏≤</span><span>Part / Material No.</span><span>‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ / Site</span><span>Job / DO</span><span>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô (‡∏ä‡∏¥‡πâ‡∏ô)</span><span>‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞</span><span>‡∏à‡∏±‡∏î‡∏Å‡∏≤‡∏£</span></div>
-          <div className="plan-modern-body">{paginatedDues.map((due) => {
-            const image = partImages.find((item) => item.materialCode === due.materialCode);
-            const importRow = payload.imports.find((item) => item.id === due.importId);
-            return <div className={`plan-modern-row ${isDeliveryOverdue(due) ? "overdue" : ""}`} key={due.id}>
-              <span><b>{formatDate(due.deliveryDate)}</b><small>{due.shop || "‚Äî"}</small></span>
-              <span><b>{due.fact}</b><small>{due.line || due.shop || "‚Äî"}</small></span>
-              <span><b>{due.deliveryTime}</b></span>
-              <span className="plan-part-cell"><PartImage materialCode={due.materialCode} compact version={image?.updatedAt} /><span><b>{due.materialCode}</b><small>{due.materialDescription || "‚Äî"}</small></span></span>
-              <span><b>{due.site || "‚Äî"}</b></span>
-              <span><b>{due.doNo}</b><small>Seq {due.seq}</small></span>
-              <span><b>{fmt(due.reqQty)} ‡∏ä‡∏¥‡πâ‡∏ô</b></span>
-              <span><em className={`status ${Number(due.arrangedQty) > 0 && stateOf(due) === "pending" ? "partial" : stateOf(due)}`}>{stateLabel(due)}</em></span>
-              <span>{importRow && user.role === "admin" ? <button className="plan-delete-button" title="‡∏•‡∏ö‡∏ä‡∏∏‡∏î Excel ‡∏ó‡∏µ‡πà‡∏°‡∏µ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ô‡∏µ‡πâ" disabled={deletingImportId === importRow.id} onClick={() => void deleteImport(importRow)}>{deletingImportId === importRow.id ? "‚Ä¶" : "‚ô≤"}</button> : "‚Äî"}</span>
-            </div>;
-          })}</div>
-          <footer>
-            <span>‡πÅ‡∏™‡∏î‡∏á {fmt(planStartIndex + 1)} - {fmt(Math.min(planStartIndex + planPageSize, filtered.length))} ‡∏à‡∏≤‡∏Å {fmt(filtered.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</span>
-            <nav className="part-pagination" aria-label="‡∏´‡∏ô‡πâ‡∏≤‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡πÅ‡∏ú‡∏ô‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô"><button className="part-page-button" disabled={safePlanPage === 1} onClick={() => setPlanPage(Math.max(1, safePlanPage - 1))}>¬´</button>{planPageButtons.map((item, index) => item === "‚Ä¶" ? <span className="part-page-dots" key={"plan-dots-" + index}>‚Ä¶</span> : <button className={"part-page-button " + (item === safePlanPage ? "active" : "")} key={item} onClick={() => setPlanPage(item)}>{item}</button>)}<button className="part-page-button" disabled={safePlanPage === planTotalPages} onClick={() => setPlanPage(Math.min(planTotalPages, safePlanPage + 1))}>¬ª</button></nav>
-            <label className="part-page-size">‡πÅ‡∏™‡∏î‡∏á‡∏ï‡πà‡∏≠‡∏´‡∏ô‡πâ‡∏≤ <select value={planPageSize} onChange={(event) => { setPlanPageSize(Number(event.target.value)); setPlanPage(1); }}><option value={10}>10</option><option value={20}>20</option><option value={50}>50</option></select></label>
-          </footer>
-        </div> : <Empty title="‡πÑ‡∏°‡πà‡∏û‡∏ö‡πÅ‡∏ú‡∏ô‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô" text="‡∏•‡∏≠‡∏á‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà ‡πÇ‡∏£‡∏á‡∏á‡∏≤‡∏ô ‡πÄ‡∏ß‡∏•‡∏≤ ‡∏´‡∏£‡∏∑‡∏≠‡∏Ñ‡∏≥‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤" />}
-      </Card>
-    </div>;
-  }
-
-  function renderScan(scanMode: "arrange" | "dispatch") {
-    const progress = tagPreview ? Math.min(100, Math.round((tagPreview.due.projectedQty / tagPreview.due.reqQty) * 100)) : 0;
-    const selectedDateDues = arrangeScopeDues;
-    const selectedDateRemaining = selectedDateDues.reduce((sum, due) => sum + Math.max(Number(due.reqQty) - Number(due.scannedQty) - Number(due.arrangedQty || 0), 0), 0);
-    if (scanMode === "arrange") {
-      const completedCount = payload.dues.filter((due) => Number(due.scannedQty) >= Number(due.reqQty)).length;
-      const overdueCount = payload.dues.filter((due) => isDeliveryOverdue(due) && Number(due.scannedQty) < Number(due.reqQty)).length;
-      const remainingCount = payload.dues.filter((due) => Number(due.scannedQty) < Number(due.reqQty)).length;
-      const needle = arrangeDueSearch.trim().toLowerCase();
-      const arrangeRows = arrangeScopeDues.filter((due) => (!needle || [due.materialCode, due.materialDescription, due.doNo, due.fact, due.line, due.site, formatDate(due.deliveryDate), due.deliveryTime].join(" ").toLowerCase().includes(needle)));
-      const arrangePageSize = 8;
-      const arrangePages = Math.max(1, Math.ceil(arrangeRows.length / arrangePageSize));
-      const safeArrangePage = Math.min(arrangeListPage, arrangePages);
-      const pageRows = arrangeRows.slice((safeArrangePage - 1) * arrangePageSize, safeArrangePage * arrangePageSize);
-      const pickedTotal = stock.picks.reduce((sum, item) => sum + Number(item.pickedQty || 0), 0);
-      const arrangedNeedle = arrangedSearch.trim().toLowerCase();
-      const arrangedRows = stock.picks.filter((item) => !arrangedNeedle || [
-        item.materialCode, item.jobNo, item.stockTagCode, item.doNo, item.fact,
-        item.line, item.shop, item.deliveryDate, item.deliveryTime, item.pickedByName,
-      ].join(" ").toLowerCase().includes(arrangedNeedle));
-      const arrangedPageSize = 10;
-      const arrangedPages = Math.max(1, Math.ceil(arrangedRows.length / arrangedPageSize));
-      const safeArrangedPage = Math.min(arrangedPage, arrangedPages);
-      const arrangedPageRows = arrangedRows.slice((safeArrangedPage - 1) * arrangedPageSize, safeArrangedPage * arrangedPageSize);
-      return <>
-        <div className="arrange-summary-grid page-summary">
-          <article className="arrange-color-card blue" style={{ background: "linear-gradient(135deg,#e4f1ff 0%,#b9d8ff 100%)", borderColor: "#8fbdff" }}><span style={{ background: "linear-gradient(145deg,#48aaff,#075fe0)" }}>‚ñ¶</span><div><small>‡∏á‡∏≤‡∏ô‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î</small><b>{fmt(payload.dues.length)}</b><em>‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</em></div></article>
-          <article className="arrange-color-card green" style={{ background: "linear-gradient(135deg,#e0faeb 0%,#abeac7 100%)", borderColor: "#7bd6a5" }}><span style={{ background: "linear-gradient(145deg,#50dc96,#08a455)" }}>‚úì</span><div><small>‡∏Ñ‡∏£‡∏ö‡∏ï‡∏≤‡∏°‡πÅ‡∏ú‡∏ô</small><b>{fmt(completedCount)}</b><em>‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</em></div></article>
-          <article className="arrange-color-card orange" style={{ background: "linear-gradient(135deg,#fff3d4 0%,#ffd58a 100%)", borderColor: "#f3b94f" }}><span style={{ background: "linear-gradient(145deg,#ffc653,#ee8200)" }}>‚ó∑</span><div><small>‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠</small><b>{fmt(remainingCount)}</b><em>‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</em></div></article>
-          <article className="arrange-color-card red" style={{ background: "linear-gradient(135deg,#ffe7eb 0%,#ffb5c1 100%)", borderColor: "#f28a9c" }}><span style={{ background: "linear-gradient(145deg,#ff7182,#df263f)" }}>!</span><div><small>‡πÄ‡∏Å‡∏¥‡∏ô‡∏î‡∏¥‡∏ß‡∏à‡∏±‡∏î‡∏™‡πà‡∏á</small><b>{fmt(overdueCount)}</b><em>‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</em></div></article>
-          <article className="arrange-brand-card"><span>‚óá</span><div><b>‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡∏î‡πâ‡∏ß‡∏¢ KIT Tag</b><small>‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà Due ‡πÅ‡∏•‡πâ‡∏ß‡∏™‡πÅ‡∏Å‡∏ô KIT Tag ‡πÉ‡∏î‡∏Å‡πà‡∏≠‡∏ô‡∏Å‡πá‡πÑ‡∏î‡πâ</small></div></article>
-        </div>
-
-        <div className="arrange-workspace">
-          {canEditPage("arrange") && <section className="arrange-scan-panel">
-            <header className="arrange-section-head"><span>‚åó</span><div><h3>‡∏™‡πÅ‡∏Å‡∏ô KIT Stock Tag</h3><p>‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà ‡∏£‡∏≠‡∏ö ‡πÅ‡∏•‡∏∞ FAC ‡πÅ‡∏•‡πâ‡∏ß‡∏™‡πÅ‡∏Å‡∏ô KIT Tag ‡∏Ç‡∏≠‡∏á Part ‡πÉ‡∏î‡∏Å‡πà‡∏≠‡∏ô‡∏Å‡πá‡πÑ‡∏î‡πâ</p></div><button className="camera-button arrange-camera-button" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>‚ñ£ ‡πÄ‡∏õ‡∏¥‡∏î‡∏Å‡∏•‡πâ‡∏≠‡∏á</button></header>
-            <div className="arrange-scan-body">
-              <button type="button" className="arrange-camera-zone" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>
-                <span>‚åó</span><b>{checkingTag ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡∏á‡∏≤‡∏ô‚Ä¶" : "‡∏û‡∏£‡πâ‡∏≠‡∏°‡∏™‡πÅ‡∏Å‡∏ô KIT Tag"}</b><small>‡∏¢‡∏¥‡∏á‡∏ö‡∏≤‡∏£‡πå‡πÇ‡∏Ñ‡πâ‡∏î ‡∏´‡∏£‡∏∑‡∏≠‡πÅ‡∏ï‡∏∞‡πÄ‡∏û‡∏∑‡πà‡∏≠‡πÄ‡∏õ‡∏¥‡∏î‡∏Å‡∏•‡πâ‡∏≠‡∏á‡πÇ‡∏ó‡∏£‡∏®‡∏±‡∏û‡∏ó‡πå</small><i />
-              </button>
-              <div className="arrange-result-card">
-                {arrangementPreview ? <>
-                  <div className="arrange-success"><span>‚úì</span><b>‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à!</b></div>
-                  <div className="arrange-part-result"><PartImage materialCode={arrangementPreview.due.materialCode} compact /><div><small>Part No.</small><b>{arrangementPreview.due.materialCode}</b><p>{arrangementPreview.due.materialDescription || "‡πÑ‡∏°‡πà‡∏£‡∏∞‡∏ö‡∏∏‡∏ä‡∏∑‡πà‡∏≠‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô"}</p></div></div>
-                  <dl><div><dt>‡∏£‡∏≠‡∏ö / FAC</dt><dd>{arrangementPreview.due.deliveryTime} / {arrangementPreview.due.fact}</dd></div><div><dt>Job</dt><dd>{arrangementPreview.tag.jobNo}</dd></div><div><dt>Due ‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î</dt><dd>{fmt(arrangementPreview.due.reqQty)} ‡∏ä‡∏¥‡πâ‡∏ô</dd></div><div><dt>‡∏à‡∏±‡∏î‡∏Ñ‡∏£‡∏±‡πâ‡∏á‡∏ô‡∏µ‡πâ</dt><dd>{fmt(arrangementPreview.pick.pickedQty)} ‡∏ä‡∏¥‡πâ‡∏ô</dd></div><div><dt>‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠</dt><dd>{fmt(arrangementPreview.due.remainingQty)} ‡∏ä‡∏¥‡πâ‡∏ô</dd></div></dl><button type="button" className="button primary" onClick={()=>setSplitTagRequest({pickId:arrangementPreview.pick.id})}>‚ñ§ ‡∏û‡∏¥‡∏°‡∏û‡πå Tag ‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô / ‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠</button>
-                </> : effectiveArrangeDueDate ? <>
-                  <div className="arrange-waiting"><span>‚ñ¶</span><b>Due ‡∏ó‡∏µ‡πà‡πÄ‡∏•‡∏∑‡∏≠‡∏Å</b></div>
-                  <div className="arrange-part-result"><span className="arrange-date-icon">‚ó∑</span><div><small>‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô</small><b>{formatDate(effectiveArrangeDueDate)}</b><p>‡∏£‡∏≠‡∏ö {arrangeDueTime || "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î"} ¬∑ {arrangeDueFact || "‡∏ó‡∏∏‡∏Å FAC"} ‚Äî ‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏±‡∏ö‡∏Ñ‡∏π‡πà Part ‡πÄ‡∏â‡∏û‡∏≤‡∏∞ Due ‡∏ï‡∏≤‡∏°‡∏ó‡∏µ‡πà‡πÄ‡∏•‡∏∑‡∏≠‡∏Å</p></div></div>
-                  <dl><div><dt>Due ‡∏ó‡∏µ‡πà‡∏¢‡∏±‡∏á‡∏à‡∏±‡∏î‡πÑ‡∏°‡πà‡∏Ñ‡∏£‡∏ö</dt><dd>{fmt(selectedDateDues.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</dd></div><div><dt>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠‡∏£‡∏ß‡∏°</dt><dd>{fmt(selectedDateRemaining)} ‡∏ä‡∏¥‡πâ‡∏ô</dd></div></dl>
-                </> : <Empty title="‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà Due" text="‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô‡∏Å‡πà‡∏≠‡∏ô‡∏™‡πÅ‡∏Å‡∏ô KIT Tag" />}
-              </div>
-            </div>
-            <form className="arrange-action-form" onSubmit={(event) => void stageStockTag(event)}>
-              <label><span>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ó‡∏µ‡πà‡∏à‡∏∞‡∏à‡∏±‡∏î</span><input type="number" min="1" value={arrangeQty} onChange={(e) => setArrangeQty(e.target.value)} placeholder="‡∏≠‡∏±‡∏ï‡πÇ‡∏ô‡∏°‡∏±‡∏ï‡∏¥‡∏ï‡∏≤‡∏° Due" /></label>
-              <label className="arrange-tag-field"><span>KIT Stock Tag *</span><input ref={tagInput} value={arrangeTag} onChange={(e) => { setArrangeTag(e.target.value); setArrangementPreview(null); }} placeholder="‡∏¢‡∏¥‡∏á Tag ‡πÅ‡∏•‡πâ‡∏ß‡πÄ‡∏Ñ‡∏£‡∏∑‡πà‡∏≠‡∏á‡∏™‡πà‡∏á Enter" autoComplete="off" /></label>
-              <button className="button primary" disabled={!effectiveArrangeDueDate || !arrangeTag.trim() || checkingTag}>{checkingTag ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‚Ä¶" : "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏Å‡πà‡∏≠‡∏ô‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô"}</button>
-            </form>
-            <div className="arrange-help">‚ìò ‡∏Ç‡∏±‡πâ‡∏ô‡∏ï‡∏≠‡∏ô‡∏ô‡∏µ‡πâ‡∏¢‡πâ‡∏≤‡∏¢‡∏¢‡∏≠‡∏î‡∏à‡∏≤‡∏Å Stock ‡∏û‡∏£‡πâ‡∏≠‡∏°‡πÉ‡∏ä‡πâ‡πÑ‡∏õ‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡∏£‡∏≠‡∏™‡πà‡∏á ‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠‡∏£‡∏ß‡∏°‡πÑ‡∏°‡πà‡∏•‡∏î‡∏à‡∏ô‡∏Å‡∏ß‡πà‡∏≤‡∏à‡∏∞‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å</div>
-          </section>}
-
-          <aside className="arrange-due-panel">
-            <header><span>‚ñ§</span><div><h3>‡πÄ‡∏•‡∏∑‡∏≠‡∏Å Due ‡∏ó‡∏µ‡πà‡∏à‡∏∞‡∏à‡∏±‡∏î</h3><p>‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà ‡∏£‡∏≠‡∏ö‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô ‡πÅ‡∏•‡∏∞ FAC ‡∏Å‡πà‡∏≠‡∏ô‡∏™‡πÅ‡∏Å‡∏ô Tag</p></div></header>
-            <label className="arrange-scope-label" htmlFor="arrange-scope-date">‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô</label>
-            <div className="arrange-due-search"><span>‚ó∑</span><select id="arrange-scope-date" aria-label="‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô‡∏™‡∏≥‡∏´‡∏£‡∏±‡∏ö‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô" disabled={checkingTag} value={effectiveArrangeDueDate} onChange={(event) => { setArrangeDueDate(event.target.value); setArrangeDueTime(""); setArrangeDueFact(""); setArrangementPreview(null); setArrangeListPage(1); }}>
-              {[...new Set([...arrangeDueDates, ...(effectiveArrangeDueDate ? [effectiveArrangeDueDate] : [])])].sort().map((date) => <option key={date} value={date}>{formatDate(date)} ¬∑ {fmt(arrangeableDues.filter((due) => due.deliveryDate === date).length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</option>)}
-            </select></div>
-            <label className="arrange-scope-label" htmlFor="arrange-scope-time">‡∏£‡∏≠‡∏ö‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô</label>
-            <div className="arrange-due-search"><span>‚ó∑</span><select id="arrange-scope-time" aria-label="‡∏£‡∏≠‡∏ö‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô‡∏™‡∏≥‡∏´‡∏£‡∏±‡∏ö‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô" disabled={checkingTag || !effectiveArrangeDueDate} value={arrangeDueTime} onChange={(event) => { setArrangeDueDate(effectiveArrangeDueDate); setArrangeDueTime(event.target.value); setArrangementPreview(null); setArrangeListPage(1); }}>
-              <option value="">‡∏ó‡∏∏‡∏Å‡∏£‡∏≠‡∏ö</option>{[...new Set([...arrangeDueTimes, ...(arrangeDueTime ? [arrangeDueTime] : [])])].sort().map((time) => <option key={time} value={time}>{time}</option>)}
-            </select></div>
-            <label className="arrange-scope-label" htmlFor="arrange-scope-fact">FAC</label>
-            <div className="arrange-due-search"><span>‚ñ§</span><select id="arrange-scope-fact" aria-label="FAC ‡∏™‡∏≥‡∏´‡∏£‡∏±‡∏ö‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô" disabled={checkingTag || !effectiveArrangeDueDate} value={arrangeDueFact} onChange={(event) => { setArrangeDueDate(effectiveArrangeDueDate); setArrangeDueFact(event.target.value); setArrangementPreview(null); setArrangeListPage(1); }}>
-              <option value="">‡∏ó‡∏∏‡∏Å FAC</option>{[...new Set([...arrangeDueFacts, ...(arrangeDueFact ? [arrangeDueFact] : [])])].sort().map((fact) => <option key={fact} value={fact}>{fact}</option>)}
-            </select></div>
-            <div className="arrange-due-cards">
-              {arrangeDueDates.slice(0, 6).map((date) => {
-                const selected = date === effectiveArrangeDueDate;
-                const dateDues = arrangeableDues.filter((due) => due.deliveryDate === date);
-                const remaining = dateDues.reduce((sum, due) => sum + Math.max(Number(due.reqQty) - Number(due.scannedQty) - Number(due.arrangedQty || 0), 0), 0);
-                return <button key={date} className={selected ? "selected" : ""} disabled={checkingTag} onClick={() => { setArrangeDueDate(date); setArrangeDueTime(""); setArrangeDueFact(""); setArrangementPreview(null); setArrangeListPage(1); }}>
-                  <i>{selected ? "‚óè" : "‚óã"}</i><span>‚ó∑</span><div><b>{formatDate(date)}</b><small>{fmt(dateDues.length)} Due ‡∏ó‡∏µ‡πà‡∏¢‡∏±‡∏á‡∏à‡∏±‡∏î‡πÑ‡∏°‡πà‡∏Ñ‡∏£‡∏ö</small><em>‡πÄ‡∏´‡∏•‡∏∑‡∏≠‡∏à‡∏±‡∏î‡∏£‡∏ß‡∏° {fmt(remaining)} ‡∏ä‡∏¥‡πâ‡∏ô</em></div><strong>‚Ä∫</strong>
-                </button>;
-              })}
-              {!arrangeDueDates.length && <Empty title="‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà Due ‡∏ó‡∏µ‡πà‡∏ï‡πâ‡∏≠‡∏á‡∏à‡∏±‡∏î" text="‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤‡πÅ‡∏ú‡∏ô‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô‡∏Å‡πà‡∏≠‡∏ô‡πÄ‡∏•‡∏∑‡∏≠‡∏Å Due" />}
-            </div>
-          </aside>
-        </div>
-
-        <Card className="arrange-list-panel" title={<><span className="arrange-list-icon">‚ñ£</span> ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏á‡∏≤‡∏ô‡∏ï‡∏≤‡∏° Due ‡∏ó‡∏µ‡πà‡πÄ‡∏•‡∏∑‡∏≠‡∏Å <em>{fmt(arrangeRows.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</em></>} action={<span className="arrange-selected-label">{effectiveArrangeDueDate ? `${formatDate(effectiveArrangeDueDate)} ¬∑ ‡∏£‡∏≠‡∏ö ${arrangeDueTime || "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î"} ¬∑ ${arrangeDueFact || "‡∏ó‡∏∏‡∏Å FAC"}` : "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡πÑ‡∏î‡πâ‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà"}</span>}>
-          {pageRows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table arrange-table"><thead><tr><th>‡∏£‡∏π‡∏õ‡∏†‡∏≤‡∏û</th><th>Part No.</th><th>Part Name</th><th>DO / Seq</th><th className="num">‡∏ï‡πâ‡∏≠‡∏á‡∏à‡∏±‡∏î</th><th className="num">‡∏à‡∏±‡∏î‡πÅ‡∏•‡πâ‡∏ß</th><th className="num">‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠</th><th>‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞</th></tr></thead><tbody>
-            {pageRows.map((due) => {
-              const remaining = due.reqQty - due.scannedQty - (due.arrangedQty || 0);
-              return <tr key={due.id}>
-                <td data-label="‡∏£‡∏π‡∏õ‡∏†‡∏≤‡∏û"><PartImage materialCode={due.materialCode} compact /></td>
-                <td data-label="Part No."><b>{due.materialCode}</b><small>{due.deliveryTime} ¬∑ {due.fact} / {due.line || "‚Äî"}</small></td>
-                <td data-label="Part Name">{due.materialDescription || "‚Äî"}</td>
-                <td data-label="DO / Seq"><b>{due.doNo}</b><small>Seq {due.seq}</small></td>
-                <td data-label="‡∏ï‡πâ‡∏≠‡∏á‡∏à‡∏±‡∏î" className="num"><b>{fmt(due.reqQty)}</b></td>
-                <td data-label="‡∏à‡∏±‡∏î‡πÅ‡∏•‡πâ‡∏ß" className="num"><b>{fmt(due.arrangedQty || 0)}</b></td>
-                <td data-label="‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠" className="num"><b>{fmt(remaining)}</b></td>
-                <td data-label="‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞"><span className={`status ${isDeliveryOverdue(due) ? "over" : Number(due.arrangedQty || 0) > 0 ? "partial" : "completed"}`}>{isDeliveryOverdue(due) ? "‡πÄ‡∏Å‡∏¥‡∏ô‡∏î‡∏¥‡∏ß‡∏à‡∏±‡∏î‡∏™‡πà‡∏á" : Number(due.arrangedQty || 0) > 0 ? "‡∏à‡∏±‡∏î‡∏ö‡∏≤‡∏á‡∏™‡πà‡∏ß‡∏ô" : "‡∏û‡∏£‡πâ‡∏≠‡∏°‡∏à‡∏±‡∏î"}</span></td>
-              </tr>;
-            })}
-          </tbody></table></div> : <Empty title="‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ó‡∏µ‡πà‡∏ï‡πâ‡∏≠‡∏á‡∏à‡∏±‡∏î" text="‡∏ó‡∏∏‡∏Å‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏à‡∏±‡∏î‡∏Ñ‡∏£‡∏ö‡πÅ‡∏•‡πâ‡∏ß ‡∏´‡∏£‡∏∑‡∏≠‡πÑ‡∏°‡πà‡∏û‡∏ö‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏ï‡∏≤‡∏°‡∏Ñ‡∏≥‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤" />}
-          <div className="arrange-pagination"><span>‡πÅ‡∏™‡∏î‡∏á {pageRows.length ? (safeArrangePage - 1) * arrangePageSize + 1 : 0} - {Math.min(safeArrangePage * arrangePageSize, arrangeRows.length)} ‡∏à‡∏≤‡∏Å {fmt(arrangeRows.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</span><div><button disabled={safeArrangePage <= 1} onClick={() => setArrangeListPage((page) => Math.max(1, page - 1))}>¬´</button>{Array.from({ length: Math.min(arrangePages, 5) }, (_, index) => index + 1).map((page) => <button key={page} className={safeArrangePage === page ? "active" : ""} onClick={() => setArrangeListPage(page)}>{page}</button>)}{arrangePages > 5 && <em>‚Ä¶ {arrangePages}</em>}<button disabled={safeArrangePage >= arrangePages} onClick={() => setArrangeListPage((page) => Math.min(arrangePages, page + 1))}>¬ª</button></div><strong>‡∏à‡∏±‡∏î‡∏™‡∏∞‡∏™‡∏° {fmt(pickedTotal)} ‡∏ä‡∏¥‡πâ‡∏ô</strong></div>
-        </Card>
-
-        <Card className="arrange-list-panel arranged-history-panel" title={<><span className="arranged-list-icon">‚úì</span> ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ó‡∏µ‡πà‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡πÅ‡∏•‡πâ‡∏ß <em>{fmt(arrangedRows.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</em></>} action={<div className="arranged-search"><span>‚åï</span><input type="search" value={arrangedSearch} onChange={(event) => { setArrangedSearch(event.target.value); setArrangedPage(1); }} placeholder="‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤ Due, Part, Job, KIT Tag ‡∏´‡∏£‡∏∑‡∏≠‡∏ú‡∏π‡πâ‡∏à‡∏±‡∏î" /></div>}>
-          {arrangedPageRows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table arranged-table"><thead><tr><th>‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏à‡∏±‡∏î</th><th>‡∏£‡∏π‡∏õ‡∏†‡∏≤‡∏û</th><th>Due</th><th>Part No.</th><th>Job / KIT Tag</th><th className="num">‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏à‡∏±‡∏î</th><th className="num">‡∏Ç‡∏≤‡∏¢‡πÅ‡∏•‡πâ‡∏ß</th><th className="num">‡∏£‡∏≠‡∏Ç‡∏≤‡∏¢</th><th>‡∏ú‡∏π‡πâ‡∏à‡∏±‡∏î</th><th>‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞ / Tag</th></tr></thead><tbody>
-            {arrangedPageRows.map((item) => {
-              const waitingQty = Math.max(Number(item.pickedQty || 0) - Number(item.dispatchedQty || 0), 0);
-              const dispatchState = waitingQty <= 0 ? "completed" : Number(item.dispatchedQty || 0) > 0 ? "partial" : "pending";
-              return <tr key={item.id}>
-                <td data-label="‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏à‡∏±‡∏î"><b>{formatDateTime(item.pickedAt)}</b></td>
-                <td data-label="‡∏£‡∏π‡∏õ‡∏†‡∏≤‡∏û"><PartImage materialCode={item.materialCode} compact /></td>
-                <td data-label="Due"><b>{formatDate(item.deliveryDate)} ¬∑ {item.deliveryTime}</b><small>{item.fact} / {item.line || "‚Äî"} ¬∑ {item.doNo} / Seq {item.seq}</small></td>
-                <td data-label="Part No."><b>{item.materialCode}</b></td>
-                <td data-label="Job / KIT Tag"><b>{item.jobNo || "‚Äî"}</b><small>{item.stockTagCode}</small></td>
-                <td data-label="‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏à‡∏±‡∏î" className="num"><b>{fmt(item.pickedQty)}</b></td>
-                <td data-label="‡∏Ç‡∏≤‡∏¢‡πÅ‡∏•‡πâ‡∏ß" className="num"><b className="sent">{fmt(item.dispatchedQty || 0)}</b></td>
-                <td data-label="‡∏£‡∏≠‡∏Ç‡∏≤‡∏¢" className="num"><b className={waitingQty > 0 ? "warning" : ""}>{fmt(waitingQty)}</b></td>
-                <td data-label="‡∏ú‡∏π‡πâ‡∏à‡∏±‡∏î"><b>{item.pickedByName || "‚Äî"}</b><small>{item.pickedByCode || ""}</small></td>
-                <td data-label="‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞"><span className={`status ${dispatchState}`}>{waitingQty <= 0 ? "‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‡πÅ‡∏•‡πâ‡∏ß" : Number(item.dispatchedQty || 0) > 0 ? "‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‡∏ö‡∏≤‡∏á‡∏™‡πà‡∏ß‡∏ô" : "‡∏£‡∏≠‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å"}</span>{canEditPage("arrange")&&waitingQty>0&&<button className="tiny-button" type="button" onClick={()=>setSplitTagRequest({pickId:item.id})}>‚ñ§ ‡∏û‡∏¥‡∏°‡∏û‡πå Tag</button>}</td>
-              </tr>;
-            })}
-          </tbody></table></div> : <Empty title="‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ó‡∏µ‡πà‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡πÅ‡∏•‡πâ‡∏ß" text={arrangedSearch ? "‡πÑ‡∏°‡πà‡∏û‡∏ö‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ï‡∏≤‡∏°‡∏Ñ‡∏≥‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤" : "‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏¢‡∏¥‡∏á KIT Tag ‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏à‡∏∞‡πÅ‡∏™‡∏î‡∏á‡∏ó‡∏µ‡πà‡∏ô‡∏µ‡πà"} />}
-          <div className="arrange-pagination"><span>‡πÅ‡∏™‡∏î‡∏á {arrangedPageRows.length ? (safeArrangedPage - 1) * arrangedPageSize + 1 : 0} - {Math.min(safeArrangedPage * arrangedPageSize, arrangedRows.length)} ‡∏à‡∏≤‡∏Å {fmt(arrangedRows.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</span><div><button disabled={safeArrangedPage <= 1} onClick={() => setArrangedPage((page) => Math.max(1, page - 1))}>¬´</button>{Array.from({ length: Math.min(arrangedPages, 5) }, (_, index) => index + 1).map((page) => <button key={page} className={safeArrangedPage === page ? "active" : ""} onClick={() => setArrangedPage(page)}>{page}</button>)}{arrangedPages > 5 && <em>‚Ä¶ {arrangedPages}</em>}<button disabled={safeArrangedPage >= arrangedPages} onClick={() => setArrangedPage((page) => Math.min(arrangedPages, page + 1))}>¬ª</button></div><strong>‡∏£‡∏≠‡∏Ç‡∏≤‡∏¢‡∏£‡∏ß‡∏° {fmt(arrangedRows.reduce((sum, item) => sum + Math.max(Number(item.pickedQty || 0) - Number(item.dispatchedQty || 0), 0), 0))} ‡∏ä‡∏¥‡πâ‡∏ô</strong></div>
-        </Card>
-      </>;
-    }
-    const dispatchToday = payload.scans.filter((scan) => isToday(scan.createdAt));
-    const dispatchTodayQty = dispatchToday.reduce((sum, scan) => sum + Number(scan.qty || 0), 0);
-    const dispatchPending = stock.picks.filter((item) => Number(item.dispatchedQty || 0) < Number(item.pickedQty || 0));
-    const dispatchPendingQty = dispatchPending.reduce((sum, item) => sum + Math.max(Number(item.pickedQty || 0) - Number(item.dispatchedQty || 0), 0), 0);
-    const unmatchedCount = notice?.type === "error" ? 1 : 0;
-    return <>
-      <div className="dispatch-summary-grid page-summary">
-        <article className="dispatch-stat blue"><span>‚ñ•</span><div><small>‡∏™‡πÅ‡∏Å‡∏ô‡∏ß‡∏±‡∏ô‡∏ô‡∏µ‡πâ</small><b>{fmt(dispatchTodayQty)}</b><em>‡∏ä‡∏¥‡πâ‡∏ô ¬∑ {fmt(dispatchToday.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</em></div></article>
-        <article className="dispatch-stat green"><span>‚úì</span><div><small>‡∏ï‡∏±‡∏î‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à</small><b>{fmt(dispatchTodayQty)}</b><em>‡∏ä‡∏¥‡πâ‡∏ô</em></div></article>
-        <article className="dispatch-stat orange"><span>‚ó∑</span><div><small>‡∏£‡∏≠‡∏ï‡∏±‡∏î</small><b>{fmt(dispatchPendingQty)}</b><em>‡∏ä‡∏¥‡πâ‡∏ô ¬∑ {fmt(dispatchPending.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</em></div></article>
-        <article className="dispatch-stat red"><span>!</span><div><small>‡∏™‡πÅ‡∏Å‡∏ô‡πÑ‡∏°‡πà‡∏û‡∏ö</small><b>{fmt(unmatchedCount)}</b><em>‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏•‡πà‡∏≤‡∏™‡∏∏‡∏î</em></div></article>
-      </div>
-      <section className="dispatch-scope-panel">
-        <header><span>‚ñ§</span><div><h3>‡πÄ‡∏•‡∏∑‡∏≠‡∏Å Due ‡∏ó‡∏µ‡πà‡∏à‡∏∞‡∏ï‡∏£‡∏ß‡∏à‡πÅ‡∏•‡∏∞‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å</h3><p>‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà ‡∏£‡∏≠‡∏ö‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô ‡πÅ‡∏•‡∏∞ FAC ‡∏Å‡πà‡∏≠‡∏ô‡∏™‡πÅ‡∏Å‡∏ô Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ ‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡∏ï‡∏£‡∏ß‡∏à‡πÄ‡∏â‡∏û‡∏≤‡∏∞‡∏á‡∏≤‡∏ô‡πÉ‡∏ô‡∏Ç‡∏≠‡∏ö‡πÄ‡∏Ç‡∏ï‡∏ô‡∏µ‡πâ</p></div></header>
-        <div className="dispatch-scope-grid">
-          <label><span>‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô *</span><select aria-label="‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô‡∏™‡∏≥‡∏´‡∏£‡∏±‡∏ö‡∏ï‡∏£‡∏ß‡∏à‡πÅ‡∏•‡∏∞‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å" disabled={checkingTag} value={effectiveDispatchDueDate} onChange={(event) => { setDispatchDueDate(event.target.value); setDispatchDueTime(""); setDispatchDueFact(""); setRawTag(""); setDispatchKitSelection(null); setDispatchConfirmation(null); setTagPreview(null); }}><option value="">‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô</option>{dispatchDueDates.map((date) => <option key={date} value={date}>{formatDate(date)} ¬∑ {fmt(dispatchableDues.filter((due) => due.deliveryDate === date).length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏£‡∏≠‡∏Ç‡∏≤‡∏¢</option>)}</select></label>
-          <label><span>‡∏£‡∏≠‡∏ö‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô</span><select aria-label="‡∏£‡∏≠‡∏ö‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô‡∏™‡∏≥‡∏´‡∏£‡∏±‡∏ö‡∏ï‡∏£‡∏ß‡∏à‡πÅ‡∏•‡∏∞‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å" disabled={checkingTag || !effectiveDispatchDueDate} value={dispatchDueTime} onChange={(event) => { setDispatchDueDate(effectiveDispatchDueDate); setDispatchDueTime(event.target.value); setDispatchDueFact(""); setRawTag(""); setDispatchKitSelection(null); setDispatchConfirmation(null); setTagPreview(null); }}><option value="">‡∏ó‡∏∏‡∏Å‡∏£‡∏≠‡∏ö</option>{dispatchDueTimes.map((time) => <option key={time} value={time}>{time}</option>)}</select></label>
-          <label><span>FAC</span><select aria-label="FAC ‡∏™‡∏≥‡∏´‡∏£‡∏±‡∏ö‡∏ï‡∏£‡∏ß‡∏à‡πÅ‡∏•‡∏∞‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å" disabled={checkingTag || !effectiveDispatchDueDate} value={dispatchDueFact} onChange={(event) => { setDispatchDueDate(effectiveDispatchDueDate); setDispatchDueFact(event.target.value); setRawTag(""); setDispatchKitSelection(null); setDispatchConfirmation(null); setTagPreview(null); }}><option value="">‡∏ó‡∏∏‡∏Å FAC</option>{dispatchDueFacts.map((fact) => <option key={fact} value={fact}>{fact}</option>)}</select></label>
-          <div className="dispatch-scope-summary"><small>‡∏Ç‡∏≠‡∏ö‡πÄ‡∏Ç‡∏ï‡∏ó‡∏µ‡πà‡πÄ‡∏•‡∏∑‡∏≠‡∏Å</small><b>{effectiveDispatchDueDate ? `${formatDate(effectiveDispatchDueDate)} ¬∑ ‡∏£‡∏≠‡∏ö ${dispatchDueTime || "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î"} ¬∑ ${dispatchDueFact || "‡∏ó‡∏∏‡∏Å FAC"}` : "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏á‡∏≤‡∏ô‡∏à‡∏±‡∏î‡∏£‡∏≠‡∏Ç‡∏≤‡∏¢"}</b><span>{fmt(dispatchScopeDues.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ¬∑ ‡∏£‡∏≠‡∏Ç‡∏≤‡∏¢ {fmt(dispatchScopeDues.reduce((sum, due) => sum + Number(due.arrangedQty || 0), 0))} ‡∏ä‡∏¥‡πâ‡∏ô</span></div>
-        </div>
-      </section>
-      {canEditPage("dispatch") && <div className="scan-layout">
-        <section className="scanner-card">
-          <div className="scanner-title"><div><h3>{dispatchKitSelection ? "‡∏Ç‡∏±‡πâ‡∏ô‡∏ï‡∏≠‡∏ô‡∏ó‡∏µ‡πà 2: ‡∏™‡πÅ‡∏Å‡∏ô Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤" : "‡∏Ç‡∏±‡πâ‡∏ô‡∏ï‡∏≠‡∏ô‡∏ó‡∏µ‡πà 1: ‡∏™‡πÅ‡∏Å‡∏ô KIT Tag ‡∏ó‡∏µ‡πà‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡πÅ‡∏•‡πâ‡∏ß"}</h3><p>{dispatchKitSelection ? "‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡∏ï‡∏£‡∏ß‡∏à Part ‡∏à‡∏≥‡∏ô‡∏ß‡∏ô Due ‡∏£‡∏≠‡∏ö ‡πÅ‡∏•‡∏∞ FAC ‡πÉ‡∏´‡πâ‡∏ï‡∏£‡∏á‡∏Å‡∏±‡∏ö KIT Tag ‡∏Å‡πà‡∏≠‡∏ô‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å" : "‡∏ï‡πâ‡∏≠‡∏á‡πÄ‡∏õ‡πá‡∏ô KIT Tag ‡∏ó‡∏µ‡πà‡πÄ‡∏Ñ‡∏¢‡∏™‡πÅ‡∏Å‡∏ô‡πÉ‡∏ô‡∏´‡∏ô‡πâ‡∏≤‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡πÅ‡∏•‡∏∞‡∏¢‡∏±‡∏á‡∏°‡∏µ‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏£‡∏≠‡∏Ç‡∏≤‡∏¢"}</p></div><button className="camera-button" disabled={!effectiveDispatchDueDate || checkingTag} onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>‚ñ£ ‡πÄ‡∏õ‡∏¥‡∏î‡∏Å‡∏•‡πâ‡∏≠‡∏á</button></div>
-          {dispatchKitSelection && <div className="dispatch-staged-note"><b>‚úì KIT Tag: {dispatchKitSelection.stockTagCode}</b> ¬∑ Part {dispatchKitSelection.materialCode} ¬∑ Job {dispatchKitSelection.jobNo || "‚Äî"} ¬∑ ‡∏£‡∏≠‡∏Ç‡∏≤‡∏¢ {fmt(dispatchKitSelection.waitingQty)} ‡∏ä‡∏¥‡πâ‡∏ô <button type="button" className="text-button" onClick={() => { setDispatchKitSelection(null); setRawTag(""); setDispatchConfirmation(null); window.setTimeout(() => tagInput.current?.focus(), 50); }}>‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô KIT Tag</button></div>}
-          <button type="button" className="scanner-visual" aria-label={dispatchKitSelection ? "‡πÄ‡∏õ‡∏¥‡∏î‡∏Å‡∏•‡πâ‡∏≠‡∏á‡∏™‡πÅ‡∏Å‡∏ô Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤" : "‡πÄ‡∏õ‡∏¥‡∏î‡∏Å‡∏•‡πâ‡∏≠‡∏á‡∏™‡πÅ‡∏Å‡∏ô KIT Tag"} disabled={!effectiveDispatchDueDate || checkingTag} onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}><span className="scan-frame"><span className="qr-symbol">‚ñ¶</span><b>{checkingTag ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‚Ä¶" : effectiveDispatchDueDate ? dispatchKitSelection ? "‡∏û‡∏£‡πâ‡∏≠‡∏°‡∏£‡∏±‡∏ö Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤" : "‡∏û‡∏£‡πâ‡∏≠‡∏°‡∏£‡∏±‡∏ö KIT Tag" : "‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô"}</b><small>{dispatchKitSelection ? "‡∏™‡πÅ‡∏Å‡∏ô Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤‡∏ó‡∏µ‡πà‡∏ï‡∏¥‡∏î‡∏Å‡∏±‡∏ö‡∏á‡∏≤‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á‡πÄ‡∏î‡∏µ‡∏¢‡∏ß‡∏Å‡∏±‡∏ô" : "‡∏™‡πÅ‡∏Å‡∏ô KIT Tag ‡∏ó‡∏µ‡πà‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡πÑ‡∏ß‡πâ‡∏Å‡πà‡∏≠‡∏ô"}</small><i /></span></button>
-          <form className="manual-scan" onSubmit={handleDispatchScan}><label><span>{dispatchKitSelection ? "Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ / ‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏à‡∏≤‡∏Å QR" : "KIT Tag / ‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏à‡∏≤‡∏Å QR"}</span><input ref={tagInput} value={rawTag} disabled={!effectiveDispatchDueDate} onChange={(e) => updateDispatchScannerValue(e.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void handleDispatchScan(value); } }} placeholder={effectiveDispatchDueDate ? dispatchKitSelection ? "‡∏¢‡∏¥‡∏á Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤" : "‡∏¢‡∏¥‡∏á KIT Tag ‡∏ó‡∏µ‡πà‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡πÅ‡∏•‡πâ‡∏ß" : "‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô‡∏Å‡πà‡∏≠‡∏ô"} autoComplete="off" /></label><button className="button primary" disabled={!effectiveDispatchDueDate || !rawTag.trim() || checkingTag}>{checkingTag ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‚Ä¶" : dispatchKitSelection ? "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏Ñ‡∏π‡πà Tag" : "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö KIT Tag"}</button></form>
-        </section>
-        <section className="tag-result" ref={tagResultRef}>
-          <header><div><p>Customer Tag / Due</p><h3>{tagPreview?.due.materialCode || "‡∏£‡∏≠‡∏Å‡∏≤‡∏£‡∏™‡πÅ‡∏Å‡∏ô"}</h3></div><span className={`status ${tagPreview ? "completed" : "pending"}`}>{tagPreview ? "‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" : "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ Tag"}</span></header>
-          {tagPreview ? <>
-            <div className="tag-main" style={{ flexWrap: "wrap" }}><PartImagePair materialCode={tagPreview.due.materialCode} masterVersion={partImages.find((item) => item.materialCode === tagPreview.due.materialCode)?.updatedAt} actualVersion={partActualImages.find((item) => item.materialCode === tagPreview.due.materialCode)?.updatedAt} /><div><small>PART / MATERIAL</small><b>{tagPreview.due.materialCode}</b><p>{tagPreview.due.materialDescription || "‡πÑ‡∏°‡πà‡∏£‡∏∞‡∏ö‡∏∏‡∏£‡∏≤‡∏¢‡∏•‡∏∞‡πÄ‡∏≠‡∏µ‡∏¢‡∏î"}</p></div></div>
-            <div className="detail-grid"><div><small>FAC / Line</small><b>{tagPreview.due.fact} / {tagPreview.due.line || "‚Äî"}</b></div><div><small>DO / Seq</small><b>{tagPreview.due.doNo} / {tagPreview.due.seq}</b></div><div><small>‡πÅ‡∏ú‡∏ô‡∏™‡πà‡∏á‡∏ß‡∏±‡∏ô / ‡πÄ‡∏ß‡∏•‡∏≤</small><b>{formatDate(tagPreview.due.deliveryDate)} {tagPreview.due.deliveryTime}</b></div><div><small>Tag ID</small><b>{tagPreview.tag.tagId}</b></div><div><small>Location</small><b>{tagPreview.tag.location || "‚Äî"}</b></div><div><small>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡πÉ‡∏ô Tag</small><b>{fmt(tagPreview.tag.qty)} {tagPreview.tag.unit}</b></div></div>
-            <div className="cut-summary"><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><span><b>{progress}%</b>‡∏´‡∏•‡∏±‡∏á‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å</span></div><div className="cut-numbers"><p><span>Due ‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î</span><b>{fmt(tagPreview.due.reqQty)}</b></p><p><span>‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‡πÅ‡∏•‡πâ‡∏ß</span><b>{fmt(tagPreview.due.projectedQty)}</b></p><p className="current"><span>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤</span><b>{fmt(tagPreview.tag.qty)}</b></p><p><span>Due ‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠</span><b>{fmt(tagPreview.due.remainingAfter)}</b></p></div></div>
-            {tagPreview.stockAllocations?.length ? <div className="linked-stock-tags"><b>Traceability: Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ ‚Üî KIT Tag / Job</b>{tagPreview.stockAllocations.map((item, index) => <span key={`${item.stockTagId}-${index}`}><strong>{item.stockTagCode || `Stock #${item.stockTagId}`}</strong> ¬∑ Job {item.jobNo || "‚Äî"} ¬∑ ‡∏ú‡∏•‡∏¥‡∏ï {item.productionDate ? formatDate(item.productionDate) : "‚Äî"} ¬∑ ‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ {item.receivedAt ? formatDateTime(item.receivedAt) : "‚Äî"} ¬∑ {fmt(item.qty)} ‡∏ä‡∏¥‡πâ‡∏ô</span>)}</div> : null}
-            <div className="scan-saved">‚úì ‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‡πÅ‡∏•‡πâ‡∏ß ‡∏•‡∏î Stock ‡πÅ‡∏•‡∏∞‡∏ï‡∏±‡∏î Due ‡∏û‡∏£‡πâ‡∏≠‡∏°‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å Job ‡∏ó‡∏µ‡πà‡πÉ‡∏ä‡πâ‡∏à‡∏£‡∏¥‡∏á</div>
-          </> : <Empty title={dispatchKitSelection ? "‡∏£‡∏≠‡∏™‡πÅ‡∏Å‡∏ô Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤" : "‡∏£‡∏≠‡∏™‡πÅ‡∏Å‡∏ô KIT Tag"} text="‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‡πÑ‡∏î‡πâ‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏™‡πÅ‡∏Å‡∏ô KIT Tag ‡∏ó‡∏µ‡πà‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡πÅ‡∏•‡πâ‡∏ß‡πÅ‡∏•‡∏∞ Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤‡∏ï‡∏£‡∏á‡∏Å‡∏±‡∏ô‡πÄ‡∏ó‡πà‡∏≤‡∏ô‡∏±‡πâ‡∏ô" />}
-        </section>
-      </div>}
-      <Card title="‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‡πÅ‡∏•‡∏∞‡∏ï‡∏±‡∏î‡∏¢‡∏≠‡∏î‡∏•‡πà‡∏≤‡∏™‡∏∏‡∏î" action={allowedPages.has("history") ? <button className="text-button" onClick={() => go("history")}>‡∏î‡∏π‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î ‚Üí</button> : undefined}>
-        {payload.scans.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>‡∏ß‡∏±‡∏ô / ‡πÄ‡∏ß‡∏•‡∏≤</th><th>FAC</th><th>Part No.</th><th>Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤</th><th className="num">‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ó‡∏µ‡πà‡∏ï‡∏±‡∏î</th><th>‡∏ú‡∏π‡πâ‡∏ï‡∏£‡∏ß‡∏à</th></tr></thead><tbody>{payload.scans.slice(0, 8).map((scan) => <tr key={scan.id}><td data-label="‡∏ß‡∏±‡∏ô / ‡πÄ‡∏ß‡∏•‡∏≤">{formatDateTime(scan.createdAt)}</td><td data-label="FAC"><b>{scan.fact}</b></td><td data-label="Part No."><b>{scan.materialCode}</b></td><td data-label="Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤">{scan.tagId}</td><td data-label="‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ó‡∏µ‡πà‡∏ï‡∏±‡∏î" className="num sent"><b>{fmt(scan.qty)} {scan.unit}</b></td><td data-label="‡∏ú‡∏π‡πâ‡∏ï‡∏£‡∏ß‡∏à">{scan.scannedByName}</td></tr>)}</tbody></table></div> : <Empty text="‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏ú‡∏π‡πâ‡∏ï‡∏£‡∏ß‡∏à‡∏™‡πÅ‡∏Å‡∏ô Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏à‡∏∞‡πÅ‡∏™‡∏î‡∏á‡∏ó‡∏µ‡πà‡∏ô‡∏µ‡πà" />}
-      </Card>
-    </>;
-  }
-
-  function renderVerify() {
-    const r = verifyResult;
-    const TONE: Record<VerifyVerdict, { tone: "pass" | "warn" | "fail"; icon: string; title: string }> = {
-      ready: { tone: "pass", icon: "‚úì", title: "‡∏ï‡∏£‡∏á‡∏Å‡∏±‡∏ö‡∏á‡∏≤‡∏ô‡∏ó‡∏µ‡πà‡∏ï‡πâ‡∏≠‡∏á‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å" },
-      ready_noimg: { tone: "pass", icon: "‚úì", title: "‡∏ï‡∏£‡∏á‡∏Å‡∏±‡∏ö‡∏á‡∏≤‡∏ô (‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏£‡∏π‡∏õ master)" },
-      short: { tone: "warn", icon: "!", title: "‡∏á‡∏≤‡∏ô‡∏ó‡∏µ‡πà‡∏à‡∏±‡∏î‡∏£‡∏≠‡πÑ‡∏ß‡πâ‡πÑ‡∏°‡πà‡∏û‡∏≠" },
-      over: { tone: "warn", icon: "!", title: "‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡πÄ‡∏Å‡∏¥‡∏ô‡πÅ‡∏ú‡∏ô Due" },
-      no_due: { tone: "fail", icon: "‚úï", title: "‡πÑ‡∏°‡πà‡∏û‡∏ö‡∏á‡∏≤‡∏ô‡∏ó‡∏µ‡πà‡∏ï‡∏£‡∏á‡∏Å‡∏±‡∏ö Tag ‡∏ô‡∏µ‡πâ" },
-      ambiguous: { tone: "fail", icon: "‚úï", title: "‡∏û‡∏ö Due ‡∏ã‡πâ‡∏≥‡∏°‡∏≤‡∏Å‡∏Å‡∏ß‡πà‡∏≤ 1 ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£" },
-      already: { tone: "fail", icon: "‚úï", title: "Tag ‡∏ô‡∏µ‡πâ‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‡πÑ‡∏õ‡πÅ‡∏•‡πâ‡∏ß" },
-      bad_tag: { tone: "fail", icon: "‚úï", title: "‡∏≠‡πà‡∏≤‡∏ô Tag ‡πÑ‡∏°‡πà‡πÑ‡∏î‡πâ" },
-      pair_mismatch: { tone: "fail", icon: "‚úï", title: "KIT Tag ‡πÅ‡∏•‡∏∞ Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤‡πÑ‡∏°‡πà‡∏ï‡∏£‡∏á‡∏Å‡∏±‡∏ô" },
-    };
-    const PALETTE = {
-      pass: { bg: "#e0faeb", border: "#7bd6a5", fg: "#08863f" },
-      warn: { bg: "#fff3d4", border: "#f3b94f", fg: "#b9720a" },
-      fail: { bg: "#ffe7eb", border: "#f28a9c", fg: "#d61f38" },
-    };
-    const meta = r ? TONE[r.verdict] : null;
-    const palette = meta ? PALETTE[meta.tone] : null;
-    const canDispatch = allowedPages.has("dispatch");
-    const isReady = r?.verdict === "ready" || r?.verdict === "ready_noimg";
-    return <>
-      <div className="scan-layout">
-        <section className="scanner-card">
-          <div className="scanner-title"><div><h3>‡∏ï‡∏£‡∏ß‡∏à‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô‡∏Å‡πà‡∏≠‡∏ô‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å</h3><p>‡∏™‡πÅ‡∏Å‡∏ô Tag ‡∏ó‡∏µ‡πà‡∏Å‡∏•‡πà‡∏≠‡∏á ‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡πÅ‡∏™‡∏î‡∏á‡∏£‡∏π‡∏õ master ‡πÅ‡∏•‡∏∞‡∏á‡∏≤‡∏ô‡∏ó‡∏µ‡πà‡∏ï‡πâ‡∏≠‡∏á‡∏™‡πà‡∏á ‡πÄ‡∏û‡∏∑‡πà‡∏≠‡πÄ‡∏ó‡∏µ‡∏¢‡∏ö‡∏ß‡πà‡∏≤‡∏ï‡∏£‡∏á‡∏Å‡∏±‡∏ô‡∏Å‡πà‡∏≠‡∏ô‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å ‚Äî ‡∏Ç‡∏±‡πâ‡∏ô‡∏ï‡∏≠‡∏ô‡∏ô‡∏µ‡πâ‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏ï‡∏±‡∏î Stock ‡πÅ‡∏•‡∏∞ Due</p></div><button className="camera-button" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>‚ñ£ ‡πÄ‡∏õ‡∏¥‡∏î‡∏Å‡∏•‡πâ‡∏≠‡∏á</button></div>
-          <button type="button" className="scanner-visual" aria-label="‡πÄ‡∏õ‡∏¥‡∏î‡∏Å‡∏•‡πâ‡∏≠‡∏á‡∏™‡πÅ‡∏Å‡∏ô QR Tag ‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏ï‡∏£‡∏ß‡∏à‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô" disabled={verifyLoading} onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}><span className="scan-frame"><span className="qr-symbol">‚óâ</span><b>{verifyLoading ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ï‡∏£‡∏ß‡∏à‚Ä¶" : "‡∏û‡∏£‡πâ‡∏≠‡∏°‡∏™‡πÅ‡∏Å‡∏ô‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏ï‡∏£‡∏ß‡∏à"}</b><small>‡∏ß‡∏≤‡∏á QR ‡πÉ‡∏´‡πâ‡∏≠‡∏¢‡∏π‡πà‡πÉ‡∏ô‡∏Å‡∏£‡∏≠‡∏ö ‡∏¢‡∏¥‡∏á Tag ‡∏´‡∏£‡∏∑‡∏≠‡πÅ‡∏ï‡∏∞‡πÄ‡∏û‡∏∑‡πà‡∏≠‡πÄ‡∏õ‡∏¥‡∏î‡∏Å‡∏•‡πâ‡∏≠‡∏á</small><i /></span></button>
-          <form className="manual-scan" onSubmit={verifyTag}><label><span>Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ / ‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏à‡∏≤‡∏Å QR</span><input ref={verifyInput} value={verifyRaw} onChange={(e) => { setVerifyRaw(e.target.value); setVerifyResult(null); }} placeholder="‡∏¢‡∏¥‡∏á Tag ‡∏ó‡∏µ‡πà‡∏Å‡∏•‡πà‡∏≠‡∏á ‡πÅ‡∏•‡πâ‡∏ß‡πÄ‡∏Ñ‡∏£‡∏∑‡πà‡∏≠‡∏á‡∏™‡πà‡∏á Enter" autoComplete="off" /></label><button className="button primary" disabled={!verifyRaw.trim() || verifyLoading}>{verifyLoading ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ï‡∏£‡∏ß‡∏à‚Ä¶" : "‚óâ ‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô"}</button></form>
-          <div className="arrange-help">‚ìò ‡πÉ‡∏ä‡πâ‡πÄ‡∏ó‡∏µ‡∏¢‡∏ö‡∏î‡πâ‡∏ß‡∏¢‡∏™‡∏≤‡∏¢‡∏ï‡∏≤: ‡∏î‡∏π‡∏£‡∏π‡∏õ master ‡∏Ñ‡∏π‡πà‡∏Å‡∏±‡∏ö‡∏Ç‡∏≠‡∏á‡∏à‡∏£‡∏¥‡∏á‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á‡∏ß‡πà‡∏≤‡πÄ‡∏õ‡πá‡∏ô‡∏á‡∏≤‡∏ô‡πÄ‡∏î‡∏µ‡∏¢‡∏ß‡∏Å‡∏±‡∏ô‡∏Å‡πà‡∏≠‡∏ô‡∏Å‡∏î‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å</div>
-        </section>
-        <section className="tag-result" ref={verifyResultRef}>
-          <header><div><p>‡∏ú‡∏•‡∏Å‡∏≤‡∏£‡∏ï‡∏£‡∏ß‡∏à</p><h3>{r?.tag?.materialCode || r?.master?.materialCode || "‡∏£‡∏≠‡∏Å‡∏≤‡∏£‡∏™‡πÅ‡∏Å‡∏ô"}</h3></div>{meta && palette ? <span className="status" style={{ background: palette.bg, color: palette.fg, borderColor: palette.border }}>{meta.icon} {meta.tone === "pass" ? "‡∏û‡∏£‡πâ‡∏≠‡∏°‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å" : meta.tone === "warn" ? "‡∏ï‡∏£‡∏ß‡∏à‡∏ã‡πâ‡∏≥" : "‡∏´‡∏¢‡∏∏‡∏î"}</span> : <span className="status pending">‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ Tag</span>}</header>
-          {r && meta && palette ? <>
-            <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "14px 16px", borderRadius: 12, background: palette.bg, border: `1px solid ${palette.border}`, marginBottom: 14 }}>
-              <span style={{ width: 40, height: 40, borderRadius: 10, background: palette.fg, color: "#fff", display: "grid", placeItems: "center", fontSize: 20, flex: "0 0 auto" }}>{meta.icon}</span>
-              <div><b style={{ color: palette.fg, fontSize: 16, display: "block" }}>{meta.title}</b><small style={{ color: "#4a5568" }}>{r.message}</small></div>
-            </div>
-            {(r.tag || r.master) ? <div className="tag-main"><PartImage materialCode={(r.tag?.materialCode || r.master?.materialCode)!} /><div><small>PART / MATERIAL</small><b>{r.tag?.materialCode || r.master?.materialCode}</b><p>{r.master?.partName || r.due?.materialDescription || "‡πÑ‡∏°‡πà‡∏£‡∏∞‡∏ö‡∏∏‡∏ä‡∏∑‡πà‡∏≠‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô"}</p></div></div> : null}
-            {r.due ? <>
-              <div className="detail-grid">
-                <div><small>‡∏ï‡πâ‡∏≠‡∏á‡∏™‡πà‡∏á‡πÑ‡∏õ‡∏ó‡∏µ‡πà (FAC / Line)</small><b>{r.due.fact} / {r.due.line || "‚Äî"}</b></div>
-                <div><small>DO / Seq</small><b>{r.due.doNo} / {r.due.seq}</b></div>
-                <div><small>‡πÅ‡∏ú‡∏ô‡∏™‡πà‡∏á‡∏ß‡∏±‡∏ô / ‡πÄ‡∏ß‡∏•‡∏≤</small><b>{formatDate(r.due.deliveryDate)} {r.due.deliveryTime}</b></div>
-                <div><small>Tag ID</small><b>{r.tag?.tagId || "‚Äî"}</b></div>
-                <div><small>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡πÉ‡∏ô Tag</small><b>{fmt(r.tag?.qty || 0)} {r.tag?.unit || "PC"}</b></div>
-                <div><small>‡∏á‡∏≤‡∏ô‡∏ó‡∏µ‡πà‡∏à‡∏±‡∏î‡∏£‡∏≠‡∏Ç‡∏≤‡∏¢</small><b>{fmt(r.stagedAvail || 0)} ‡∏ä‡∏¥‡πâ‡∏ô</b></div>
-                <div><small>Due ‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î</small><b>{fmt(r.due.reqQty)} ‡∏ä‡∏¥‡πâ‡∏ô</b></div>
-                <div><small>‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‡πÅ‡∏•‡πâ‡∏ß</small><b>{fmt(r.due.alreadyQty)} ‡∏ä‡∏¥‡πâ‡∏ô</b></div>
-                <div><small>Due ‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠</small><b>{fmt(r.due.remainingDue)} ‡∏ä‡∏¥‡πâ‡∏ô</b></div>
-              </div>
-            </> : null}
-            {isReady && canDispatch ? <div className="save-row" style={{ marginTop: 16 }}><button className="button primary" onClick={goDispatchFromVerify}>‡∏ï‡∏£‡∏á‡πÅ‡∏•‡πâ‡∏ß ‚Üí ‡πÑ‡∏õ‡∏´‡∏ô‡πâ‡∏≤‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å</button></div>
-              : isReady ? <div className="scan-saved">‚úì ‡∏ï‡∏£‡∏á‡∏Å‡∏±‡∏ö‡∏á‡∏≤‡∏ô‡∏ó‡∏µ‡πà‡∏ï‡πâ‡∏≠‡∏á‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å ‚Äî ‡πÉ‡∏´‡πâ‡∏ú‡∏π‡πâ‡∏ï‡∏£‡∏ß‡∏à (inspector) ‡∏î‡∏≥‡πÄ‡∏ô‡∏¥‡∏ô‡∏Å‡∏≤‡∏£‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‡πÉ‡∏ô‡∏´‡∏ô‡πâ‡∏≤ ‚Äú‡∏ï‡∏£‡∏ß‡∏à‡πÅ‡∏•‡∏∞‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‚Äù</div>
-              : null}
-          </> : <Empty title="‡∏£‡∏≠‡∏™‡πÅ‡∏Å‡∏ô‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô" text="‡∏™‡πÅ‡∏Å‡∏ô Tag ‡∏ó‡∏µ‡πà‡∏Å‡∏•‡πà‡∏≠‡∏á ‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡πÅ‡∏™‡∏î‡∏á‡∏£‡∏π‡∏õ master, Item No. ‡πÅ‡∏•‡∏∞‡∏á‡∏≤‡∏ô‡∏ó‡∏µ‡πà‡∏ï‡πâ‡∏≠‡∏á‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡πÉ‡∏´‡πâ‡πÄ‡∏ó‡∏µ‡∏¢‡∏ö‡∏Å‡πà‡∏≠‡∏ô‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å" />}
-        </section>
-      </div>
-    </>;
-  }
-
-  function renderReplacement() {
-    const openRequests = replacement.requests.filter((item) => item.status === "pending" || item.status === "partial");
-    const completedRequests = replacement.requests.filter((item) => item.status === "completed");
-    const selected = replacement.requests.find((item) => String(item.id) === replacementSelectedId) || openRequests[0];
-    const needle = replacementSearch.trim().toLowerCase();
-    const requestRows = replacement.requests.filter((item) => !needle || [
-      item.requestNo, item.materialCode, item.partName, item.customer, item.reasonDetail,
-      item.requestedByName, item.neededDate,
-    ].join(" ").toLowerCase().includes(needle));
-    const issueRows = replacement.issues.filter((issue) => {
-      const item = replacement.requests.find((request) => request.id === issue.requestId);
-      return !needle || [issue.noticeNo, issue.stockTagCode, issue.jobNo, issue.issuedByName,
-        item?.requestNo, item?.materialCode, item?.customer].join(" ").toLowerCase().includes(needle);
-    });
-    const totalRequested = replacement.requests.filter((item) => item.status !== "cancelled").reduce((sum, item) => sum + Number(item.requestedQty), 0);
-    const totalIssued = replacement.issues.reduce((sum, item) => sum + Number(item.qty), 0);
-    const reasonLabel = (value: string) => value === "defect" ? "‡∏á‡∏≤‡∏ô‡πÄ‡∏™‡∏µ‡∏¢" : value === "shortage" ? "‡∏á‡∏≤‡∏ô‡∏Ç‡∏≤‡∏î" : "‡∏≠‡∏∑‡πà‡∏ô ‡πÜ";
-    const statusLabel = (value: string) => value === "completed" ? "‡πÄ‡∏ö‡∏¥‡∏Å‡∏Ñ‡∏£‡∏ö‡πÅ‡∏•‡πâ‡∏ß" : value === "partial" ? "‡πÄ‡∏ö‡∏¥‡∏Å‡∏ö‡∏≤‡∏á‡∏™‡πà‡∏ß‡∏ô" : value === "cancelled" ? "‡∏¢‡∏Å‡πÄ‡∏•‡∏¥‡∏Å" : "‡∏£‡∏≠‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô";
-
-    return <div className="replacement-page">
-      <div className="metrics four compact replacement-metrics page-summary">
-        <MetricCard tone="blue" icon="‚Ü∫" label="‡πÉ‡∏ö‡∏Ç‡∏≠‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î" value={fmt(replacement.requests.length)} suffix="‡πÉ‡∏ö" />
-        <MetricCard tone="orange" icon="‚ó∑" label="‡∏£‡∏≠‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô" value={fmt(openRequests.length)} suffix="‡πÉ‡∏ö" />
-        <MetricCard tone="green" icon="‚úì" label="‡∏à‡∏±‡∏î‡∏Ñ‡∏£‡∏ö‡πÅ‡∏•‡πâ‡∏ß" value={fmt(completedRequests.length)} suffix="‡πÉ‡∏ö" />
-        <MetricCard tone="purple" icon="‚ñ¶" label="‡πÄ‡∏ö‡∏¥‡∏Å‡∏≠‡∏≠‡∏Å‡∏™‡∏∞‡∏™‡∏°" value={fmt(totalIssued)} suffix="‡∏ä‡∏¥‡πâ‡∏ô" />
-      </div>
-
-      <div className="replacement-work-grid" style={canCreateReplacement && canIssueReplacement ? undefined : { gridTemplateColumns: "1fr" }}>
-        {canCreateReplacement && <Card className="replacement-request-card" title={<><span className="replacement-step">1</span> QC ‡πÅ‡∏à‡πâ‡∏á‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å‡∏á‡∏≤‡∏ô‡∏ó‡∏î‡πÅ‡∏ó‡∏ô</>}>
-          <form className="replacement-form" onSubmit={createReplacementRequest}>
-            <label className="wide"><span>Part / Material No. *</span><input list="replacement-parts" value={replacementForm.materialCode} onChange={(event) => {
-              const value = event.target.value.toUpperCase();
-              const part = stock.parts.find((item) => item.materialCode === value);
-              setReplacementForm((current) => ({ ...current, materialCode: value, customer: part?.customer || current.customer }));
-            }} placeholder="‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏´‡∏£‡∏∑‡∏≠‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤ Part No." required /><datalist id="replacement-parts">{stock.parts.filter((part) => part.active).map((part) => <option key={part.materialCode} value={part.materialCode}>{part.partName}</option>)}</datalist></label>
-            <label><span>‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ / Site</span><input value={replacementForm.customer} onChange={(event) => setReplacementForm((current) => ({ ...current, customer: event.target.value }))} placeholder="‡πÄ‡∏ä‡πà‡∏ô MCP / STE1" /></label>
-            <label><span>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ó‡∏µ‡πà‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å *</span><input type="number" inputMode="numeric" min={1} step={1} value={replacementForm.requestedQty} onChange={(event) => setReplacementForm((current) => ({ ...current, requestedQty: event.target.value }))} placeholder="0" required /></label>
-            <label><span>‡∏™‡∏≤‡πÄ‡∏´‡∏ï‡∏∏ *</span><select value={replacementForm.reasonType} onChange={(event) => setReplacementForm((current) => ({ ...current, reasonType: event.target.value }))}><option value="shortage">‡∏á‡∏≤‡∏ô‡∏Ç‡∏≤‡∏î‡∏Ç‡∏≠‡∏á‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤</option><option value="defect">‡∏ó‡∏î‡πÅ‡∏ó‡∏ô‡∏á‡∏≤‡∏ô‡πÄ‡∏™‡∏µ‡∏¢</option><option value="other">‡∏≠‡∏∑‡πà‡∏ô ‡πÜ</option></select></label>
-            <label><span>‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏ï‡πâ‡∏≠‡∏á‡∏Å‡∏≤‡∏£</span><input type="date" value={replacementForm.neededDate} onChange={(event) => setReplacementForm((current) => ({ ...current, neededDate: event.target.value }))} /></label>
-            <label className="wide"><span>‡∏£‡∏≤‡∏¢‡∏•‡∏∞‡πÄ‡∏≠‡∏µ‡∏¢‡∏î / ‡πÄ‡∏•‡∏Ç‡∏ó‡∏µ‡πà‡πÄ‡∏≠‡∏Å‡∏™‡∏≤‡∏£‡∏≠‡πâ‡∏≤‡∏á‡∏≠‡∏¥‡∏á</span><textarea rows={3} value={replacementForm.reasonDetail} onChange={(event) => setReplacementForm((current) => ({ ...current, reasonDetail: event.target.value }))} placeholder="‡∏£‡∏∞‡∏ö‡∏∏‡∏≠‡∏≤‡∏Å‡∏≤‡∏£‡πÄ‡∏™‡∏µ‡∏¢ ‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏Ç‡∏≤‡∏î ‡∏´‡∏£‡∏∑‡∏≠‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏ó‡∏µ‡πà‡∏ó‡∏µ‡∏°‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡∏ï‡πâ‡∏≠‡∏á‡∏ó‡∏£‡∏≤‡∏ö" /></label>
-            <button className="button primary full" disabled={replacementSaving}>{replacementSaving ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏™‡∏£‡πâ‡∏≤‡∏á‡πÉ‡∏ö‡∏Ç‡∏≠‚Ä¶" : "Ôºã ‡∏™‡∏£‡πâ‡∏≤‡∏á‡πÉ‡∏ö‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å‡πÉ‡∏´‡πâ‡∏ó‡∏µ‡∏°‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô"}</button>
-          </form>
-        </Card>}
-
-        {canIssueReplacement && <Card className="replacement-scan-card" title={<><span className="replacement-step green">2</span> Delivery ‡∏™‡πÅ‡∏Å‡∏ô KIT Tag ‡∏á‡∏≤‡∏ô‡∏ó‡∏î‡πÅ‡∏ó‡∏ô</>} action={selected ? <span className="replacement-selected">{selected.requestNo}</span> : undefined}>
-          {selected ? <>
-            <div className="replacement-selected-request">
-              <PartImage materialCode={selected.materialCode} compact />
-              <div><small>‡πÉ‡∏ö‡∏Ç‡∏≠‡∏ó‡∏µ‡πà‡πÄ‡∏•‡∏∑‡∏≠‡∏Å</small><b>{selected.materialCode}</b><p>{selected.partName || "‚Äî"} ¬∑ {selected.customer || "‡πÑ‡∏°‡πà‡∏£‡∏∞‡∏ö‡∏∏‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤"}</p></div>
-              <dl><div><dt>QC ‡∏Ç‡∏≠</dt><dd>{fmt(selected.requestedQty)}</dd></div><div><dt>‡πÄ‡∏ö‡∏¥‡∏Å‡πÅ‡∏•‡πâ‡∏ß</dt><dd>{fmt(selected.issuedQty)}</dd></div><div><dt>‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠</dt><dd>{fmt(selected.remainingQty)}</dd></div></dl>
-            </div>
-            <form className="replacement-scan-form" onSubmit={(event) => { event.preventDefault(); void previewReplacementIssue(); }}>
-              <button type="button" className="replacement-scan-zone" onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}><span>‚åó</span><b>‡∏û‡∏£‡πâ‡∏≠‡∏°‡∏™‡πÅ‡∏Å‡∏ô KIT Stock Tag</b><small>‡∏¢‡∏¥‡∏á‡∏ö‡∏≤‡∏£‡πå‡πÇ‡∏Ñ‡πâ‡∏î ‡∏´‡∏£‡∏∑‡∏≠‡πÅ‡∏ï‡∏∞‡πÄ‡∏û‡∏∑‡πà‡∏≠‡πÄ‡∏õ‡∏¥‡∏î‡∏Å‡∏•‡πâ‡∏≠‡∏á ‡πÅ‡∏•‡πâ‡∏ß‡∏ï‡∏£‡∏ß‡∏à‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏Å‡πà‡∏≠‡∏ô‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡πÄ‡∏ö‡∏¥‡∏Å</small></button>
-              <label><span>KIT Stock Tag *</span><input ref={replacementInputRef} value={replacementTag} onChange={(event) => setReplacementTag(event.target.value)} onKeyDown={(event) => {
-                if ((event.key === "Enter" || event.key === "Tab") && replacementTag.trim()) {
-                  event.preventDefault(); void previewReplacementIssue();
-                }
-              }} placeholder="‡∏¢‡∏¥‡∏á Tag ‡πÅ‡∏•‡πâ‡∏ß‡πÄ‡∏Ñ‡∏£‡∏∑‡πà‡∏≠‡∏á‡∏™‡πà‡∏á Enter" autoComplete="off" /></label>
-              <button className="button primary" disabled={!replacementTag.trim() || replacementSaving}>{replacementSaving ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ï‡∏£‡∏ß‡∏à Tag‚Ä¶" : "‡∏ï‡∏£‡∏ß‡∏à Tag ‡πÅ‡∏•‡∏∞‡∏à‡∏≥‡∏ô‡∏ß‡∏ô"}</button>
-            </form>
-            <p className="replacement-help">‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡∏ï‡∏±‡∏î Stock ‡πÅ‡∏•‡∏∞‡∏ï‡∏±‡∏î‡∏¢‡∏≠‡∏î‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠‡∏Ç‡∏≠‡∏á‡πÉ‡∏ö‡∏Ç‡∏≠‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏Å‡∏î ‚Äú‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡πÄ‡∏ö‡∏¥‡∏Å‡∏á‡∏≤‡∏ô‡∏ó‡∏î‡πÅ‡∏ó‡∏ô‚Äù ‡πÄ‡∏ó‡πà‡∏≤‡∏ô‡∏±‡πâ‡∏ô</p>
-          </> : <Empty title="‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡πÉ‡∏ö‡∏Ç‡∏≠‡∏£‡∏≠‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô" text="‡πÄ‡∏°‡∏∑‡πà‡∏≠ QC ‡∏™‡∏£‡πâ‡∏≤‡∏á‡πÉ‡∏ö‡∏Ç‡∏≠ ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏à‡∏∞‡∏Ç‡∏∂‡πâ‡∏ô‡πÉ‡∏´‡πâ‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡πÅ‡∏•‡∏∞‡∏™‡πÅ‡∏Å‡∏ô KIT Tag ‡∏ó‡∏µ‡πà‡∏ô‡∏µ‡πà" />}
-        </Card>}
-      </div>
-
-      <Card className="replacement-list-card" title={<><span className="replacement-list-icon">‚Ü∫</span> ‡πÉ‡∏ö‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å‡∏á‡∏≤‡∏ô‡∏ó‡∏î‡πÅ‡∏ó‡∏ô <em>{fmt(requestRows.length)} ‡πÉ‡∏ö</em></>} action={<div className="arranged-search"><span>‚åï</span><input type="search" value={replacementSearch} onChange={(event) => setReplacementSearch(event.target.value)} placeholder="‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤‡πÄ‡∏•‡∏Ç‡∏ó‡∏µ‡πà‡πÉ‡∏ö‡∏Ç‡∏≠, Part, ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤, ‡∏ú‡∏π‡πâ‡∏Ç‡∏≠" /></div>}>
-        {replacementLoading ? <div className="loading-state"><span /><p>‡∏Å‡∏≥‡∏•‡∏±‡∏á‡πÇ‡∏´‡∏•‡∏î‡πÉ‡∏ö‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å‚Ä¶</p></div> : requestRows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table replacement-table"><thead><tr><th>‡πÄ‡∏•‡∏Ç‡∏ó‡∏µ‡πà / ‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏Ç‡∏≠</th><th>Part / ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤</th><th>‡∏™‡∏≤‡πÄ‡∏´‡∏ï‡∏∏</th><th className="num">‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å</th><th className="num">‡πÄ‡∏ö‡∏¥‡∏Å‡πÅ‡∏•‡πâ‡∏ß</th><th className="num">‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠</th><th>‡∏ú‡∏π‡πâ‡∏Ç‡∏≠</th><th>‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞</th><th>‡∏à‡∏±‡∏î‡∏Å‡∏≤‡∏£</th></tr></thead><tbody>
-          {requestRows.map((item) => <tr key={item.id} className={String(item.id) === replacementSelectedId ? "selected-row" : ""}>
-            <td data-label="‡πÄ‡∏•‡∏Ç‡∏ó‡∏µ‡πà / ‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏Ç‡∏≠"><b>{item.requestNo}</b><small>{formatDateTime(item.requestedAt)}{item.neededDate ? ` ¬∑ ‡∏ï‡πâ‡∏≠‡∏á‡∏Å‡∏≤‡∏£ ${formatDate(item.neededDate)}` : ""}</small></td>
-            <td data-label="Part / ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤"><b>{item.materialCode}</b><small>{item.partName || "‚Äî"} ¬∑ {item.customer || "‚Äî"}</small></td>
-            <td data-label="‡∏™‡∏≤‡πÄ‡∏´‡∏ï‡∏∏"><b>{reasonLabel(item.reasonType)}</b><small>{item.reasonDetail || "‚Äî"}</small></td>
-            <td data-label="‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å" className="num"><b>{fmt(item.requestedQty)}</b></td>
-            <td data-label="‡πÄ‡∏ö‡∏¥‡∏Å‡πÅ‡∏•‡πâ‡∏ß" className="num"><b className="green-text">{fmt(item.issuedQty)}</b></td>
-            <td data-label="‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠" className="num"><b className={item.remainingQty ? "red-text" : "green-text"}>{fmt(item.remainingQty)}</b></td>
-            <td data-label="‡∏ú‡∏π‡πâ‡∏Ç‡∏≠"><b>{item.requestedByName}</b><small>{item.requestedByCode}</small></td>
-            <td data-label="‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞"><span className={`status ${item.status === "completed" ? "completed" : item.status === "partial" ? "partial" : item.status === "cancelled" ? "over" : "pending"}`}>{statusLabel(item.status)}</span></td>
-            <td data-label="‡∏à‡∏±‡∏î‡∏Å‡∏≤‡∏£"><div className="user-actions">{canIssueReplacement && (item.status === "pending" || item.status === "partial") && <button className="tiny-button" onClick={() => { setReplacementSelectedId(String(item.id)); setReplacementPreview(null); setReplacementTag(""); if (!window.matchMedia("(max-width: 720px), (pointer: coarse)").matches) window.setTimeout(() => replacementInputRef.current?.focus(), 100); }}>‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô</button>}{canCreateReplacement && item.status === "pending" && item.issuedQty === 0 && <button className="tiny-button danger-outline" onClick={() => void cancelReplacementRequest(item)}>‡∏¢‡∏Å‡πÄ‡∏•‡∏¥‡∏Å</button>}</div></td>
-          </tr>)}
-        </tbody></table></div> : <Empty title="‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡πÉ‡∏ö‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å" text="QC ‡∏™‡∏≤‡∏°‡∏≤‡∏£‡∏ñ‡∏™‡∏£‡πâ‡∏≤‡∏á‡πÉ‡∏ö‡∏Ç‡∏≠‡∏™‡∏≥‡∏´‡∏£‡∏±‡∏ö‡∏á‡∏≤‡∏ô‡πÄ‡∏™‡∏µ‡∏¢‡∏´‡∏£‡∏∑‡∏≠‡∏á‡∏≤‡∏ô‡∏Ç‡∏≤‡∏î‡πÑ‡∏î‡πâ‡∏à‡∏≤‡∏Å‡πÅ‡∏ö‡∏ö‡∏ü‡∏≠‡∏£‡πå‡∏°‡∏î‡πâ‡∏≤‡∏ô‡∏ö‡∏ô" />}
-        <footer className="replacement-list-footer"><span>‡∏¢‡∏≠‡∏î‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î {fmt(totalRequested)} ‡∏ä‡∏¥‡πâ‡∏ô</span><b>‡πÄ‡∏ö‡∏¥‡∏Å‡∏≠‡∏≠‡∏Å‡πÅ‡∏•‡πâ‡∏ß {fmt(totalIssued)} ‡∏ä‡∏¥‡πâ‡∏ô</b></footer>
-      </Card>
-
-      <Card className="replacement-list-card" title={<><span className="replacement-list-icon green">‚ñ§</span> ‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡πÄ‡∏ö‡∏¥‡∏Å‡πÅ‡∏•‡∏∞‡πÉ‡∏ö‡πÅ‡∏à‡πâ‡∏á‡∏≠‡∏≠‡∏Å <em>{fmt(issueRows.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</em></>} action={<button className="button secondary" onClick={() => void loadReplacements()}>‚Üª ‡∏£‡∏µ‡πÄ‡∏ü‡∏£‡∏ä</button>}>
-        {issueRows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table replacement-issue-table"><thead><tr><th>‡πÉ‡∏ö‡πÅ‡∏à‡πâ‡∏á‡∏≠‡∏≠‡∏Å</th><th>‡πÉ‡∏ö‡∏Ç‡∏≠ QC</th><th>KIT Stock Tag / Job</th><th>Part / ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤</th><th className="num">‡∏à‡∏≥‡∏ô‡∏ß‡∏ô</th><th>‡∏ú‡∏π‡πâ‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô</th><th>‡∏û‡∏¥‡∏°‡∏û‡πå‡πÉ‡∏ö</th></tr></thead><tbody>
-          {issueRows.map((issue) => {
-            const item = replacement.requests.find((request) => request.id === issue.requestId);
-            return <tr key={issue.id}><td data-label="‡πÉ‡∏ö‡πÅ‡∏à‡πâ‡∏á‡∏≠‡∏≠‡∏Å"><b>{issue.noticeNo}</b><small>{formatDateTime(issue.issuedAt)}</small></td><td data-label="‡πÉ‡∏ö‡∏Ç‡∏≠ QC">{item?.requestNo || "‚Äî"}</td><td data-label="KIT Tag / Job"><b>{issue.stockTagCode}</b><small>{issue.jobNo || "‚Äî"}</small></td><td data-label="Part / ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤"><b>{item?.materialCode || "‚Äî"}</b><small>{item?.customer || "‚Äî"}</small></td><td data-label="‡∏à‡∏≥‡∏ô‡∏ß‡∏ô" className="num"><b>{fmt(issue.qty)}</b></td><td data-label="‡∏ú‡∏π‡πâ‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô"><b>{issue.issuedByName}</b><small>{issue.issuedByCode}</small></td><td data-label="‡∏û‡∏¥‡∏°‡∏û‡πå‡πÉ‡∏ö">{canEditPage("replacement") && <button className="tiny-button print-replacement-button" onClick={() => void printReplacementIssue(issue)}>‚ñ§ ‡∏û‡∏¥‡∏°‡∏û‡πå RPP04</button>}{issue.printedAt && <small>‡∏û‡∏¥‡∏°‡∏û‡πå‡πÅ‡∏•‡πâ‡∏ß {formatDateTime(issue.printedAt)}</small>}</td></tr>;
-          })}
-        </tbody></table></div> : <Empty title="‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡∏Å‡∏≤‡∏£‡πÄ‡∏ö‡∏¥‡∏Å" text="‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡∏à‡∏∞‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏ó‡∏µ‡∏°‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡πÄ‡∏ö‡∏¥‡∏Å‡∏à‡∏≤‡∏Å KIT Tag" />}
-      </Card>
-    </div>;
-  }
-
-  async function exportForecastExcel() {
-    if (forecastExporting) return;
-    setForecastExporting(true);
-    try {
-      const response = await fetch("/api/forecast?export=1", { cache: "no-store" });
-      const snapshot = await response.json() as ForecastPayload;
-      if (!response.ok) throw new Error(snapshot.error || "‡πÇ‡∏´‡∏•‡∏î Forecast ‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-      if (!snapshot.activeImport || !snapshot.coverage.length) throw new Error("‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏• Forecast ‡∏™‡∏≥‡∏´‡∏£‡∏±‡∏ö‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å");
-      const xlsx = await import("xlsx");
-      const workbook = createForecastExportWorkbook(xlsx, snapshot.coverage, {
-        fileName: snapshot.activeImport.fileName,
-        cutoff: formatDateTime(snapshot.activeImport.sourceCalculatedAt),
-        calculatedAt: formatDateTime(snapshot.calculatedAt || new Date().toISOString()),
-        exportedBy: `${user.displayName} (${user.employeeCode})`,
-      });
-      const binary = createForecastExportBinary(xlsx, workbook);
-      const url = URL.createObjectURL(new Blob([new Uint8Array(binary).buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
-      const download = document.createElement("a");
-      download.href = url;
-      download.download = `KIT_Forecast_Stock_${bangkokDateTimeKey().replace(/[-:]/g, "").replace("T", "_")}.xlsx`;
-      document.body.appendChild(download);
-      download.click();
-      download.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      setForecast(snapshot);
-      setNotice({ type: "success", text: `‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å Forecast ‡∏ó‡∏∏‡∏Å Part ‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à ${fmt(snapshot.coverage.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£` });
-      void recordClientAudit("export_forecast_excel", `‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å Forecast Excel ‡∏ó‡∏∏‡∏Å Part ${snapshot.coverage.length} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£`, {
-        itemCount: snapshot.coverage.length, forecastImportId: snapshot.activeImport.id,
-        fileName: snapshot.activeImport.fileName, calculatedAt: snapshot.calculatedAt,
-      });
-    } catch (caught) {
-      setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å Forecast ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-    } finally { setForecastExporting(false); }
-  }
-
-  function renderForecast() {
-    const emptyRisk = { overdue: 0, within3: 0, within7: 0, within14: 0, over14: 0 };
-    const summaryData = forecast.summary || { materialCount: 0, stockQty: 0, outstandingQty: 0, overdueQty: 0, totalShortage: 0, coveredMaterials: 0, shortageMaterials: 0, riskGroups: emptyRisk };
-    const risk = summaryData.riskGroups || emptyRisk;
-    const needle = forecastSearch.trim().toLowerCase();
-    const factories = [...new Set(forecast.coverage.flatMap((item) => item.factories || []).filter(Boolean))].sort();
-    const rows = forecast.coverage.filter((item) => {
-      const matchesSearch = !needle || [item.materialCode, item.description, ...(item.factories || [])].some((value) => value.toLowerCase().includes(needle));
-      const matchesStatus = forecastStatus === "all"
-        || (["overdue", "within3", "within7", "within14", "over14"].includes(forecastStatus) ? item.riskGroup === forecastStatus
-          : forecastStatus === "covered" ? item.status === "covered" : item.status !== "covered");
-      const matchesFactory = forecastFactory === "ALL" || (item.factories || []).includes(forecastFactory);
-      return matchesSearch && matchesStatus && matchesFactory;
-    }).sort((a, b) => {
-      const rank = { overdue: 0, within3: 1, within7: 2, within14: 3, over14: 4 };
-      return rank[a.riskGroup] - rank[b.riskGroup] || (a.shortageDate || "9999").localeCompare(b.shortageDate || "9999") || a.materialCode.localeCompare(b.materialCode);
-    });
-    const statusLabel = (item: ForecastCoverage) => item.status === "covered" ? "Stock ‡πÄ‡∏û‡∏µ‡∏¢‡∏á‡∏û‡∏≠" : item.status === "no_stock" ? "‡πÑ‡∏°‡πà‡∏°‡∏µ Stock" : "Stock ‡πÑ‡∏°‡πà‡∏û‡∏≠";
-    const priorityLabel = (item: ForecastCoverage) => item.riskGroup === "overdue" ? "‡∏Ç‡∏≤‡∏î‡πÅ‡∏•‡πâ‡∏ß" : item.riskGroup === "within3" ? "‡∏Ç‡∏≤‡∏î‡∏†‡∏≤‡∏¢‡πÉ‡∏ô 3 ‡∏ß‡∏±‡∏ô" : item.riskGroup === "within7" ? "‡∏Ç‡∏≤‡∏î‡∏†‡∏≤‡∏¢‡πÉ‡∏ô 7 ‡∏ß‡∏±‡∏ô" : item.riskGroup === "within14" ? "‡∏£‡∏≠‡∏á‡∏£‡∏±‡∏ö‡∏†‡∏≤‡∏¢‡πÉ‡∏ô 14 ‡∏ß‡∏±‡∏ô" : "‡πÄ‡∏û‡∏µ‡∏¢‡∏á‡∏û‡∏≠";
-    const trend = (forecast.trend || []).slice(0, forecastRange);
-    const trendMax = Math.max(...trend.flatMap((item) => [item.cumulativeDemand, item.projectedStock]), 1);
-    const setFilter = (next: typeof forecastStatus) => setForecastStatus((current) => current === next ? "all" : next);
-    const riskCards: Array<{ key: typeof forecastStatus; label: string; value: number; tone: string; icon: string }> = [
-      { key: "overdue", label: "‡∏Ç‡∏≤‡∏î‡πÅ‡∏•‡πâ‡∏ß", value: risk.overdue, tone: "red", icon: "!" },
-      { key: "within3", label: "‡∏à‡∏∞‡∏Ç‡∏≤‡∏î‡∏†‡∏≤‡∏¢‡πÉ‡∏ô 3 ‡∏ß‡∏±‡∏ô", value: risk.within3, tone: "orange", icon: "‚ó∑" },
-      { key: "within7", label: "‡∏à‡∏∞‡∏Ç‡∏≤‡∏î‡∏†‡∏≤‡∏¢‡πÉ‡∏ô 7 ‡∏ß‡∏±‡∏ô", value: risk.within7, tone: "yellow", icon: "‚åõ" },
-      { key: "within14", label: "‡∏£‡∏≠‡∏á‡∏£‡∏±‡∏ö‡πÑ‡∏î‡πâ‡∏†‡∏≤‡∏¢‡πÉ‡∏ô 14 ‡∏ß‡∏±‡∏ô", value: risk.within14, tone: "green", icon: "‚úì" },
-      { key: "over14", label: "‡πÄ‡∏û‡∏µ‡∏¢‡∏á‡∏û‡∏≠‡∏°‡∏≤‡∏Å‡∏Å‡∏ß‡πà‡∏≤ 14 ‡∏ß‡∏±‡∏ô", value: risk.over14, tone: "mint", icon: "‚úì" },
-    ];
-    return <div className="forecast-page">
-      <section className="forecast-hero">
-        <div><span className="forecast-hero-icon">‚ñ•</span><div><h2>Forecast Stock</h2><p>‡∏ß‡∏≤‡∏á‡πÅ‡∏ú‡∏ô‡∏Å‡∏≤‡∏£‡∏ú‡∏•‡∏¥‡∏ï‡∏•‡πà‡∏ß‡∏á‡∏´‡∏ô‡πâ‡∏≤ ‡∏õ‡πâ‡∏≠‡∏á‡∏Å‡∏±‡∏ô‡∏õ‡∏±‡∏ç‡∏´‡∏≤ Stock ‡πÑ‡∏°‡πà‡πÄ‡∏û‡∏µ‡∏¢‡∏á‡∏û‡∏≠</p></div></div>
-        <div className="forecast-export-actions"><button className="button secondary" disabled={forecastLoading} onClick={() => void loadForecast()}>‚Üª ‡∏£‡∏µ‡πÄ‡∏ü‡∏£‡∏ä‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•</button><button className="button primary" disabled={!forecast.activeImport || forecastLoading || forecastExporting} onClick={() => void exportForecastExcel()}>{forecastExporting ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‚Ä¶" : "‚á© Export Excel (‡∏ó‡∏∏‡∏Å Part)"}</button></div>
-      </section>
-      <div className="metrics five forecast-metrics page-summary">
-        <button className={`forecast-metric-button ${forecastStatus === "all" ? "active" : ""}`} onClick={() => setForecastStatus("all")}><MetricCard tone="blue" icon="‚ñß" label="‡∏à‡∏≥‡∏ô‡∏ß‡∏ô Part ‡πÉ‡∏ô Forecast" value={fmt(summaryData.materialCount)} suffix="Part" /></button>
-        <button className={`forecast-metric-button ${forecastStatus === "covered" ? "active" : ""}`} onClick={() => setFilter("covered")}><MetricCard tone="green" icon="‚úì" label="Stock ‡πÄ‡∏û‡∏µ‡∏¢‡∏á‡∏û‡∏≠" value={fmt(summaryData.coveredMaterials)} suffix="Part" /></button>
-        <button className={`forecast-metric-button ${forecastStatus === "shortage" ? "active" : ""}`} onClick={() => setFilter("shortage")}><MetricCard tone="red" icon="!" label="‡∏ï‡πâ‡∏≠‡∏á‡∏ú‡∏•‡∏¥‡∏ï‡πÄ‡∏û‡∏¥‡πà‡∏°" value={fmt(summaryData.shortageMaterials)} suffix="Part" /></button>
-        <button className={`forecast-metric-button ${forecastStatus === "within3" ? "active" : ""}`} onClick={() => setFilter("within3")}><MetricCard tone="orange" icon="‚ó∑" label="‡∏Ñ‡∏≤‡∏î‡∏ß‡πà‡∏≤‡∏à‡∏∞‡∏Ç‡∏≤‡∏î‡∏†‡∏≤‡∏¢‡πÉ‡∏ô 3 ‡∏ß‡∏±‡∏ô" value={fmt(risk.within3)} suffix="Part" /></button>
-        <button className={`forecast-metric-button ${forecastStatus === "overdue" ? "active" : ""}`} onClick={() => setFilter("overdue")}><MetricCard tone="red" icon="‚ñ£" label="‡∏Ç‡∏≤‡∏î‡πÅ‡∏•‡πâ‡∏ß" value={fmt(risk.overdue)} suffix="Part" /></button>
-      </div>
-
-      <div className="forecast-top-grid">
-      {canEditPage("forecast") && <Card className="forecast-import-card" title="‚ñ£ ‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤ Forecast ‡πÉ‡∏´‡∏°‡πà">
-        <div className="forecast-import-layout">
-          <label className={`forecast-file-picker ${forecastDragActive ? "drag-active" : ""}`}
-            onDragOver={(event) => { event.preventDefault(); setForecastDragActive(true); }}
-            onDragLeave={() => setForecastDragActive(false)}
-            onDrop={(event) => { event.preventDefault(); setForecastDragActive(false); void prepareForecastFile(event.dataTransfer.files?.[0] || null); }}>
-            <span>‚ñß</span>
-            <div><b>{forecastFile?.name || "‡∏•‡∏≤‡∏Å‡πÑ‡∏ü‡∏•‡πå‡∏°‡∏≤‡∏ß‡∏≤‡∏á‡∏ó‡∏µ‡πà‡∏ô‡∏µ‡πà ‡∏´‡∏£‡∏∑‡∏≠‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡πÑ‡∏ü‡∏•‡πå"}</b><small>‡∏£‡∏≠‡∏á‡∏£‡∏±‡∏ö Forecast .csv ¬∑ ‡∏ï‡∏£‡∏ß‡∏à Format, Column, Part, ‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà, Quantity ‡∏Å‡πà‡∏≠‡∏ô‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤</small></div>
-            <input type="file" accept=".csv,text/csv" disabled={forecastImporting} onChange={(event) => void selectForecastFile(event)} />
-          </label>
-          {forecastParsing && <div className="forecast-parsing">‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏≠‡πà‡∏≤‡∏ô‡πÅ‡∏•‡∏∞‡∏£‡∏ß‡∏°‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ï‡∏≤‡∏° Material / ‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà / ‡πÄ‡∏ß‡∏•‡∏≤‚Ä¶</div>}
-          {forecastPreview && <div className="forecast-preview">
-            <div><small>‡πÄ‡∏ß‡∏•‡∏≤‡∏ó‡∏µ‡πà‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤‡∏Ñ‡∏≥‡∏ô‡∏ß‡∏ì</small><b>{forecastPreview.sourceLabel}</b></div>
-            <div><small>‡πÅ‡∏ñ‡∏ß‡πÉ‡∏ô‡πÑ‡∏ü‡∏•‡πå</small><b>{fmt(forecastPreview.sourceRowCount)}</b></div>
-            <div><small>‡∏£‡∏ß‡∏°‡πÄ‡∏õ‡πá‡∏ô‡∏ä‡πà‡∏ß‡∏á‡∏™‡πà‡∏á</small><b>{fmt(forecastPreview.rows.length)}</b></div>
-            <div><small>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô Part</small><b>{fmt(forecastPreview.materialCount)}</b></div>
-            <div><small>‡∏¢‡∏≠‡∏î Forecast</small><b>{fmt(forecastPreview.totalQty)} ‡∏ä‡∏¥‡πâ‡∏ô</b></div>
-            {forecastPreview.duplicateRowCount > 0 && <div><small>‡πÅ‡∏ñ‡∏ß‡∏ã‡πâ‡∏≥‡∏ó‡∏µ‡πà‡∏£‡∏ß‡∏°‡∏¢‡∏≠‡∏î‡πÅ‡∏•‡πâ‡∏ß</small><b>{fmt(forecastPreview.duplicateRowCount)} ‡πÅ‡∏ñ‡∏ß</b></div>}
-          </div>}
-          {forecastImporting && <div className="forecast-progress"><span><i style={{ width: `${forecastProgress}%` }} /></span><b>{forecastProgress}%</b><small>‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤ ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏≠‡∏¢‡πà‡∏≤‡∏õ‡∏¥‡∏î‡∏´‡∏ô‡πâ‡∏≤‡∏ô‡∏µ‡πâ</small></div>}
-          <div className="forecast-import-actions">
-            <p><b>Cut-off:</b> ‡∏¢‡∏≠‡∏î‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‡∏´‡∏•‡∏±‡∏á Last Calculate DO ‡∏à‡∏∞‡∏ñ‡∏π‡∏Å‡∏´‡∏±‡∏Å‡∏à‡∏≤‡∏Å Forecast ‡πÄ‡∏Å‡πà‡∏≤‡∏Å‡πà‡∏≠‡∏ô ‡∏à‡∏∂‡∏á‡πÑ‡∏°‡πà‡∏™‡∏£‡πâ‡∏≤‡∏á Demand ‡∏ã‡πâ‡∏≥</p>
-            <button className="button primary" disabled={!forecastPreview || forecastParsing || forecastImporting} onClick={() => void importForecast()}>{forecastImporting ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤‚Ä¶" : "‚áß ‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡πÉ‡∏ä‡πâ Forecast ‡∏ä‡∏∏‡∏î‡∏ô‡∏µ‡πâ"}</button>
-          </div>
-        </div>
-      </Card>}
-
-      <Card className="forecast-current-card" title="‚ñ§ Forecast ‡∏ä‡∏∏‡∏î‡∏õ‡∏±‡∏à‡∏à‡∏∏‡∏ö‡∏±‡∏ô">
-        {forecastLoading ? <div className="loading-state"><span /><p>‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏Ñ‡∏≥‡∏ô‡∏ß‡∏ì Forecast ‡πÄ‡∏ó‡∏µ‡∏¢‡∏ö Stock‚Ä¶</p></div>
-          : forecast.activeImport ? <div className="forecast-active">
-            <div><small>‡∏ä‡∏∑‡πà‡∏≠‡πÑ‡∏ü‡∏•‡πå</small><b>{forecast.activeImport.fileName}</b></div>
-            <div><small>Last Calculate DO</small><b>{formatDateTime(forecast.activeImport.sourceCalculatedAt)}</b></div>
-            <div><small>‡∏ú‡∏π‡πâ‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤</small><b>{forecast.activeImport.importedByName}</b></div>
-            <div><small>‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤‡πÄ‡∏°‡∏∑‡πà‡∏≠</small><b>{formatDateTime(forecast.activeImport.createdAt)}</b></div>
-            <span className="forecast-status covered">‚óè ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡∏≠‡∏¢‡∏π‡πà</span>
-          </div> : <Empty title="‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ Forecast ‡∏ä‡∏∏‡∏î‡∏õ‡∏±‡∏à‡∏à‡∏∏‡∏ö‡∏±‡∏ô" text={canEditPage("forecast") ? "‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡πÑ‡∏ü‡∏•‡πå CSV ‡∏à‡∏≤‡∏Å‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•" : "‡∏ö‡∏±‡∏ç‡∏ä‡∏µ‡∏ô‡∏µ‡πâ‡∏°‡∏µ‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡∏î‡∏π‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡πÄ‡∏ó‡πà‡∏≤‡∏ô‡∏±‡πâ‡∏ô ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡πÉ‡∏´‡πâ‡∏ú‡∏π‡πâ‡∏°‡∏µ‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤ Forecast"} />}
-      </Card>
-      </div>
-
-      {forecast.activeImport && <Card className="forecast-trend-card" title="‡πÅ‡∏ô‡∏ß‡πÇ‡∏ô‡πâ‡∏° Forecast ‡πÄ‡∏ó‡∏µ‡∏¢‡∏ö Stock ‡∏û‡∏£‡πâ‡∏≠‡∏°‡πÉ‡∏ä‡πâ" action={<div className="forecast-range">{([7, 14, 30] as const).map((range) => <button key={range} className={forecastRange === range ? "active" : ""} onClick={() => setForecastRange(range)}>{range} ‡∏ß‡∏±‡∏ô</button>)}</div>}>
-        <div className="forecast-chart-legend"><span><i className="demand" />Forecast ‡∏™‡∏∞‡∏™‡∏°</span><span><i className="stock" />Stock ‡∏û‡∏£‡πâ‡∏≠‡∏°‡πÉ‡∏ä‡πâ</span><span><i className="shortage" />Part ‡πÄ‡∏£‡∏¥‡πà‡∏°‡∏Ç‡∏≤‡∏î</span></div>
-        {trend.length ? <div className="forecast-chart">{trend.map((item) => <div className="forecast-chart-column" key={item.date}>
-          <div className="forecast-chart-bars"><i className="demand" style={{ height: `${Math.max(3, item.cumulativeDemand / trendMax * 100)}%` }} title={`Forecast ${fmt(item.cumulativeDemand)}`} /><i className="stock" style={{ height: `${Math.max(3, item.projectedStock / trendMax * 100)}%` }} title={`Stock ${fmt(item.projectedStock)}`} /></div>
-          <b className={item.shortageParts ? "danger" : ""}>{fmt(item.shortageParts)}</b><small>{formatDate(item.date).slice(0, 5)}</small>
-        </div>)}</div> : <Empty title="‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡πÉ‡∏ô‡∏ä‡πà‡∏ß‡∏á‡πÄ‡∏ß‡∏•‡∏≤‡∏ô‡∏µ‡πâ" text="‡∏Å‡∏£‡∏≤‡∏ü‡∏à‡∏∞‡πÅ‡∏™‡∏î‡∏á‡∏´‡∏•‡∏±‡∏á‡∏°‡∏µ Forecast ‡∏ï‡∏±‡πâ‡∏á‡πÅ‡∏ï‡πà‡∏ß‡∏±‡∏ô‡∏õ‡∏±‡∏à‡∏à‡∏∏‡∏ö‡∏±‡∏ô‡πÄ‡∏õ‡πá‡∏ô‡∏ï‡πâ‡∏ô‡πÑ‡∏õ" />}
-      </Card>}
-
-      {forecast.activeImport && <section className="forecast-risk-section"><h3>‡∏™‡∏£‡∏∏‡∏õ‡∏Ñ‡∏ß‡∏≤‡∏°‡πÄ‡∏™‡∏µ‡πà‡∏¢‡∏á‡∏ï‡∏≤‡∏°‡∏ä‡πà‡∏ß‡∏á‡πÄ‡∏ß‡∏•‡∏≤</h3><div className="forecast-risk-grid">{riskCards.map((item) => <button key={item.key} className={`forecast-risk-card ${item.tone} ${forecastStatus === item.key ? "active" : ""}`} onClick={() => setFilter(item.key)}><span>{item.icon}</span><div><small>{item.label}</small><b>{fmt(item.value)} <em>Part</em></b></div><i>‚Ä∫</i></button>)}</div></section>}
-
-      {forecast.activeImport && <Card className="forecast-coverage-card" title={`‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ Part ‡∏ï‡∏≤‡∏°‡∏Ñ‡∏ß‡∏≤‡∏°‡πÄ‡∏™‡∏µ‡πà‡∏¢‡∏á ¬∑ ${fmt(rows.length)} Part`} action={<div className="forecast-filters"><input value={forecastSearch} onChange={(event) => setForecastSearch(event.target.value)} placeholder="‚åï Part No. / Description / Job" /><select value={forecastStatus} onChange={(event) => setForecastStatus(event.target.value as typeof forecastStatus)}><option value="all">‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î</option><option value="overdue">‡∏Ç‡∏≤‡∏î‡πÅ‡∏•‡πâ‡∏ß</option><option value="within3">‡∏Ç‡∏≤‡∏î‡∏†‡∏≤‡∏¢‡πÉ‡∏ô 3 ‡∏ß‡∏±‡∏ô</option><option value="within7">‡∏Ç‡∏≤‡∏î‡∏†‡∏≤‡∏¢‡πÉ‡∏ô 7 ‡∏ß‡∏±‡∏ô</option><option value="covered">‡πÄ‡∏û‡∏µ‡∏¢‡∏á‡∏û‡∏≠</option></select>{factories.length > 0 && <select value={forecastFactory} onChange={(event) => setForecastFactory(event.target.value)}><option value="ALL">‡∏ó‡∏∏‡∏Å FAC</option>{factories.map((factory) => <option key={factory} value={factory}>{factory}</option>)}</select>}</div>}>
-        <div className="forecast-method-note">Available Stock = ‡∏Ç‡∏≠‡∏á‡∏ó‡∏µ‡πà‡∏≠‡∏¢‡∏π‡πà‡πÉ‡∏ô‡∏û‡∏∑‡πâ‡∏ô‡∏ó‡∏µ‡πà Stock ‡∏à‡∏£‡∏¥‡∏á ‚àí ‡∏¢‡∏≠‡∏î‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô/‡∏à‡∏≠‡∏á‡∏Ñ‡πâ‡∏≤‡∏á ¬∑ ‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡πÄ‡∏£‡∏¥‡πà‡∏°‡∏Ç‡∏≤‡∏î‡∏Ñ‡∏≥‡∏ô‡∏ß‡∏ì‡∏à‡∏≤‡∏Å Forecast ‡∏ï‡∏≤‡∏°‡∏•‡∏≥‡∏î‡∏±‡∏ö‡∏ß‡∏±‡∏ô ¬∑ ‡∏≠‡∏±‡∏õ‡πÄ‡∏î‡∏ï‡∏à‡∏≤‡∏Å‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏à‡∏£‡∏¥‡∏á‡∏ó‡∏∏‡∏Å‡∏Ñ‡∏£‡∏±‡πâ‡∏á‡∏ó‡∏µ‡πà‡∏£‡∏µ‡πÄ‡∏ü‡∏£‡∏ä</div>
-        {rows.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table forecast-table"><thead><tr><th>Priority</th><th>Part / Description</th><th>Job / FAC</th><th className="num">Forecast ‡∏£‡∏ß‡∏°</th><th className="num">Stock ‡∏û‡∏£‡πâ‡∏≠‡∏°‡πÉ‡∏ä‡πâ</th><th className="num">‡∏Ç‡∏≤‡∏î / ‡πÄ‡∏Å‡∏¥‡∏ô</th><th>‡πÄ‡∏£‡∏¥‡πà‡∏°‡∏Ç‡∏≤‡∏î‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà</th><th className="num">‡∏ï‡πâ‡∏≠‡∏á‡∏ú‡∏•‡∏¥‡∏ï‡πÄ‡∏û‡∏¥‡πà‡∏°</th><th>‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞</th></tr></thead><tbody>{rows.map((item) => <tr key={item.materialCode} className={item.riskGroup === "overdue" ? "forecast-overdue-row" : ""}>
-          <td data-label="Priority"><span className={`forecast-priority ${item.riskGroup}`}>{priorityLabel(item)}</span></td>
-          <td data-label="Part / Description"><b>{item.materialCode}</b><small>{item.description || "‚Äî"}</small>{item.dispatchedAfterImport > 0 && <em>‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‡∏´‡∏•‡∏±‡∏á‡πÑ‡∏ü‡∏•‡πå‡πÅ‡∏•‡πâ‡∏ß {fmt(item.dispatchedAfterImport)} ‡∏ä‡∏¥‡πâ‡∏ô</em>}</td>
-          <td data-label="Job / FAC"><b>‚Äî</b><small>{(item.factories || []).join(", ") || "‡πÑ‡∏°‡πà‡∏£‡∏∞‡∏ö‡∏∏ FAC"}</small></td>
-          <td data-label="Forecast ‡∏£‡∏ß‡∏°" className="num"><b>{fmt(item.outstandingQty)}</b></td>
-          <td data-label="Stock ‡∏û‡∏£‡πâ‡∏≠‡∏°‡πÉ‡∏ä‡πâ" className="num"><b className="forecast-covered-text">{fmt(item.stockQty)}</b></td>
-          <td data-label="‡∏Ç‡∏≤‡∏î / ‡πÄ‡∏Å‡∏¥‡∏ô" className={`num ${item.stockQty - item.outstandingQty < 0 ? "danger" : ""}`}><b>{fmt(item.stockQty - item.outstandingQty)}</b></td>
-          <td data-label="‡πÄ‡∏£‡∏¥‡πà‡∏°‡∏Ç‡∏≤‡∏î‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà">{item.shortageDate ? <><b>{formatDate(item.shortageDate)}</b><small>{item.shortageTime} ¬∑ ‡∏Ç‡∏≤‡∏î‡∏Ñ‡∏£‡∏±‡πâ‡∏á‡πÅ‡∏£‡∏Å {fmt(item.firstShortageQty)} ‡∏ä‡∏¥‡πâ‡∏ô</small></> : "‚Äî"}</td>
-          <td data-label="‡∏ï‡πâ‡∏≠‡∏á‡∏ú‡∏•‡∏¥‡∏ï‡πÄ‡∏û‡∏¥‡πà‡∏°" className={`num ${item.totalShortage > 0 ? "danger" : ""}`}><b>{fmt(item.totalShortage)}</b></td>
-          <td data-label="‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞"><span className={`forecast-status ${item.status}`}>{statusLabel(item)}</span></td>
-        </tr>)}</tbody></table></div> : <Empty title="‡πÑ‡∏°‡πà‡∏û‡∏ö‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ï‡∏≤‡∏°‡∏ï‡∏±‡∏ß‡∏Å‡∏£‡∏≠‡∏á" text="‡∏•‡∏≠‡∏á‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏Ñ‡∏≥‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤‡∏´‡∏£‡∏∑‡∏≠‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞" />}
-      </Card>}
-
-      {forecast.imports.length > 0 && <Card className="forecast-history-card" title="‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡πÑ‡∏ü‡∏•‡πå Forecast">
-        <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>‡∏ä‡∏∑‡πà‡∏≠‡πÑ‡∏ü‡∏•‡πå</th><th>‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤</th><th>‡∏ú‡∏π‡πâ‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤</th><th>Last Calculate DO</th><th className="num">‡∏à‡∏≥‡∏ô‡∏ß‡∏ô Part</th><th>‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞</th></tr></thead><tbody>{forecast.imports.map((item) => <tr key={item.id}><td data-label="‡∏ä‡∏∑‡πà‡∏≠‡πÑ‡∏ü‡∏•‡πå"><b>{item.fileName}</b></td><td data-label="‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤">{formatDateTime(item.createdAt)}</td><td data-label="‡∏ú‡∏π‡πâ‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤">{item.importedByName}</td><td data-label="Last Calculate DO">{formatDateTime(item.sourceCalculatedAt)}</td><td data-label="‡∏à‡∏≥‡∏ô‡∏ß‡∏ô Part" className="num">{fmt(item.materialCount)}</td><td data-label="‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞"><span className={`forecast-status ${item.status === "active" ? "covered" : "archived"}`}>{item.status === "active" ? "‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡∏≠‡∏¢‡∏π‡πà" : "‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥"}</span></td></tr>)}</tbody></table></div>
-      </Card>}
-    </div>;
-  }
-
-  function renderExports() {
-    const exported = filtered.filter((due) => Number(due.scannedQty) > 0);
-    const full = exported.filter((due) => stateOf(due) === "completed").length;
-    const part = exported.filter((due) => stateOf(due) === "partial").length;
-    const over = exported.filter((due) => stateOf(due) === "over").length;
-    return <div className="exports-page-redesign">
-      <Card className="exports-filter-card"><Filters /></Card>
-      <div className="metrics five reports-metrics exports-metrics page-summary"><MetricCard tone="blue" icon="‚ñ§" label="‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î" value={fmt(exported.length)} suffix="‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£" /><MetricCard tone="green" icon="‚úì" label="‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡∏Ñ‡∏£‡∏ö" value={fmt(full)} suffix="‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£" /><MetricCard tone="orange" icon="‚ó∑" label="‡∏ö‡∏≤‡∏á‡∏™‡πà‡∏ß‡∏ô" value={fmt(part)} suffix="‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£" /><MetricCard tone="red" icon="√ó" label="‡πÄ‡∏Å‡∏¥‡∏ô‡∏î‡∏¥‡∏ß‡∏à‡∏±‡∏î‡∏™‡πà‡∏á" value={fmt(over)} suffix="‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£" /><MetricCard tone="purple" icon="‚óá" label="‡∏£‡∏ß‡∏°‡∏à‡∏≥‡∏ô‡∏ß‡∏ô" value={fmt(exported.reduce((sum, due) => sum + Number(due.scannedQty), 0))} suffix="‡∏ä‡∏¥‡πâ‡∏ô" /></div>
-      <Card className="exports-list-card" title={<span className="exports-list-title"><i>‚â°</i><span>‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å<small>‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏™‡∏¥‡∏ô‡∏Ñ‡πâ‡∏≤‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡∏à‡∏≤‡∏Å‡∏Ñ‡∏•‡∏±‡∏á‡πÑ‡∏õ‡∏¢‡∏±‡∏á‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤‡∏´‡∏£‡∏∑‡∏≠‡∏™‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ú‡∏•‡∏¥‡∏ï</small></span></span>} action={<div className="exports-list-actions"><button className="button success" onClick={() => void exportDeliveryExcel()}>‚ñ¶ ‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å Excel</button><button className="button primary" onClick={exportCsv}>‚ñ§ ‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å CSV</button></div>}>
-        <DueTable rows={exported} />
-        <footer className="exports-list-footer"><span>‡πÅ‡∏™‡∏î‡∏á {fmt(exported.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</span><span>{filterDate ? formatDate(filterDate) : "‡∏ó‡∏∏‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà"} ¬∑ {filterFact === "ALL" ? "‡∏ó‡∏∏‡∏Å FAC" : filterFact} ¬∑ {filterTime === "ALL" ? "‡∏ó‡∏∏‡∏Å‡πÄ‡∏ß‡∏•‡∏≤" : filterTime}</span></footer>
-      </Card>
-      <footer className="settings-footer"><span>¬© 2026 Control Stock KIT. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; üáπüá≠</span></footer>
-    </div>;
-  }
-
-  function renderReports() {
-    const maxFac = Math.max(...facStats.map((item) => item.items), 1);
-    const recentDays = dailyStats.slice(-7);
-    const maxDaily = Math.max(...recentDays.map((item) => item.items), 1);
-    return <div className="reports-page-redesign">
-      <Card className="reports-filter-card" action={<button className="button primary reports-refresh-button" onClick={() => void loadDue()}>‚Üª ‡∏£‡∏µ‡πÄ‡∏ü‡∏£‡∏ä</button>}><Filters /></Card>
-      <div className="metrics five reports-metrics page-summary"><MetricCard tone="blue" icon="‚ñ§" label="‡πÅ‡∏ú‡∏ô‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î" value={fmt(summary.items)} suffix="‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£" /><MetricCard tone="green" icon="‚úì" label="‡∏Ñ‡∏£‡∏ö‡∏ï‡∏≤‡∏°‡πÅ‡∏ú‡∏ô" value={fmt(summary.completed)} suffix="‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£" /><MetricCard tone="orange" icon="‚ó∑" label="‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠" value={fmt(summary.partial + summary.pending)} suffix="‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£" /><MetricCard tone="red" icon="!" label="‡πÄ‡∏Å‡∏¥‡∏ô‡∏î‡∏¥‡∏ß‡∏à‡∏±‡∏î‡∏™‡πà‡∏á" value={fmt(summary.over)} suffix="‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£" /><MetricCard tone="purple" icon="‚óá" label="‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß‡∏£‡∏ß‡∏°" value={fmt(summary.sent)} suffix="‡∏ä‡∏¥‡πâ‡∏ô" /></div>
-      <div className="reports-dashboard-grid">
-        <Card className="reports-chart-card" title="‡∏™‡∏±‡∏î‡∏™‡πà‡∏ß‡∏ô‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏Å‡∏≤‡∏£‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô"><div className="donut-layout"><div className="donut" style={{ "--complete": `${completePct * 3.6}deg` } as React.CSSProperties}><span><b>{summary.items}</b>‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</span></div><div className="legend"><p><i className="green" />‡∏Ñ‡∏£‡∏ö‡∏ï‡∏≤‡∏°‡πÅ‡∏ú‡∏ô <b>{summary.completed}</b></p><p><i className="orange" />‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠ <b>{summary.partial + summary.pending}</b></p><p><i className="red" />‡πÄ‡∏Å‡∏¥‡∏ô‡∏î‡∏¥‡∏ß‡∏à‡∏±‡∏î‡∏™‡πà‡∏á <b>{summary.over}</b></p><p><i className="purple" />‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß‡∏£‡∏ß‡∏° <b>{fmt(summary.sent)}</b></p></div></div></Card>
-        <Card className="reports-chart-card" title="‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡∏ï‡∏≤‡∏° FAC / Line"><div className="bar-chart reports-fac-chart">{facStats.length ? facStats.slice(0, 7).map((item) => <div key={item.fact}><b>{item.fact}</b><span><i style={{ width: `${Math.max(4, item.items / maxFac * 100)}%` }} /></span><strong>{item.items}</strong></div>) : <Empty title="‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•" text="‡∏•‡∏≠‡∏á‡∏õ‡∏£‡∏±‡∏ö‡∏ä‡πà‡∏ß‡∏á‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏´‡∏£‡∏∑‡∏≠‡πÇ‡∏£‡∏á‡∏á‡∏≤‡∏ô" />}</div></Card>
-        <Card className="reports-chart-card reports-trend-card" title="‡πÅ‡∏ô‡∏ß‡πÇ‡∏ô‡πâ‡∏°‡∏Å‡∏≤‡∏£‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô" action={<div className="reports-export-tools"><button className="export-button excel" onClick={() => void exportReportExcel()}><span>‚ñ¶</span><b>Excel</b><small>.xlsx</small></button><button className="export-button pdf" onClick={exportReportPdf}><span>‚ñ§</span><b>PDF</b><small>‡∏û‡∏¥‡∏°‡∏û‡πå / ‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å</small></button><button className="export-button csv" onClick={exportReportCsv}><span>‚â°</span><b>CSV</b><small>.csv</small></button></div>}>
-          {recentDays.length ? <><div className="reports-trend-chart">{recentDays.map((row) => <div key={row.date}><span><i className="planned" style={{ height: `${Math.max(5, row.items / maxDaily * 100)}%` }} /><i className="finished" style={{ height: `${Math.max(row.completed ? 5 : 0, row.completed / maxDaily * 100)}%` }} /></span><small>{formatDate(row.date).slice(0, 5)}</small></div>)}</div><div className="reports-chart-legend"><span><i className="planned" />‡∏ï‡∏≤‡∏°‡πÅ‡∏ú‡∏ô</span><span><i className="finished" />‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß</span></div></> : <Empty title="‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•" text="‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ä‡πà‡∏ß‡∏á‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡πÄ‡∏û‡∏∑‡πà‡∏≠‡πÅ‡∏™‡∏î‡∏á‡πÅ‡∏ô‡∏ß‡πÇ‡∏ô‡πâ‡∏°" />}
-        </Card>
-      </div>
-      <div className="reports-tables-grid">
-        <Card className="reports-table-card" title="‡∏™‡∏£‡∏∏‡∏õ‡∏Å‡∏≤‡∏£‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡∏ï‡∏≤‡∏°‡∏ß‡∏±‡∏ô" action={<span className="reports-current-filter">‚óâ {filterDate ? formatDate(filterDate) : "‡∏î‡∏π‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î"}</span>}>{dailyStats.length ? <div className="table-wrap mobile-table-wrap"><table className="mobile-card-table"><thead><tr><th>‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà</th><th className="num">‡πÅ‡∏ú‡∏ô‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î</th><th className="num">‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß</th><th className="num">‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠</th><th className="num">‡πÄ‡∏Å‡∏¥‡∏ô‡∏Ñ‡∏¥‡∏ß</th></tr></thead><tbody>{dailyStats.slice(0, 8).map((row) => <tr key={row.date}><td data-label="‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà"><b>{formatDate(row.date)}</b></td><td data-label="‡πÅ‡∏ú‡∏ô‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î" className="num">{row.items}</td><td data-label="‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß" className="num sent">{row.completed}</td><td data-label="‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠" className="num warning">{row.partial + row.pending}</td><td data-label="‡πÄ‡∏Å‡∏¥‡∏ô‡∏Ñ‡∏¥‡∏ß" className="num danger">{row.over}</td></tr>)}</tbody></table></div> : <Empty title="‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•" text="‡πÉ‡∏ô‡∏ä‡πà‡∏ß‡∏á‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏ó‡∏µ‡πà‡πÄ‡∏•‡∏∑‡∏≠‡∏Å" />}</Card>
-        <Card className="reports-table-card" title="‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ó‡∏µ‡πà‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏Ñ‡∏£‡∏ö (‡∏™‡∏π‡∏á‡∏™‡∏∏‡∏î)" action={<span className="reports-current-filter">‚óâ {filterFact === "ALL" ? "‡∏î‡∏π‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î" : filterFact}</span>}><DueTable rows={filtered.filter((due) => ["pending", "partial", "over"].includes(stateOf(due))).sort((a, b) => (b.reqQty - b.scannedQty) - (a.reqQty - a.scannedQty))} limit={5} /></Card>
-      </div>
-      <footer className="settings-footer"><span>¬© 2026 Control Stock KIT. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; üáπüá≠</span></footer>
-    </div>;
-  }
-
-  function renderHistory() {
-    const activities: Array<{ id: string; createdAt: string; action: string; detail: string; actor: string; tone: string; kind: string }> = [];
-    payload.imports.forEach((item) => activities.push({
-      id: "import-" + item.id, createdAt: item.createdAt, action: "‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤‡πÅ‡∏ú‡∏ô‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô",
-      detail: item.fileName + " ¬∑ " + fmt(item.rowCount) + " ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£", actor: item.importedByName || "‚Äî", tone: "purple", kind: "import",
-    }));
-    stock.tags.forEach((item) => {
-      activities.push({
-        id: "tag-" + item.id, createdAt: item.createdAt, action: "‡∏≠‡∏≠‡∏Å‡πÅ‡∏•‡∏∞‡∏û‡∏¥‡∏°‡∏û‡πå Tag",
-        detail: item.tagId + " ¬∑ " + item.materialCode + " ¬∑ Job " + item.jobNo + " ¬∑ " + fmt(item.qty) + " ‡∏ä‡∏¥‡πâ‡∏ô",
-        actor: item.printedByName || "‚Äî", tone: "blue", kind: "tag",
-      });
-      if (item.receivedAt) activities.push({
-        id: "receive-" + item.id, createdAt: item.receivedAt, action: "‡∏£‡∏±‡∏ö‡∏á‡∏≤‡∏ô‡πÄ‡∏Ç‡πâ‡∏≤ Stock",
-        detail: item.tagId + " ¬∑ " + item.materialCode + " ¬∑ " + fmt(item.qty) + " ‡∏ä‡∏¥‡πâ‡∏ô",
-        actor: item.receivedByName || "‚Äî", tone: "green", kind: "receive",
-      });
-    });
-    stock.picks.forEach((item) => activities.push({
-      id: "pick-" + item.id, createdAt: item.pickedAt, action: "‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô",
-      detail: item.stockTagCode + " ¬∑ " + item.materialCode + " ¬∑ Job " + item.jobNo + " ¬∑ " + fmt(item.pickedQty) + " ‡∏ä‡∏¥‡πâ‡∏ô",
-      actor: item.pickedByName || "‚Äî", tone: "orange", kind: "arrange",
-    }));
-    payload.scans.forEach((item) => activities.push({
-      id: "dispatch-" + item.id, createdAt: item.createdAt, action: "‡∏ï‡∏£‡∏ß‡∏à‡πÅ‡∏•‡∏∞‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å",
-      detail: item.tagId + " ¬∑ " + item.materialCode + " ¬∑ " + fmt(item.qty) + " " + item.unit,
-      actor: item.scannedByName || "‚Äî", tone: "red", kind: "dispatch",
-    }));
-    const auditKind = (action: string) => {
-      if (/warning/.test(action)) return "warning";
-      if (/delete|remove|clear|cancel/.test(action)) return "delete";
-      if (/permission|role|user_access/.test(action)) return "permission";
-      if (/import/.test(action)) return "import";
-      if (/login|logout|pin/.test(action)) return "security";
-      if (/create|add|print|receive|stage|dispatch|issue/.test(action)) return "create";
-      return "update";
-    };
-    const auditTone = (kind: string) => kind === "warning" ? "orange" : kind === "delete" ? "red" : kind === "permission" ? "purple" : kind === "import" ? "blue" : kind === "security" ? "orange" : kind === "create" ? "green" : "blue";
-    const auditActivities = auditLogs.map((item) => {
-      const kind = auditKind(item.actionKey);
-      const identity = item.entityId ? ` ¬∑ ${item.entityId}` : "";
-      return {
-        id: `audit-${item.id}`, createdAt: item.createdAt, action: item.actionLabel,
-        detail: `${item.moduleLabel}${identity} ¬∑ ${item.summary}`,
-        actor: item.actorName ? `${item.actorName}${item.actorCode ? ` (${item.actorCode})` : ""}` : "‡∏£‡∏∞‡∏ö‡∏ö",
-        tone: auditTone(kind), kind,
-      };
-    });
-    if (auditActivities.length) {
-      const oldestAudit = auditActivities.reduce((oldest, item) => item.createdAt < oldest ? item.createdAt : oldest, auditActivities[0].createdAt);
-      const legacyActivities = activities.filter((item) => item.createdAt < oldestAudit);
-      legacyActivities.forEach((item) => { if (item.kind !== "import") item.kind = "create"; });
-      activities.length = 0;
-      activities.push(...auditActivities, ...legacyActivities);
-    } else activities.forEach((item) => { if (item.kind !== "import") item.kind = "create"; });
-    activities.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-    const historyNeedle = historyQuery.trim().toLowerCase();
-    const activityLocalDate = (value: string) => {
-      const date = toLocalDate(value);
-      if (!date) return "";
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, "0");
-      const day = String(date.getDate()).padStart(2, "0");
-      return `${year}-${month}-${day}`;
-    };
-    const filteredActivities = activities.filter((item) =>
-      (historyType === "all" || item.kind === historyType)
-      && (!historyDate || activityLocalDate(item.createdAt) >= historyDate)
-      && (!historyDateTo || activityLocalDate(item.createdAt) <= historyDateTo)
-      && (!historyNeedle || [item.action, item.detail, item.actor, item.createdAt].some((value) => String(value || "").toLowerCase().includes(historyNeedle)))
-    );
-    const historyTabs = [
-      { key: "all", label: "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î", count: activities.length },
-      { key: "warning", label: "‡πÅ‡∏à‡πâ‡∏á‡πÄ‡∏ï‡∏∑‡∏≠‡∏ô", count: activities.filter((item) => item.kind === "warning").length },
-      { key: "create", label: "‡πÄ‡∏û‡∏¥‡πà‡∏° / ‡∏ó‡∏≥‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£", count: activities.filter((item) => item.kind === "create").length },
-      { key: "import", label: "‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤‡πÑ‡∏ü‡∏•‡πå", count: activities.filter((item) => item.kind === "import").length },
-      { key: "update", label: "‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•", count: activities.filter((item) => item.kind === "update").length },
-      { key: "delete", label: "‡∏•‡∏ö‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•", count: activities.filter((item) => item.kind === "delete").length },
-      { key: "permission", label: "‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ", count: activities.filter((item) => item.kind === "permission").length },
-      { key: "security", label: "‡πÄ‡∏Ç‡πâ‡∏≤‡∏™‡∏π‡πà‡∏£‡∏∞‡∏ö‡∏ö / PIN", count: activities.filter((item) => item.kind === "security").length },
-    ];
-    const shownActivities = filteredActivities.slice(0, 250);
-    async function exportHistoryExcel() {
-      try {
-        const xlsx = await import("xlsx");
-        const rows = [
-          ["‡∏ß‡∏±‡∏ô‡πÅ‡∏•‡∏∞‡πÄ‡∏ß‡∏•‡∏≤", "‡∏õ‡∏£‡∏∞‡πÄ‡∏†‡∏ó", "‡∏£‡∏≤‡∏¢‡∏•‡∏∞‡πÄ‡∏≠‡∏µ‡∏¢‡∏î", "‡∏ú‡∏π‡πâ‡∏î‡∏≥‡πÄ‡∏ô‡∏¥‡∏ô‡∏Å‡∏≤‡∏£", "‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞"],
-          ...filteredActivities.map((item) => [formatDateTime(item.createdAt), item.action, item.detail, item.actor, "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡πÅ‡∏•‡πâ‡∏ß"]),
-        ];
-        const sheet = xlsx.utils.aoa_to_sheet(rows);
-        sheet["!cols"] = [22, 24, 70, 24, 16].map((wch) => ({ wch }));
-        const workbook = xlsx.utils.book_new();
-        xlsx.utils.book_append_sheet(workbook, sheet, "‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡∏Å‡∏≤‡∏£‡∏î‡∏≥‡πÄ‡∏ô‡∏¥‡∏ô‡∏Å‡∏≤‡∏£");
-        xlsx.writeFile(workbook, `KIT-history-${new Date().toISOString().slice(0, 10)}.xlsx`);
-        void recordClientAudit("export_history", `‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥ Excel ${filteredActivities.length} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£`, { itemCount: filteredActivities.length, historyType, historyDate, historyDateTo });
-        setNotice({ type: "success", text: `‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡πÅ‡∏•‡πâ‡∏ß ${fmt(filteredActivities.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£` });
-      } catch (caught) {
-        setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-      }
-    }
-    const summaryCards = [
-      { tone: "purple", icon: "‚óé", label: "‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î", value: activities.length, suffix: "‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£", art: "‚ñ§" },
-      { tone: "blue", icon: "‚áß", label: "‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤‡πÑ‡∏ü‡∏•‡πå", value: activities.filter((item) => item.kind === "import").length, suffix: "‡∏Ñ‡∏£‡∏±‡πâ‡∏á", art: "‚ñ•" },
-      { tone: "green", icon: "+", label: "‡πÄ‡∏û‡∏¥‡πà‡∏° / ‡∏ó‡∏≥‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£", value: activities.filter((item) => item.kind === "create").length, suffix: "‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£", art: "‚ñ°" },
-      { tone: "orange", icon: "‚úé", label: "‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç / ‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå", value: activities.filter((item) => item.kind === "update" || item.kind === "permission").length, suffix: "‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£", art: "‚ñ£" },
-      { tone: "red", icon: "√ó", label: "‡∏•‡∏ö‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•", value: activities.filter((item) => item.kind === "delete").length, suffix: "‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£", art: "‚ñ∞" },
-    ];
-    return <div className="history-page-redesign">
-      <div className="history-summary-grid page-summary">{summaryCards.map((item) => <article className={`history-summary-card ${item.tone}`} key={item.label}><span>{item.icon}</span><div><small>{item.label}</small><b>{fmt(item.value)}</b><em>{item.suffix}</em></div><i>{item.art}</i></article>)}</div>
-      <section className="history-log-card">
-        <header><div><span>‚ñ§</span><div><h3>‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡∏Å‡∏≤‡∏£‡∏î‡∏≥‡πÄ‡∏ô‡∏¥‡∏ô‡∏Å‡∏≤‡∏£</h3><p>‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡∏Å‡∏≤‡∏£‡πÄ‡∏û‡∏¥‡πà‡∏° ‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç ‡∏•‡∏ö ‡∏ô‡∏≥‡πÄ‡∏Ç‡πâ‡∏≤‡πÑ‡∏ü‡∏•‡πå ‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå ‡πÅ‡∏•‡∏∞‡∏Å‡∏¥‡∏à‡∏Å‡∏£‡∏£‡∏°‡∏™‡∏≥‡∏Ñ‡∏±‡∏ç‡∏à‡∏≤‡∏Å‡∏ó‡∏∏‡∏Å‡∏´‡∏ô‡πâ‡∏≤</p></div></div><div><button className="button secondary" disabled={auditLogsLoading} onClick={() => void Promise.all([loadDue(), loadStock(), loadAuditLogs()])}>‚Üª {auditLogsLoading ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡πÇ‡∏´‡∏•‡∏î" : "‡∏£‡∏µ‡πÄ‡∏ü‡∏£‡∏ä"}</button><button className="button history-excel-button" onClick={() => void exportHistoryExcel()}>‚ñ¶ ‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å Excel</button></div></header>
-        <div className="audit-history-controls history-redesign-controls">
-          <div className="audit-history-tabs">{historyTabs.map((tab) => <button type="button" key={tab.key} className={historyType === tab.key ? "active" : ""} onClick={() => setHistoryType(tab.key)}><span>{tab.label}</span><b>{fmt(tab.count)}</b></button>)}</div>
-          <div className="history-filter-line">
-            <div className="audit-history-search"><span>‚åï</span><input value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder="‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤‡∏ä‡∏∑‡πà‡∏≠‡∏ú‡∏π‡πâ‡∏ó‡∏≥‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£, Tag ID, Part No., Job ‡∏´‡∏£‡∏∑‡∏≠‡∏ä‡∏∑‡πà‡∏≠‡πÑ‡∏ü‡∏•‡πå..." />{historyQuery && <button type="button" onClick={() => setHistoryQuery("")}>√ó</button>}</div>
-            <div className="history-date-range"><b>‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏ó‡∏≥‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</b><label><span>‚ñ¶</span><input aria-label="‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡πÄ‡∏£‡∏¥‡πà‡∏°‡∏ï‡πâ‡∏ô" type="date" value={historyDate} onChange={(event) => setHistoryDate(event.target.value)} /><i>‚Äì</i><input aria-label="‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡∏¥‡πâ‡∏ô‡∏™‡∏∏‡∏î" type="date" value={historyDateTo} onChange={(event) => setHistoryDateTo(event.target.value)} />{(historyDate || historyDateTo) && <button type="button" onClick={() => { setHistoryDate(""); setHistoryDateTo(""); }} aria-label="‡∏•‡πâ‡∏≤‡∏á‡∏ä‡πà‡∏ß‡∏á‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà">√ó</button>}</label></div>
-          </div>
-        </div>
-        {shownActivities.length ? <div className="table-wrap mobile-table-wrap history-table-wrap"><table className="mobile-card-table history-modern-table"><thead><tr><th>‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà / ‡πÄ‡∏ß‡∏•‡∏≤</th><th>‡∏õ‡∏£‡∏∞‡πÄ‡∏†‡∏ó</th><th>‡∏£‡∏≤‡∏¢‡∏•‡∏∞‡πÄ‡∏≠‡∏µ‡∏¢‡∏î</th><th>‡∏ú‡∏π‡πâ‡∏î‡∏≥‡πÄ‡∏ô‡∏¥‡∏ô‡∏Å‡∏≤‡∏£</th><th>‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞</th></tr></thead><tbody>{shownActivities.map((item) => <tr key={item.id}><td data-label="‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà / ‡πÄ‡∏ß‡∏•‡∏≤"><b>{formatDateTime(item.createdAt)}</b></td><td data-label="‡∏õ‡∏£‡∏∞‡πÄ‡∏†‡∏ó"><b>{item.action}</b></td><td data-label="‡∏£‡∏≤‡∏¢‡∏•‡∏∞‡πÄ‡∏≠‡∏µ‡∏¢‡∏î">{item.detail}</td><td data-label="‡∏ú‡∏π‡πâ‡∏î‡∏≥‡πÄ‡∏ô‡∏¥‡∏ô‡∏Å‡∏≤‡∏£"><b>{item.actor}</b></td><td data-label="‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞"><em className={"status completed audit-" + item.tone}>‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡πÅ‡∏•‡πâ‡∏ß</em></td></tr>)}</tbody></table></div> : <div className="history-empty"><span>‚óá</span><b>{(historyQuery || historyDate || historyDateTo) ? "‡πÑ‡∏°‡πà‡∏û‡∏ö‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ó‡∏µ‡πà‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤" : "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡πÉ‡∏ô‡∏Ç‡∏ì‡∏∞‡∏ô‡∏µ‡πâ"}</b><small>{(historyQuery || historyDate || historyDateTo) ? "‡∏•‡∏≠‡∏á‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏Ñ‡∏≥‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤‡∏´‡∏£‡∏∑‡∏≠‡∏ä‡πà‡∏ß‡∏á‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà" : "‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡πÄ‡∏°‡∏ô‡∏π‡∏î‡πâ‡∏≤‡∏ô‡∏ö‡∏ô‡∏´‡∏£‡∏∑‡∏≠‡∏õ‡∏£‡∏±‡∏ö‡∏ä‡πà‡∏ß‡∏á‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏î‡∏π‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•"}</small></div>}
-        <footer><span>‡πÅ‡∏™‡∏î‡∏á {fmt(Math.min(filteredActivities.length, 250))} ‡∏à‡∏≤‡∏Å {fmt(filteredActivities.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</span></footer>
-      </section>
-      <footer className="settings-footer"><span>¬© 2026 Control Stock KIT. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; üáπüá≠</span></footer>
-    </div>;
-  }
-
-  function renderSettings() {
-    // ‡∏ï‡∏±‡∏ß‡πÅ‡∏õ‡∏£‡∏ò‡∏£‡∏£‡∏°‡∏î‡∏≤ ‡πÑ‡∏°‡πà‡πÉ‡∏ä‡πà useMemo ‡πÄ‡∏û‡∏£‡∏≤‡∏∞ renderSettings() ‡πÄ‡∏õ‡πá‡∏ô‡∏ü‡∏±‡∏á‡∏Å‡πå‡∏ä‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏ñ‡∏π‡∏Å‡πÄ‡∏£‡∏µ‡∏¢‡∏Å
-    // ‡πÅ‡∏ö‡∏ö‡∏°‡∏µ‡πÄ‡∏á‡∏∑‡πà‡∏≠‡∏ô‡πÑ‡∏Ç ‡πÑ‡∏°‡πà‡πÉ‡∏ä‡πà‡∏Ñ‡∏≠‡∏°‡πÇ‡∏û‡πÄ‡∏ô‡∏ô‡∏ï‡πå ‡∏Å‡∏≤‡∏£‡πÄ‡∏£‡∏µ‡∏¢‡∏Å hook ‡πÉ‡∏ô‡∏ô‡∏µ‡πâ‡∏à‡∏∞‡∏ú‡∏¥‡∏î‡∏Å‡∏é Hooks
-    const Toggle = ({ keyName, title, text: description, icon }: { keyName: keyof typeof settings; title: string; text: string; icon: string }) => <label className="setting-row"><span className="setting-row-icon">{icon}</span><div><b>{title}</b><small>{description}</small></div><input type="checkbox" checked={settings[keyName]} onChange={(e) => setSettings((current) => { const next={...current,[keyName]:e.target.checked}; if(keyName==='sound'){window.localStorage.setItem('kit-due-settings',JSON.stringify(next));if(e.target.checked)window.setTimeout(()=>speakThaiAlert('success','settings','‡πÄ‡∏õ‡∏¥‡∏î‡πÄ‡∏™‡∏µ‡∏¢‡∏á‡∏û‡∏π‡∏î‡πÅ‡∏•‡πâ‡∏ß',true),0);} return next; })} /><i /></label>;
-    return <div className="settings-page-redesign">
-      <section className="settings-block settings-system-block">
-        <header><span>‚ñ§</span><h3>‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏£‡∏∞‡∏ö‡∏ö</h3></header>
-        <div className="system-card">
-          <div className="system-logo">KiT<small>CONTROL STOCK KIT</small></div>
-          <dl><div><dt>‡∏ä‡∏∑‡πà‡∏≠‡∏£‡∏∞‡∏ö‡∏ö</dt><dd>Control Stock KIT</dd></div><div><dt>‡πÄ‡∏ß‡∏≠‡∏£‡πå‡∏ä‡∏±‡∏ô</dt><dd>v2.23.0</dd></div><div><dt>‡πÄ‡∏Ç‡∏ï‡πÄ‡∏ß‡∏•‡∏≤</dt><dd>(GMT+07:00) Bangkok, Thailand</dd></div><div><dt>‡∏ó‡∏µ‡πà‡∏ï‡∏±‡πâ‡∏á</dt><dd>‚óè Bangkok, Thailand</dd></div><div><dt>‡∏ú‡∏π‡πâ‡∏î‡∏π‡πÅ‡∏•‡∏£‡∏∞‡∏ö‡∏ö</dt><dd>‚ôü {user.displayName}</dd></div></dl>
-          <div className="system-stats page-summary"><p className="blue"><span>‚ñ§</span><b>{fmt(payload.dues.length)}</b><strong>Due ‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î</strong><small>‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</small></p><p className="purple"><span>‚óá</span><b>{fmt(partImages.length)}</b><strong>‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô</strong><small>‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</small></p></div>
-        </div>
-      </section>
-
-      <div className="settings-grid settings-feature-grid">
-        <section className="settings-block settings-option-card teal">
-          <header><span>‚ñ§</span><h3>‡∏ï‡∏±‡πâ‡∏á‡∏Ñ‡πà‡∏≤‡∏Å‡∏≤‡∏£‡∏ï‡∏±‡∏î‡∏¢‡∏≠‡∏î</h3><i>‚ñ∞‚ñ±‚ñ±‚ñ±‚ñ∞</i></header>
-          <div><Toggle keyName="partial" icon="‚óÜ" title="‡∏≠‡∏ô‡∏∏‡∏ç‡∏≤‡∏ï‡πÉ‡∏´‡πâ‡∏ï‡∏±‡∏î‡∏¢‡∏≠‡∏î‡∏ï‡∏≤‡∏°‡∏ä‡πà‡∏≠‡∏á" text="Tag ‡∏ó‡∏µ‡πà‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏™‡∏≤‡∏°‡∏≤‡∏£‡∏ñ‡∏ï‡∏±‡∏î‡∏¢‡∏≠‡∏î‡πÉ‡∏ô‡∏£‡∏≠‡∏ö Due ‡πÑ‡∏î‡πâ" /><Toggle keyName="confirm" icon="‚ü≥" title="‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡∏Å‡πà‡∏≠‡∏ô‡∏ï‡∏±‡∏î‡∏¢‡∏≠‡∏î‡∏ó‡∏∏‡∏Å‡∏Ñ‡∏£‡∏±‡πâ‡∏á" text="‡πÅ‡∏™‡∏î‡∏á‡∏Ç‡πâ‡∏≠‡∏Ñ‡∏ß‡∏≤‡∏°‡πÄ‡∏ï‡∏∑‡∏≠‡∏ô‡πÅ‡∏•‡∏∞‡πÉ‡∏´‡πâ‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏Å‡πà‡∏≠‡∏ô‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å" /></div>
-        </section>
-        <section className="settings-block settings-option-card violet">
-          <header><span>‚ñ£</span><h3>‡∏ï‡∏±‡πâ‡∏á‡∏Ñ‡πà‡∏≤‡∏Å‡∏≤‡∏£‡∏™‡πÅ‡∏Å‡∏ô</h3><i>‚ñ•‚ñ•‚ñ•</i></header>
-          <div><Toggle keyName="autoFocus" icon="‚ñ•" title="‡πÇ‡∏ü‡∏Å‡∏±‡∏™‡∏ä‡πà‡∏≠‡∏á‡∏™‡πÅ‡∏Å‡∏ô‡∏≠‡∏±‡∏ï‡πÇ‡∏ô‡∏°‡∏±‡∏ï‡∏¥" text="‡πÄ‡∏´‡∏°‡∏≤‡∏∞‡∏™‡∏≥‡∏´‡∏£‡∏±‡∏ö‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡∏£‡πà‡∏ß‡∏°‡∏Å‡∏±‡∏ö‡πÄ‡∏Ñ‡∏£‡∏∑‡πà‡∏≠‡∏á‡∏¢‡∏¥‡∏á Tag" /><Toggle keyName="sound" icon="üîä" title="‡πÄ‡∏™‡∏µ‡∏¢‡∏á‡∏û‡∏π‡∏î‡πÅ‡∏à‡πâ‡∏á‡πÄ‡∏ï‡∏∑‡∏≠‡∏ô‡∏†‡∏≤‡∏©‡∏≤‡πÑ‡∏ó‡∏¢" text="‡∏û‡∏π‡∏î‡∏ú‡∏•‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à ‡πÅ‡∏•‡∏∞‡∏≠‡πà‡∏≤‡∏ô‡∏™‡∏≤‡πÄ‡∏´‡∏ï‡∏∏‡πÄ‡∏°‡∏∑‡πà‡∏≠ Tag ‡∏ú‡∏¥‡∏î‡∏´‡∏£‡∏∑‡∏≠‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡πÑ‡∏°‡πà‡∏û‡∏≠" /></div>
-        </section>
-      </div>
-
-      <section className="settings-block settings-display-block">
-        <header><span>‚ñ£</span><h3>‡∏£‡∏π‡∏õ‡πÅ‡∏ö‡∏ö‡∏Å‡∏≤‡∏£‡πÅ‡∏™‡∏î‡∏á‡∏ú‡∏•</h3><div>Simple Setting<br /><b>Greater Productivity</b></div></header>
-        <div className="settings-display-form">
-          <label><span><i>‚óè</i> ‡∏†‡∏≤‡∏©‡∏≤</span><select><option>‡∏†‡∏≤‡∏©‡∏≤‡πÑ‡∏ó‡∏¢</option></select></label>
-          <label><span><i>‚ó∑</i> ‡πÄ‡∏Ç‡∏ï‡πÄ‡∏ß‡∏•‡∏≤</span><select><option>(GMT+07:00) Bangkok, Thailand</option></select></label>
-          <label><span><i>‚ñ¶</i> ‡∏£‡∏π‡∏õ‡πÅ‡∏ö‡∏ö‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà</span><select><option>DD/MM/YYYY</option></select></label>
-          <label><span><i>‚óá</i> ‡∏´‡∏ô‡πà‡∏ß‡∏¢‡πÄ‡∏£‡∏¥‡πà‡∏°‡∏ï‡πâ‡∏ô</span><select><option>‡∏ä‡∏¥‡πâ‡∏ô (PC)</option></select></label>
-        </div>
-        <div className="save-row"><button className="button primary settings-save-button" onClick={saveSettings}>‚ñ£ ‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡∏Å‡∏≤‡∏£‡∏ï‡∏±‡πâ‡∏á‡∏Ñ‡πà‡∏≤</button></div>
-      </section>
-
-      {user.role === "admin" && <section className="settings-danger-strip"><span>‚óÜ</span><div><b>‡∏•‡πâ‡∏≤‡∏á‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏ó‡∏î‡∏•‡∏≠‡∏á</b><p>‡∏•‡∏ö Tag Stock ‡πÅ‡∏•‡∏∞‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥‡∏Å‡∏≤‡∏£‡πÄ‡∏Ç‡πâ‡∏≤/‡∏≠‡∏≠‡∏Å‡∏ó‡∏µ‡πà‡∏ó‡∏î‡∏•‡∏≠‡∏á ‡πÇ‡∏î‡∏¢‡πÑ‡∏°‡πà‡∏Å‡∏£‡∏∞‡∏ó‡∏ö‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏• Part ‡∏£‡∏π‡∏õ‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô ‡πÅ‡∏ú‡∏ô Due ‡πÅ‡∏•‡∏∞‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡∏à‡∏£‡∏¥‡∏á</p></div><button className="button danger" disabled={clearingTestStock || stock.tags.length === 0} onClick={() => void clearTestStock()}>{clearingTestStock ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏•‡πâ‡∏≤‡∏á‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‚Ä¶" : `‚ñß ‡∏•‡πâ‡∏≤‡∏á Stock ‡∏ó‡∏î‡∏•‡∏≠‡∏á ${fmt(stock.tags.length)} Tag`}</button></section>}
-      <footer className="settings-footer"><span>¬© 2026 Control Stock KIT. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; üáπüá≠</span></footer>
-    </div>;
-  }
-
-  function renderUsers() {
-    const active = systemUsers.filter((item) => item.active).length;
-    const productionUsers = systemUsers.filter((item) => item.role === "production").length;
-    const stockUsers = systemUsers.filter((item) => item.role === "stock").length;
-    const qcUsers = systemUsers.filter((item) => item.role === "qc").length;
-    const deliveryUsers = systemUsers.filter((item) => item.role === "delivery").length;
-    const needle = userSearch.trim().toLowerCase();
-    const visibleUsers = systemUsers.filter((item) => !needle || [item.employeeCode, item.displayName, item.email, item.role, ROLE_LABELS[item.role], ...(item.permissions || [])].join(" ").toLowerCase().includes(needle));
-    async function exportUsersExcel() {
-      try {
-        const xlsx = await import("xlsx");
-        const rows = [
-          ["‡∏£‡∏´‡∏±‡∏™‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô", "‡∏ä‡∏∑‡πà‡∏≠‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô", "‡∏≠‡∏µ‡πÄ‡∏°‡∏•", "‡∏ö‡∏ó‡∏ö‡∏≤‡∏ó", "‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡∏´‡∏ô‡πâ‡∏≤", "‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞"],
-          ...visibleUsers.map((item) => [item.employeeCode, item.displayName, item.email || "", ROLE_LABELS[item.role] || item.role, (item.role === "admin" ? NAV.map((nav) => nav.label) : (item.permissions || []).map((key) => NAV.find((nav) => nav.key === key)?.label || STOCK_ACCESS_LABELS[key] || key)).join(", "), item.active ? "‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡∏õ‡∏Å‡∏ï‡∏¥" : "‡∏£‡∏∞‡∏á‡∏±‡∏ö"]),
-        ];
-        const sheet = xlsx.utils.aoa_to_sheet(rows);
-        sheet["!cols"] = [16, 26, 30, 18, 70, 15].map((wch) => ({ wch }));
-        const workbook = xlsx.utils.book_new();
-        xlsx.utils.book_append_sheet(workbook, sheet, "‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô");
-        xlsx.writeFile(workbook, `KIT-users-${new Date().toISOString().slice(0, 10)}.xlsx`);
-        setNotice({ type: "success", text: `‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡πÅ‡∏•‡πâ‡∏ß ${fmt(visibleUsers.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£` });
-      } catch (caught) {
-        setNotice({ type: "error", text: caught instanceof Error ? caught.message : "‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à" });
-      }
-    }
-    const stats = [
-      { tone: "blue", icon: "‚ôü", label: "‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î", value: systemUsers.length, art: "‚ôü" },
-      { tone: "green", icon: "‚úì", label: "‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡∏õ‡∏Å‡∏ï‡∏¥", value: active, art: "‚ñ•" },
-      { tone: "purple", icon: "‚ñ§", label: "Production", value: productionUsers, art: "‚ñ¶" },
-      { tone: "orange", icon: "‚óá", label: "Stock", value: stockUsers, art: "‚ñ°" },
-      { tone: "pink", icon: "‚óà", label: "QC", value: qcUsers, art: "‚óÜ" },
-      { tone: "teal", icon: "‚ñ£", label: "Delivery", value: deliveryUsers, art: "‚ñ∞" },
-    ];
-    return <div className="users-page-redesign">
-      <section className="users-overview-card">
-        <header><div><span>‚ñ•</span><div><h3>‡∏†‡∏≤‡∏û‡∏£‡∏ß‡∏°‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô</h3><p>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡πÉ‡∏ô‡πÅ‡∏ï‡πà‡∏•‡∏∞‡∏´‡∏ô‡πà‡∏ß‡∏¢‡∏á‡∏≤‡∏ô</p></div></div><div className="users-overview-actions"><small>‚ñ¶ ‡∏≠‡∏±‡∏õ‡πÄ‡∏î‡∏ï‡∏•‡πà‡∏≤‡∏™‡∏∏‡∏î<br />{new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date())}</small><button className="button primary" onClick={() => { setUserForm({ ...EMPTY_USER, permissions: [...EMPTY_USER.permissions] }); setUserEditorOpen(true); }}>Ôºã ‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô</button></div></header>
-        <div className="users-stat-grid page-summary">{stats.map((item) => <article className={`users-stat ${item.tone}`} key={item.label}><span>{item.icon}</span><div><small>{item.label}</small><b>{fmt(item.value)}</b><em>‡∏Ñ‡∏ô</em></div><i>{item.art}</i></article>)}</div>
-      </section>
-
-      <section className="users-list-card">
-        <header><div><span>‚ôü</span><div><h3>‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡∏£‡∏∞‡∏ö‡∏ö</h3><p>‡∏à‡∏±‡∏î‡∏Å‡∏≤‡∏£‡∏ö‡∏±‡∏ç‡∏ä‡∏µ‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô ‡∏Å‡∏≥‡∏´‡∏ô‡∏î‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå ‡πÅ‡∏•‡∏∞‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏Å‡∏≤‡∏£‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô</p></div></div><div className="users-list-tools"><label><span>‚åï</span><input value={userSearch} onChange={(event) => setUserSearch(event.target.value)} placeholder="‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤‡∏ä‡∏∑‡πà‡∏≠, ‡∏£‡∏´‡∏±‡∏™, ‡∏≠‡∏µ‡πÄ‡∏°‡∏• ‡∏´‡∏£‡∏∑‡∏≠‡∏ö‡∏ó‡∏ö‡∏≤‡∏ó..." /></label><button className="button secondary" onClick={() => void loadUsers()}>‚Üª ‡∏£‡∏µ‡πÄ‡∏ü‡∏£‡∏ä</button><button className="button users-excel-button" onClick={() => void exportUsersExcel()}>‚ñ¶ ‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å Excel</button></div></header>
-        {usersLoading ? <div className="loading-state"><span /><p>‡∏Å‡∏≥‡∏•‡∏±‡∏á‡πÇ‡∏´‡∏•‡∏î‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‚Ä¶</p></div> : visibleUsers.length ? <div className="table-wrap mobile-table-wrap users-table-wrap">
-          <table className="mobile-card-table users-modern-table"><thead><tr><th>‡∏£‡∏´‡∏±‡∏™ / ‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô</th><th>‡∏ä‡∏∑‡πà‡∏≠‚Äì‡∏ô‡∏≤‡∏°‡∏™‡∏Å‡∏∏‡∏• / ‡∏≠‡∏µ‡πÄ‡∏°‡∏•</th><th>‡∏ö‡∏ó‡∏ö‡∏≤‡∏ó</th><th>‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡∏´‡∏ô‡πâ‡∏≤</th><th>‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞</th><th>‡∏à‡∏±‡∏î‡∏Å‡∏≤‡∏£</th></tr></thead>
-            <tbody>{visibleUsers.map((item) => <tr key={item.id}>
-              <td data-label="‡∏£‡∏´‡∏±‡∏™ / ‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô"><div className="user-cell"><span>{item.displayName.slice(0, 1).toUpperCase()}</span><div><b>{item.displayName}</b><small>{item.employeeCode}</small></div></div></td>
-              <td data-label="‡∏ä‡∏∑‡πà‡∏≠‚Äì‡∏ô‡∏≤‡∏°‡∏™‡∏Å‡∏∏‡∏• / ‡∏≠‡∏µ‡πÄ‡∏°‡∏•"><b>{item.displayName}</b><small>{item.email || "‚Äî"}</small></td>
-              <td data-label="‡∏ö‡∏ó‡∏ö‡∏≤‡∏ó"><span className={`role-pill role-${item.role}`}>{ROLE_LABELS[item.role] || item.role}</span></td>
-              <td data-label="‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡∏´‡∏ô‡πâ‡∏≤"><div className="permission-summary">{(item.role === "admin" ? NAV.map((nav) => nav.key) : item.permissions || []).map((key) => <span key={key}>{NAV.find((nav) => nav.key === key)?.label || STOCK_ACCESS_LABELS[key] || key}</span>)}</div></td>
-              <td data-label="‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞"><span className={`status ${item.active ? "completed" : "over"}`}>{item.active ? "‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡∏õ‡∏Å‡∏ï‡∏¥" : "‡∏£‡∏∞‡∏á‡∏±‡∏ö"}</span></td>
-              <td data-label="‡∏à‡∏±‡∏î‡∏Å‡∏≤‡∏£">{item.role === "admin" ? <span className="muted">‡∏ö‡∏±‡∏ç‡∏ä‡∏µ‡∏´‡∏•‡∏±‡∏Å</span> : <div className="user-actions"><button className="tiny-button" onClick={() => editUser(item)}>‚úé ‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç</button><button className="tiny-button" onClick={() => editUser(item)}>‚öø ‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå / PIN</button><button className={`tiny-button ${item.active ? "danger-outline" : ""}`} onClick={() => void toggleUser(item)}>{item.active ? "‚ñß ‡∏£‡∏∞‡∏á‡∏±‡∏ö" : "‚úì ‡πÄ‡∏õ‡∏¥‡∏î‡πÉ‡∏ä‡πâ"}</button></div>}</td>
-            </tr>)}</tbody>
-          </table>
-        </div> : <Empty title="‡πÑ‡∏°‡πà‡∏û‡∏ö‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô" text="‡∏•‡∏≠‡∏á‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏Ñ‡∏≥‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤ ‡∏´‡∏£‡∏∑‡∏≠‡∏Å‡∏î‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡πÉ‡∏´‡∏°‡πà" />}
-        <footer><span>‡πÅ‡∏™‡∏î‡∏á {fmt(visibleUsers.length)} ‡∏à‡∏≤‡∏Å {fmt(systemUsers.length)} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£</span></footer>
-      </section>
-
-      <div className="users-security-grid">
-        <section><header><span>‚óá</span><div><h3>‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡∏£‡∏≤‡∏¢‡∏ö‡∏∏‡∏Ñ‡∏Ñ‡∏•</h3><p>‡∏Å‡∏≥‡∏´‡∏ô‡∏î‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡∏Å‡∏≤‡∏£‡πÄ‡∏Ç‡πâ‡∏≤‡∏ñ‡∏∂‡∏á‡∏Ç‡∏≠‡∏á‡πÅ‡∏ï‡πà‡∏•‡∏∞‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô</p></div></header><div><span>‚öô</span><p><b>Admin ‡∏Å‡∏≥‡∏´‡∏ô‡∏î‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡∏ó‡∏∏‡∏Å‡∏´‡∏ô‡πâ‡∏≤</b><small>‡∏ö‡∏ó‡∏ö‡∏≤‡∏ó‡πÉ‡∏ä‡πâ‡∏£‡∏∞‡∏ö‡∏∏‡∏ó‡∏µ‡∏°‡∏á‡∏≤‡∏ô ‡∏™‡πà‡∏ß‡∏ô‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡∏´‡∏ô‡πâ‡∏≤‡πÅ‡∏ï‡πà‡∏•‡∏∞‡∏´‡∏ô‡πâ‡∏≤‡∏ï‡πâ‡∏≠‡∏á‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡πÉ‡∏´‡πâ‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡πÅ‡∏ï‡πà‡∏•‡∏∞‡∏Ñ‡∏ô‡∏≠‡∏¢‡πà‡∏≤‡∏á‡∏ô‡πâ‡∏≠‡∏¢ 1 ‡∏´‡∏ô‡πâ‡∏≤</small></p></div></section>
-        <section><header><span>‚ñ£</span><div><h3>‡∏Ñ‡∏ß‡∏≤‡∏°‡∏õ‡∏•‡∏≠‡∏î‡∏†‡∏±‡∏¢</h3><p>‡∏ï‡∏±‡πâ‡∏á‡∏Ñ‡πà‡∏≤‡∏Ñ‡∏ß‡∏≤‡∏°‡∏õ‡∏•‡∏≠‡∏î‡∏†‡∏±‡∏¢‡∏Ç‡∏≠‡∏á‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡πÅ‡∏•‡∏∞‡∏Å‡∏≤‡∏£‡πÄ‡∏Ç‡πâ‡∏≤‡∏ñ‡∏∂‡∏á‡∏£‡∏∞‡∏ö‡∏ö</p></div></header><div><span>‚óÜ</span><p><b>‡∏õ‡πâ‡∏≠‡∏á‡∏Å‡∏±‡∏ô‡∏ó‡∏±‡πâ‡∏á‡πÄ‡∏°‡∏ô‡∏π‡πÅ‡∏•‡∏∞ API</b><small>‡∏´‡∏ô‡πâ‡∏≤‡∏ó‡∏µ‡πà‡πÑ‡∏°‡πà‡πÑ‡∏î‡πâ‡∏£‡∏±‡∏ö‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡∏à‡∏∞‡πÑ‡∏°‡πà‡πÅ‡∏™‡∏î‡∏á‡πÉ‡∏ô‡πÄ‡∏°‡∏ô‡∏π ‡πÅ‡∏•‡∏∞‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡∏õ‡∏è‡∏¥‡πÄ‡∏™‡∏ò‡∏Å‡∏≤‡∏£‡πÄ‡∏õ‡∏¥‡∏î‡∏´‡∏£‡∏∑‡∏≠‡πÄ‡∏£‡∏µ‡∏¢‡∏Å‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡πÇ‡∏î‡∏¢‡∏ï‡∏£‡∏á</small></p></div></section>
-      </div>
-      <footer className="settings-footer"><span>¬© 2026 Control Stock KIT. All rights reserved.</span><span>Version 2.23.0&nbsp;&nbsp; | &nbsp;&nbsp;Bangkok, Thailand&nbsp;&nbsp; üáπüá≠</span></footer>
-    </div>;
-  }
-
-  const pageContent: Record<PageKey, () => ReactNode> = { "stock-all": () => <StockAllPage canDetails={user.role === "admin" || user.permissions.includes("stock-all-details")} canExport={user.role === "admin" || user.permissions.includes("stock-all-export")} />, overdue: renderOverdueWork, dashboard: renderDashboard, stock: renderStock, "manual-stock": renderManualStock, "stock-count": renderStockCount, forecast: renderForecast, parts: renderParts, tags: renderTags, plan: renderPlan, arrange: () => renderScan("arrange"), replacement: renderReplacement, verify: renderVerify, dispatch: () => renderScan("dispatch"), exports: renderExports, reports: renderReports, history: renderHistory, settings: renderSettings, users: renderUsers };
-  const activeNav = (page === "overdue" ? { key: "overdue", label: "‡∏á‡∏≤‡∏ô‡∏ï‡∏¥‡∏î‡∏•‡∏ö / ‡∏Ñ‡πâ‡∏≤‡∏á‡∏™‡πà‡∏á", icon: "!" } : NAV.find((item) => item.key === page)) || NAV.find((item) => item.key === firstAllowedPage) || NAV[0];
-
-  if (monitorMode) return <main className="overdue-monitor-shell">
-    {error && <div className="notice error">{error}</div>}
-    {renderOverdueWork()}
-    <OperationWarningPopup voiceEnabled={settings.sound}/>
-  </main>;
-
-  return <div onInvalidCapture={(event) => { event.preventDefault(); const field=event.target as HTMLInputElement; const label=field.closest("label")?.querySelector("span")?.textContent || field.getAttribute("aria-label") || "‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•"; reportOperationWarning({page,message:`${label}: ${field.validationMessage || "‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•"}`}); }} className={`control-shell ${page === "stock-all" ? `stock-reference-shell ${stockMenuCollapsed ? "stock-sidebar-collapsed" : ""}` : ""}`}>
-    <aside className={`control-sidebar ${menuOpen ? "open" : ""}`}>
-      <button className="sidebar-close" onClick={() => setMenuOpen(false)}>√ó</button>
-      <div className="kit-logo">{page === "stock-all" ? <OverviewLogo/> : <b>KiT</b>}<span>CONTROL STOCK KIT</span></div>
-      <nav>{NAV.filter((item) => allowedPages.has(item.key)).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{page === "stock-all" ? <OverviewIcon name={OVERVIEW_NAV_ICONS[item.key]}/> : item.icon}</span>{item.label}</button>)}</nav>
-      {page === "stock-all" && <OverviewFactory/>}
-      <div className="sidebar-bottom">{allowedPages.has("settings") && <div className="help-box"><b>‡∏ï‡πâ‡∏≠‡∏á‡∏Å‡∏≤‡∏£‡∏Ñ‡∏ß‡∏≤‡∏°‡∏ä‡πà‡∏ß‡∏¢‡πÄ‡∏´‡∏•‡∏∑‡∏≠?</b><button onClick={() => go("settings")}>‚óâ ‡∏Ñ‡∏π‡πà‡∏°‡∏∑‡∏≠‡πÅ‡∏•‡∏∞‡∏ï‡∏±‡πâ‡∏á‡∏Ñ‡πà‡∏≤</button></div>}<a className="mobile-logout" href={signOutPath} onClick={signOut}><span>‚Ü™</span><b>‡∏≠‡∏≠‡∏Å‡∏à‡∏≤‡∏Å‡∏£‡∏∞‡∏ö‡∏ö</b></a><div className="mini-brand"><b>KiT</b><span>Control Stock KIT<br />¬© 2026 ¬∑ v2.23.0</span></div></div>
-    </aside>
-    {menuOpen && <button className="menu-backdrop" aria-label="‡∏õ‡∏¥‡∏î‡πÄ‡∏°‡∏ô‡∏π" onClick={() => setMenuOpen(false)} />}
-    <main className="control-main">
-      <header className={`control-topbar settings-topbar ${page === "settings" || page === "users" || page === "history" || page === "reports" || page === "exports" ? "settings-banner-topbar" : ""} ${page === "users" ? "users-banner-topbar" : ""} ${page === "history" ? "history-banner-topbar" : ""} ${page === "reports" ? "reports-banner-topbar" : ""} ${page === "exports" ? "exports-banner-topbar" : ""}`}>
-        <button className="menu-button" aria-label="‡πÄ‡∏õ‡∏¥‡∏î/‡∏õ‡∏¥‡∏î‡πÄ‡∏°‡∏ô‡∏π" onClick={() => page === "stock-all" && window.innerWidth > 720 ? setStockMenuCollapsed(value=>!value) : setMenuOpen(true)}>{page === "stock-all" ? <OverviewIcon name="menu"/> : "‚ò∞"}</button>
-        {page === "stock-all" ? <div className="stock-reference-top-search"><OverviewIcon name="search"/><input type="search" aria-label="‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤ Stock ‡∏à‡∏≤‡∏Å‡πÅ‡∏ñ‡∏ö‡∏î‡πâ‡∏≤‡∏ô‡∏ö‡∏ô" placeholder="‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤ Part No. / ‡∏ä‡∏∑‡πà‡∏≠‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô / ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ / Job / Location ..." value={stockOverviewSearch} onChange={(event) => {setStockOverviewSearch(event.target.value);window.dispatchEvent(new CustomEvent("stock-overview-search", {detail:event.target.value}));}}/><kbd>Ctrl + K</kbd></div> : page === "settings" ? <div className="topbar-settings-banner">
-          <div className="settings-hero-title"><span>‚öô</span><div><h2>‡∏ï‡∏±‡πâ‡∏á‡∏Ñ‡πà‡∏≤</h2><p>‡∏´‡∏ô‡πâ‡∏≤‡∏´‡∏•‡∏±‡∏Å <b>‚Ä∫</b> ‡∏ï‡∏±‡πâ‡∏á‡∏Ñ‡πà‡∏≤</p></div></div>
-          <div className="settings-hero-copy"><b>‡∏ï‡∏±‡πâ‡∏á‡∏Ñ‡πà‡∏≤‡∏£‡∏∞‡∏ö‡∏ö‡πÉ‡∏´‡πâ‡∏ó‡∏≥‡∏á‡∏≤‡∏ô‡πÑ‡∏î‡πâ‡πÄ‡∏ï‡πá‡∏°‡∏õ‡∏£‡∏∞‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡∏†‡∏≤‡∏û</b><span>‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏Å‡∏≤‡∏£‡∏™‡πà‡∏á‡∏°‡∏≠‡∏ö‡∏ó‡∏µ‡πà‡∏ï‡∏£‡∏á‡πÄ‡∏ß‡∏•‡∏≤</span><div><em>üöÄ ‡πÄ‡∏£‡πá‡∏ß‡∏Ç‡∏∂‡πâ‡∏ô</em><em>‚óé ‡πÅ‡∏°‡πà‡∏ô‡∏¢‡∏≥</em><em>‚óÜ ‡πÄ‡∏ä‡∏∑‡πà‡∏≠‡∏ñ‡∏∑‡∏≠‡πÑ‡∏î‡πâ</em></div></div>
-          <div className="settings-hero-art"><strong>Control Today</strong><strong>Deliver Tomorrow</strong></div>
-        </div> : page === "users" ? <div className="topbar-settings-banner topbar-users-banner">
-          <div className="users-hero-title"><span>‚ôü</span><div><h2>‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô</h2><p>‡∏´‡∏ô‡πâ‡∏≤‡∏´‡∏•‡∏±‡∏Å <b>‚Ä∫</b> ‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô</p></div></div>
-          <div className="users-hero-copy"><b>People Drive</b><span>Better Operations</span></div>
-          <div className="users-hero-art"><strong>‚Äú‡∏ó‡∏µ‡∏°‡∏ó‡∏µ‡πà‡∏î‡∏µ<br />‡∏™‡∏£‡πâ‡∏≤‡∏á‡∏á‡∏≤‡∏ô‡∏ó‡∏µ‡πà‡∏î‡∏µ‡∏Ç‡∏∂‡πâ‡∏ô‡πÑ‡∏î‡πâ‡πÄ‡∏™‡∏°‡∏≠‚Äù</strong></div>
-        </div> : page === "history" ? <div className="topbar-settings-banner topbar-history-banner">
-          <div className="history-hero-title"><span>‚ó∑</span><div><h2>‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥</h2><p>‡∏´‡∏ô‡πâ‡∏≤‡∏´‡∏•‡∏±‡∏Å <b>‚Ä∫</b> ‡∏õ‡∏£‡∏∞‡∏ß‡∏±‡∏ï‡∏¥</p></div></div>
-          <div className="history-hero-copy"><b>‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏ó‡∏∏‡∏Å‡∏Å‡∏≤‡∏£‡πÄ‡∏Ñ‡∏•‡∏∑‡πà‡∏≠‡∏ô‡πÑ‡∏´‡∏ß</b><span>‡∏¢‡πâ‡∏≠‡∏ô‡∏´‡∏•‡∏±‡∏á‡πÑ‡∏î‡πâ‡∏≠‡∏¢‡πà‡∏≤‡∏á‡∏ä‡∏±‡∏î‡πÄ‡∏à‡∏ô</span></div>
-          <div className="history-hero-art"><strong>Track Today</strong><strong>Deliver Tomorrow</strong></div>
-        </div> : page === "reports" ? <div className="topbar-settings-banner topbar-reports-banner">
-          <div className="reports-hero-title"><span>‚ñ•</span><div><h2>‡∏£‡∏≤‡∏¢‡∏á‡∏≤‡∏ô</h2><p>‡∏´‡∏ô‡πâ‡∏≤‡∏´‡∏•‡∏±‡∏Å <b>‚Ä∫</b> ‡∏£‡∏≤‡∏¢‡∏á‡∏≤‡∏ô</p></div></div>
-          <div className="reports-hero-copy"><b>‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏ä‡∏±‡∏î‡πÄ‡∏à‡∏ô</b><span>‡∏ä‡πà‡∏ß‡∏¢‡πÉ‡∏´‡πâ‡∏Å‡∏≤‡∏£‡∏ï‡∏±‡∏î‡∏™‡∏¥‡∏ô‡πÉ‡∏à‡πÅ‡∏°‡πà‡∏ô‡∏¢‡∏≥‡∏Ç‡∏∂‡πâ‡∏ô</span></div>
-          <div className="reports-hero-art"><strong>Data Today</strong><strong>Better Tomorrow</strong></div>
-        </div> : page === "exports" ? <div className="topbar-settings-banner topbar-exports-banner">
-          <div className="exports-hero-title"><span>‚ñ∞</span><div><h2>‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å</h2><p>‡∏´‡∏ô‡πâ‡∏≤‡∏´‡∏•‡∏±‡∏Å <b>‚Ä∫</b> ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å</p></div></div>
-          <div className="exports-hero-copy"><b>‡∏Ñ‡∏ß‡∏ö‡∏Ñ‡∏∏‡∏°‡∏Å‡∏≤‡∏£‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å</b><span>‡πÉ‡∏´‡πâ‡∏ñ‡∏π‡∏Å‡∏ï‡πâ‡∏≠‡∏á ‡∏ï‡∏£‡∏á‡πÄ‡∏ß‡∏•‡∏≤ ‡πÅ‡∏•‡∏∞‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡πÑ‡∏î‡πâ</span></div>
-          <div className="exports-hero-art"><strong>Deliver Right</strong><strong>Move Forward</strong></div>
-        </div> : <div><h1>{activeNav.label}</h1><p>‡∏´‡∏ô‡πâ‡∏≤‡∏´‡∏•‡∏±‡∏Å <span>‚Ä∫</span> {PAGE_SUBTITLE[page]}</p></div>}
-        <div className="top-user"><button type="button" className={`notification overdue-sound-shortcut ${overdueSoundEnabled ? "enabled" : ""}`} onClick={() => void toggleOverdueSound()} aria-label={overdueSoundEnabled ? "‡∏õ‡∏¥‡∏î‡πÄ‡∏™‡∏µ‡∏¢‡∏á‡πÅ‡∏à‡πâ‡∏á‡πÄ‡∏ï‡∏∑‡∏≠‡∏ô‡∏á‡∏≤‡∏ô‡πÄ‡∏Å‡∏¥‡∏ô Due" : "‡πÄ‡∏õ‡∏¥‡∏î‡πÄ‡∏™‡∏µ‡∏¢‡∏á‡πÅ‡∏à‡πâ‡∏á‡πÄ‡∏ï‡∏∑‡∏≠‡∏ô‡∏á‡∏≤‡∏ô‡πÄ‡∏Å‡∏¥‡∏ô Due"} aria-pressed={overdueSoundEnabled}>{overdueSoundEnabled ? "üîî" : "üîï"}</button><button className="notification" onClick={showOverduePlan} disabled={!overdueDues.length || !allowedPages.has("plan")} aria-label={`‡∏á‡∏≤‡∏ô‡πÄ‡∏Å‡∏¥‡∏ô‡∏î‡∏¥‡∏ß‡∏à‡∏±‡∏î‡∏™‡πà‡∏á ${overdueDues.length} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£`}>‚ôß<i>{fmt(overdueDues.length)}</i></button><span className="user-avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div><b>{user.displayName}</b><small>{ROLE_LABELS[user.role] || user.role}</small></div><a href={signOutPath} onClick={signOut}>‡∏≠‡∏≠‡∏Å‡∏à‡∏≤‡∏Å‡∏£‡∏∞‡∏ö‡∏ö</a></div>
-      </header>
-      <div className="control-content">
-        <VoiceAlertControl enabled={settings.sound} onEnabledChange={changeVoiceEnabled}/>
-        {EDITABLE_PAGE_KEYS.includes(page as EditablePageKey) && !canEditPage(page as EditablePageKey) && <div className="read-only-permission-banner"><span>‚óâ</span><div><b>‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡∏î‡∏π‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡πÄ‡∏ó‡πà‡∏≤‡∏ô‡∏±‡πâ‡∏ô</b> ‚Äî ‡∏ö‡∏±‡∏ç‡∏ä‡∏µ‡∏ô‡∏µ‡πâ‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤‡πÅ‡∏•‡∏∞‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡πÑ‡∏î‡πâ ‡πÅ‡∏ï‡πà‡πÑ‡∏°‡πà‡∏™‡∏≤‡∏°‡∏≤‡∏£‡∏ñ‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏´‡∏£‡∏∑‡∏≠‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡πÉ‡∏ô‡∏´‡∏ô‡πâ‡∏≤‡∏ô‡∏µ‡πâ</div></div>}
-        {notice && <div className={`toast ${notice.type} auto-dismiss`}><span>{notice.type === "success" ? "‚úì" : "!"}</span><p>{notice.text}</p><button onClick={() => setNotice(null)}>√ó</button></div>}
-        {error && <div className="toast error"><span>!</span><p>{error}</p><button onClick={() => void loadDue()}>‡∏•‡∏≠‡∏á‡πÉ‡∏´‡∏°‡πà</button></div>}
-        {loading && page !== "overdue" ? <div className="loading-state"><span /><p>‡∏Å‡∏≥‡∏•‡∏±‡∏á‡πÇ‡∏´‡∏•‡∏î‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏• Due‚Ä¶</p></div> : pageContent[page]()}
-      </div>
-    </main>
-    <nav className="mobile-bottom-nav" aria-label="‡πÄ‡∏°‡∏ô‡∏π‡∏°‡∏∑‡∏≠‡∏ñ‡∏∑‡∏≠">
-      {NAV.filter((item) => allowedPages.has(item.key)).slice(0, 4).map((item) => <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => go(item.key)}><span>{item.icon}</span><small>{item.label.replace("‡πÅ‡∏ú‡∏ô‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô (Due)", "‡πÅ‡∏ú‡∏ô‡∏á‡∏≤‡∏ô").replace("‡∏ï‡∏£‡∏ß‡∏à‡πÅ‡∏•‡∏∞‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å", "‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å")}</small></button>)}
-      <button onClick={() => setMenuOpen(true)}><span>‚ò∞</span><small>‡πÄ‡∏°‡∏ô‡∏π</small></button>
-      <a className="bottom-logout" href={signOutPath} onClick={signOut}><span>‚Ü™</span><small>‡∏≠‡∏≠‡∏Å‡∏£‡∏∞‡∏ö‡∏ö</small></a>
-    </nav>
-    {arrangeWarning && <div className="modal-backdrop" role="alertdialog" aria-modal="true" aria-labelledby="arrange-warning-title" aria-describedby="arrange-warning-message"><section className="arrange-warning-modal" onKeyDown={(event) => { if (event.key === "Tab") event.preventDefault(); }}>
-      <header><span>!</span><h3 id="arrange-warning-title">‡πÅ‡∏à‡πâ‡∏á‡πÄ‡∏ï‡∏∑‡∏≠‡∏ô‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô</h3></header>
-      <p id="arrange-warning-message">{arrangeWarning.message}</p>
-      <dl><div><dt>‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô</dt><dd>{formatDate(arrangeWarning.date) || "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡πÄ‡∏•‡∏∑‡∏≠‡∏Å"}</dd></div><div><dt>‡∏£‡∏≠‡∏ö‡∏™‡πà‡∏á‡∏á‡∏≤‡∏ô</dt><dd>{arrangeWarning.time || "‡∏ó‡∏∏‡∏Å‡∏£‡∏≠‡∏ö"}</dd></div><div><dt>FAC</dt><dd>{arrangeWarning.fact || "‡∏ó‡∏∏‡∏Å FAC"}</dd></div></dl>
-      <small>‡∏£‡∏∞‡∏ö‡∏ö‡∏Ñ‡∏á‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà ‡∏£‡∏≠‡∏ö ‡πÅ‡∏•‡∏∞ FAC ‡∏ó‡∏µ‡πà‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡πÑ‡∏ß‡πâ ‡∏™‡∏≤‡∏°‡∏≤‡∏£‡∏ñ‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏ï‡∏±‡∏ß‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏Å‡πà‡∏≠‡∏ô‡∏™‡πÅ‡∏Å‡∏ô‡∏ï‡πà‡∏≠‡πÑ‡∏î‡πâ</small>
-      <button type="button" className="button primary full" autoFocus onClick={() => { setArrangeWarning(null); window.setTimeout(() => tagInput.current?.focus(), 0); }}>‡∏£‡∏±‡∏ö‡∏ó‡∏£‡∏≤‡∏ö</button>
-    </section></div>}
-    {replacementPreview && <div className="modal-backdrop replacement-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="replacement-confirm-title"><div className="replacement-confirm-modal">
-      <header><div><span>‚Ü∫</span><div><small>‡∏ï‡∏£‡∏ß‡∏à‡∏û‡∏ö KIT Stock Tag</small><h3 id="replacement-confirm-title">‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏Å‡πà‡∏≠‡∏ô‡πÄ‡∏ö‡∏¥‡∏Å‡∏á‡∏≤‡∏ô‡∏ó‡∏î‡πÅ‡∏ó‡∏ô</h3></div></div><button type="button" onClick={() => { setReplacementPreview(null); setReplacementTag(""); setReplacementQty(""); }} aria-label="‡∏õ‡∏¥‡∏î">√ó</button></header>
-      <div className="replacement-confirm-content">
-        <section className="replacement-confirm-photo dispatch-confirm-images"><PartImagePair materialCode={replacementPreview.request.materialCode} masterVersion={partImages.find((item) => item.materialCode === replacementPreview.request.materialCode)?.updatedAt} actualVersion={partActualImages.find((item) => item.materialCode === replacementPreview.request.materialCode)?.updatedAt} /></section>
-        <section className="replacement-confirm-info">
-          <div className="dispatch-confirm-part"><small>PART / MATERIAL</small><b>{replacementPreview.request.materialCode}</b><p>{replacementPreview.request.partName || replacementPreview.tag.partName || "‡πÑ‡∏°‡πà‡∏£‡∏∞‡∏ö‡∏∏‡∏ä‡∏∑‡πà‡∏≠‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô"}</p></div>
-          <div className="replacement-confirm-details"><div><small>‡πÉ‡∏ö‡∏Ç‡∏≠ QC</small><b>{replacementPreview.request.requestNo}</b></div><div><small>‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ / Site</small><b>{replacementPreview.request.customer || "‚Äî"}</b></div><div><small>KIT Stock Tag</small><b>{replacementPreview.tag.tagId}</b></div><div><small>Job / Location</small><b>{replacementPreview.tag.jobNo || "‚Äî"} / {replacementPreview.tag.location || "‚Äî"}</b></div></div>
-          <div className="replacement-qty-compare"><div><small>QC ‡∏Ç‡∏≠‡πÄ‡∏ö‡∏¥‡∏Å</small><b>{fmt(replacementPreview.request.requestedQty)}</b><em>‡∏ä‡∏¥‡πâ‡∏ô</em></div><div><small>‡πÄ‡∏ö‡∏¥‡∏Å‡πÅ‡∏•‡πâ‡∏ß</small><b>{fmt(replacementPreview.request.issuedQty)}</b><em>‡∏ä‡∏¥‡πâ‡∏ô</em></div><label><small>‡πÄ‡∏ö‡∏¥‡∏Å‡∏Ñ‡∏£‡∏±‡πâ‡∏á‡∏ô‡∏µ‡πâ</small><input type="number" inputMode="numeric" min={1} max={Math.min(replacementPreview.request.remainingQty, replacementPreview.tag.availableQty)} value={replacementQty} onChange={(event) => setReplacementQty(event.target.value.replace(/[^0-9]/g, ""))} /><em>‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡πÑ‡∏î‡πâ</em></label><div><small>‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠‡∏´‡∏•‡∏±‡∏á‡πÄ‡∏ö‡∏¥‡∏Å</small><b>{fmt(Math.max(replacementPreview.request.remainingQty - Number(replacementQty || 0), 0))}</b><em>‡∏ä‡∏¥‡πâ‡∏ô</em></div></div>
-          <p className="replacement-stock-note">Stock Tag ‡∏ô‡∏µ‡πâ‡∏û‡∏£‡πâ‡∏≠‡∏°‡πÉ‡∏ä‡πâ {fmt(replacementPreview.tag.availableQty)} ‡∏ä‡∏¥‡πâ‡∏ô ¬∑ ‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡∏ï‡∏±‡∏î Stock ‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô</p>
-        </section>
-      </div>
-      <footer><button type="button" className="button secondary" onClick={() => { setReplacementPreview(null); setReplacementTag(""); setReplacementQty(""); }}>‡∏¢‡∏Å‡πÄ‡∏•‡∏¥‡∏Å / ‡∏™‡πÅ‡∏Å‡∏ô‡πÉ‡∏´‡∏°‡πà</button><button type="button" className="button confirm-replacement-button" disabled={replacementSaving || !Number(replacementQty) || Number(replacementQty) > replacementPreview.request.remainingQty || Number(replacementQty) > replacementPreview.tag.availableQty} onClick={() => void confirmReplacementIssue()}>{replacementSaving ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡πÄ‡∏ö‡∏¥‡∏Å‡∏á‡∏≤‡∏ô‚Ä¶" : "‚úì ‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡πÄ‡∏ö‡∏¥‡∏Å‡πÅ‡∏•‡∏∞‡∏ï‡∏±‡∏î‡∏¢‡∏≠‡∏î"}</button></footer>
-    </div></div>}
-    {stockCountPreview && stockCountConfirmOpen && <div className="modal-backdrop stock-count-backdrop" role="dialog" aria-modal="true" aria-labelledby="stock-count-title"><div className="stock-count-modal">
-      <header><div><span>‚âã</span><div><small>‡∏ï‡∏£‡∏ß‡∏à‡∏ô‡∏±‡∏ö Stock ‡∏™‡∏¥‡πâ‡∏ô‡πÄ‡∏î‡∏∑‡∏≠‡∏ô‡∏ó‡∏µ‡∏•‡∏∞ Tag</small><h3 id="stock-count-title">‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡∏Å‡∏≤‡∏£‡∏õ‡∏£‡∏±‡∏ö‡∏¢‡∏≠‡∏î Tag</h3></div></div><button type="button" onClick={() => setStockCountConfirmOpen(false)} aria-label="‡∏õ‡∏¥‡∏î">√ó</button></header>
-      <div className="stock-count-content">
-        <section><small>KIT STOCK TAG</small><h4>{stockCountPreview.tagId}</h4><p>{stockCountPreview.materialCode} ¬∑ {stockCountPreview.partName} ¬∑ Job {stockCountPreview.jobNo}</p></section>
-        <div className="stock-count-compare">
-          <article><small>‡∏Ñ‡∏ß‡∏£‡∏≠‡∏¢‡∏π‡πà‡πÉ‡∏ô‡∏û‡∏∑‡πâ‡∏ô‡∏ó‡∏µ‡πà Stock</small><b>{fmt(stockCountPreview.stockAreaSystemQty)}</b><em>‡∏ä‡∏¥‡πâ‡∏ô</em></article><span>‚Üí</span>
-          <article><small>‡∏ô‡∏±‡∏ö‡πÑ‡∏î‡πâ‡πÉ‡∏ô‡∏û‡∏∑‡πâ‡∏ô‡∏ó‡∏µ‡πà Stock</small><b>{fmt(stockCountPreview.stockAreaCountedQty)}</b><em>‡∏ä‡∏¥‡πâ‡∏ô</em></article>
-          <article className={stockCountPreview.difference < 0 ? "negative" : stockCountPreview.difference > 0 ? "positive" : "equal"}><small>‡∏ú‡∏•‡∏ï‡πà‡∏≤‡∏á Stock</small><b>{stockCountPreview.difference > 0 ? "+" : ""}{fmt(stockCountPreview.difference)}</b><em>‡∏ä‡∏¥‡πâ‡∏ô</em></article>
-        </div>
-        <div className="stock-count-safety"><b>‡∏¢‡∏≠‡∏î‡∏£‡∏ß‡∏°‡πÉ‡∏´‡∏°‡πà‡∏Ç‡∏≠‡∏á Tag = {fmt(stockCountPreview.stockAreaCountedQty)} ‡πÉ‡∏ô Stock + {fmt(stockCountPreview.reservedQty)} ‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô/‡∏à‡∏≠‡∏á = {fmt(stockCountPreview.newTotalQty)} ‡∏ä‡∏¥‡πâ‡∏ô</b><span>‡∏¢‡∏≠‡∏î Stock ‡∏£‡∏ß‡∏°‡∏ó‡∏∏‡∏Å Tag {fmt(stockCountPreview.materialTotalQty)} ‚Üí {fmt(stockCountPreview.materialTotalAfter)} ‡∏ä‡∏¥‡πâ‡∏ô</span></div>
-        <p className="stock-count-reason"><b>‡∏™‡∏≤‡πÄ‡∏´‡∏ï‡∏∏:</b> {stockCountForm.reason}</p>
-      </div>
-      <footer><button type="button" className="button secondary" onClick={() => setStockCountConfirmOpen(false)}>‡∏Å‡∏•‡∏±‡∏ö‡πÑ‡∏õ‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç</button><button type="button" className="button confirm-stock-count-button" disabled={stockManagementSaving || !stockCountForm.reason.trim()} onClick={() => void confirmStockCountAdjustment()}>{stockManagementSaving ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‚Ä¶" : "‚úì ‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡∏õ‡∏£‡∏±‡∏ö‡∏¢‡∏≠‡∏î Tag ‡πÅ‡∏•‡∏∞ Stock"}</button></footer>
-    </div></div>}
-    {stockReceivePreview && <div className="modal-backdrop dispatch-confirm-backdrop stock-receive-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="stock-receive-confirm-title"><div className="dispatch-confirm-modal stock-receive-confirm-modal">
-      <header><div><span>‚úì</span><div><small>‡∏ï‡∏£‡∏ß‡∏à‡∏û‡∏ö KIT Stock Tag 1 ‡πÉ‡∏ö</small><h3 id="stock-receive-confirm-title">‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏Å‡πà‡∏≠‡∏ô‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Stock</h3></div></div><button type="button" onClick={() => { setStockReceivePreview(null); setStockReceiveQty(""); setStockReceiveProductionDate(""); setStockScan(""); }} aria-label="‡∏õ‡∏¥‡∏î">√ó</button></header>
-      <div className="dispatch-confirm-content">
-        <section className="dispatch-confirm-images"><PartImagePair materialCode={stockReceivePreview.tag.materialCode} masterVersion={partImages.find((item) => item.materialCode === stockReceivePreview.tag.materialCode)?.updatedAt} actualVersion={partActualImages.find((item) => item.materialCode === stockReceivePreview.tag.materialCode)?.updatedAt} /></section>
-        <section className="dispatch-confirm-info">
-          <div className="dispatch-confirm-part"><small>PART / MATERIAL</small><b>{stockReceivePreview.tag.materialCode}</b><p>{stockReceivePreview.tag.partName || stockReceivePreview.master.partName || "‡πÑ‡∏°‡πà‡∏£‡∏∞‡∏ö‡∏∏‡∏ä‡∏∑‡πà‡∏≠‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô"}</p></div>
-          <div className="dispatch-confirm-details"><div><small>Tag ‡∏ó‡∏µ‡πà‡πÉ‡∏ä‡πâ‡∏™‡πÅ‡∏Å‡∏ô</small><b>{stockReceivePreview.tag.tagId}</b></div><div><small>Job</small><b>{stockReceivePreview.tag.jobNo || "‚Äî"}</b></div><div><small>‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤</small><b>{stockReceivePreview.tag.customer || "‚Äî"}</b></div><div><small>‡∏ä‡∏±‡πâ‡∏ô‡∏à‡∏±‡∏î‡πÄ‡∏Å‡πá‡∏ö‡∏ó‡∏µ‡πà‡∏™‡πÅ‡∏Å‡∏ô</small><b>{stockReceivePreview.selectedLocation}</b></div></div>
-          <div className="stock-receive-qty-box">
-            <div><small>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ï‡∏≤‡∏° Tag ‡πÉ‡∏ö‡∏ô‡∏µ‡πâ</small><b>{fmt(stockReceivePreview.tag.qty)}</b><em>‡∏ä‡∏¥‡πâ‡∏ô</em></div>
-            <label><small>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡∏à‡∏£‡∏¥‡∏á</small><input type="number" inputMode="numeric" min={0} max={stockReceivePreview.tag.qty} step={1} value={stockReceiveQty} onChange={(event) => setStockReceiveQty(event.target.value.replace(/[^0-9]/g, ""))} /><em>‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç‡πÑ‡∏î‡πâ‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏°‡∏µ‡∏á‡∏≤‡∏ô‡πÄ‡∏™‡∏µ‡∏¢</em></label>
-            <div className={Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0) > 0 ? "has-ng" : ""}><small>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô NG</small><b>{fmt(Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0))}</b><em>‡∏ä‡∏¥‡πâ‡∏ô</em></div>
-            <label className="production-date"><small>‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏ú‡∏•‡∏¥‡∏ï</small><input type="date" value={stockReceiveProductionDate} onChange={(event) => setStockReceiveProductionDate(event.target.value)} required /><em>‡∏Ñ‡πà‡∏≤‡πÄ‡∏£‡∏¥‡πà‡∏°‡∏ï‡πâ‡∏ô‡∏Ñ‡∏∑‡∏≠‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πÅ‡∏Å‡∏ô‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ ¬∑ ‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç‡πÑ‡∏î‡πâ</em></label>
-          </div>
-          {Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0) > 0 && <p className="stock-receive-ng-note">! ‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡πÄ‡∏û‡∏¥‡πà‡∏°‡πÄ‡∏Ç‡πâ‡∏≤ Stock ‡πÄ‡∏â‡∏û‡∏≤‡∏∞ {fmt(Number(stockReceiveQty || 0))} ‡∏ä‡∏¥‡πâ‡∏ô ‡πÅ‡∏•‡∏∞‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å NG {fmt(Math.max(Number(stockReceivePreview.tag.qty) - Number(stockReceiveQty || 0), 0))} ‡∏ä‡∏¥‡πâ‡∏ô</p>}
-        </section>
-      </div>
-      <footer><button type="button" className="button secondary" onClick={() => { setStockReceivePreview(null); setStockReceiveQty(""); setStockReceiveProductionDate(""); setStockScan(""); }}>‡∏¢‡∏Å‡πÄ‡∏•‡∏¥‡∏Å / ‡∏™‡πÅ‡∏Å‡∏ô‡πÉ‡∏´‡∏°‡πà</button><button type="button" className="button confirm-dispatch-button stock-confirm-receive-button" disabled={stockSaving || stockReceiveQty === "" || !stockReceiveProductionDate || Number(stockReceiveQty) < 0 || Number(stockReceiveQty) > Number(stockReceivePreview.tag.qty)} onClick={() => void confirmReceiveStockTag()}>{stockSaving ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‚Ä¶" : "‚úì ‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡∏£‡∏±‡∏ö Tag ‡πÉ‡∏ö‡∏ô‡∏µ‡πâ"}</button></footer>
-    </div></div>}
-    {arrangeConfirmation && <div className="modal-backdrop dispatch-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="arrange-confirm-title" onKeyDown={(event) => { if (event.key === "Escape" && !checkingTag) { setArrangeConfirmation(null); tagInput.current?.focus(); } if (event.key === "Tab") { const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("button:not(:disabled),input:not(:disabled)")); const first = buttons[0], last = buttons[buttons.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); } } }}><div className="dispatch-confirm-modal">
-      <header><div><span>‚úì</span><div><small>‡∏ï‡∏£‡∏ß‡∏à‡∏û‡∏ö KIT Stock Tag</small><h3 id="arrange-confirm-title">‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏á‡∏≤‡∏ô‡∏Å‡πà‡∏≠‡∏ô‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô</h3></div></div><button type="button" disabled={checkingTag} onClick={() => { setArrangeConfirmation(null); tagInput.current?.focus(); }} aria-label="‡∏õ‡∏¥‡∏î">√ó</button></header>
-      <div className="dispatch-confirm-content">
-        <section className="dispatch-confirm-images"><PartImagePair materialCode={arrangeConfirmation.tag.materialCode} masterVersion={partImages.find(item => item.materialCode === arrangeConfirmation.tag.materialCode)?.updatedAt} actualVersion={partActualImages.find(item => item.materialCode === arrangeConfirmation.tag.materialCode)?.updatedAt}/></section>
-        <section className="dispatch-confirm-info">
-          <div className="dispatch-confirm-part"><small>PART / MATERIAL</small><b>{arrangeConfirmation.tag.materialCode}</b><p>{arrangeConfirmation.due.materialDescription || "‡πÑ‡∏°‡πà‡∏£‡∏∞‡∏ö‡∏∏‡∏ä‡∏∑‡πà‡∏≠‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô"}</p></div>
-          <div className="dispatch-confirm-details"><div><small>KIT Stock Tag</small><b>{arrangeConfirmation.tag.tagId}</b></div><div><small>Job</small><b>{arrangeConfirmation.tag.jobNo}</b></div><div><small>‡∏£‡∏≠‡∏ö / FAC</small><b>{arrangeConfirmation.due.deliveryTime} / {arrangeConfirmation.due.fact}</b></div><div><small>‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á / DO</small><b>{formatDate(arrangeConfirmation.due.deliveryDate)} / {arrangeConfirmation.due.doNo}</b></div></div>
-          <div className="dispatch-confirm-qty"><div><small>Tag ‡∏û‡∏£‡πâ‡∏≠‡∏°‡∏à‡∏±‡∏î</small><b>{fmt(arrangeConfirmation.tagAvailableQty)}</b><em>‡∏ä‡∏¥‡πâ‡∏ô</em></div><div><small>Due ‡πÄ‡∏´‡∏•‡∏∑‡∏≠‡∏à‡∏±‡∏î</small><b>{fmt(arrangeConfirmation.dueOpenQty)}</b><em>‡∏ä‡∏¥‡πâ‡∏ô</em></div><label className="current" style={{padding:16}}><small>‡∏à‡∏±‡∏î‡∏Ñ‡∏£‡∏±‡πâ‡∏á‡∏ô‡∏µ‡πâ (‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç‡πÑ‡∏î‡πâ)</small><input aria-label="‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‡∏Ñ‡∏£‡∏±‡πâ‡∏á‡∏ô‡∏µ‡πâ" type="number" inputMode="numeric" min="1" step="1" max={Math.min(arrangeConfirmation.tagAvailableQty,arrangeConfirmation.dueOpenQty)} value={arrangeConfirmQty} disabled={checkingTag} onChange={event=>setArrangeConfirmQty(event.target.value)} style={{width:"100%",fontSize:28,fontWeight:700,textAlign:"center"}}/><em>‡∏ä‡∏¥‡πâ‡∏ô</em></label><div><small>Due ‡πÄ‡∏´‡∏•‡∏∑‡∏≠‡∏´‡∏•‡∏±‡∏á‡∏à‡∏±‡∏î</small><b>{fmt(Math.max(arrangeConfirmation.dueOpenQty-(Number(arrangeConfirmQty)||0),0))}</b><em>‡∏ä‡∏¥‡πâ‡∏ô</em></div></div>
-          <p className="dispatch-staged-note">‡πÅ‡∏Å‡πâ‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏à‡∏±‡∏î‡∏Ñ‡∏£‡∏±‡πâ‡∏á‡∏ô‡∏µ‡πâ‡πÑ‡∏î‡πâ 1‚Äì{fmt(Math.min(arrangeConfirmation.tagAvailableQty,arrangeConfirmation.dueOpenQty))} ‡∏ä‡∏¥‡πâ‡∏ô ¬∑ Stock ‡∏û‡∏£‡πâ‡∏≠‡∏°‡πÉ‡∏ä‡πâ‡∏´‡∏•‡∏±‡∏á‡∏à‡∏±‡∏î {fmt(Math.max(arrangeConfirmation.tagAvailableQty-(Number(arrangeConfirmQty)||0),0))} ‡∏ä‡∏¥‡πâ‡∏ô ¬∑ ‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠‡∏£‡∏ß‡∏°‡∏¢‡∏±‡∏á‡πÄ‡∏ó‡πà‡∏≤‡πÄ‡∏î‡∏¥‡∏°</p>
-          {!validArrangementQuantity(arrangeConfirmQty,Math.min(arrangeConfirmation.tagAvailableQty,arrangeConfirmation.dueOpenQty))&&<p role="alert">‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏£‡∏∞‡∏ö‡∏∏‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡πÄ‡∏ï‡πá‡∏° 1‚Äì{fmt(Math.min(arrangeConfirmation.tagAvailableQty,arrangeConfirmation.dueOpenQty))} ‡∏ä‡∏¥‡πâ‡∏ô‡∏Å‡πà‡∏≠‡∏ô‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô</p>}
-        </section>
-      </div>
-      <footer><button type="button" className="button secondary" disabled={checkingTag} onClick={() => { setArrangeConfirmation(null); tagInput.current?.focus(); }}>‡∏¢‡∏Å‡πÄ‡∏•‡∏¥‡∏Å / ‡∏™‡πÅ‡∏Å‡∏ô‡πÉ‡∏´‡∏°‡πà</button><button ref={arrangeConfirmButtonRef} type="button" className="button confirm-dispatch-button" disabled={checkingTag || !validArrangementQuantity(arrangeConfirmQty,Math.min(arrangeConfirmation.tagAvailableQty,arrangeConfirmation.dueOpenQty))} onClick={() => void stageStockTag(arrangeConfirmation.rawPayload, {...arrangeConfirmation,pickedQty:Number(arrangeConfirmQty)})}>{checkingTag ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô‚Ä¶" : "‚úì ‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡∏à‡∏±‡∏î‡∏á‡∏≤‡∏ô"}</button></footer>
-    </div></div>}
-    {dispatchConfirmation && <div className="modal-backdrop dispatch-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="dispatch-confirm-title"><div className="dispatch-confirm-modal">
-      <header><div><span>‚úì</span><div><small>‡∏ï‡∏£‡∏ß‡∏à‡∏û‡∏ö Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤</small><h3 id="dispatch-confirm-title">‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‡∏á‡∏≤‡∏ô‡∏Å‡πà‡∏≠‡∏ô‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å</h3></div></div><button type="button" onClick={() => setDispatchConfirmation(null)} aria-label="‡∏õ‡∏¥‡∏î">√ó</button></header>
-      <div className="dispatch-confirm-content">
-        <section className="dispatch-confirm-images"><PartImagePair materialCode={dispatchConfirmation.tag?.materialCode || dispatchConfirmation.master?.materialCode || ""} masterVersion={partImages.find((item) => item.materialCode === (dispatchConfirmation.tag?.materialCode || dispatchConfirmation.master?.materialCode))?.updatedAt} actualVersion={partActualImages.find((item) => item.materialCode === (dispatchConfirmation.tag?.materialCode || dispatchConfirmation.master?.materialCode))?.updatedAt} /></section>
-        <section className="dispatch-confirm-info">
-          <div className="dispatch-confirm-part"><small>PART / MATERIAL</small><b>{dispatchConfirmation.tag?.materialCode || dispatchConfirmation.master?.materialCode || "‚Äî"}</b><p>{dispatchConfirmation.master?.partName || dispatchConfirmation.due?.materialDescription || "‡πÑ‡∏°‡πà‡∏£‡∏∞‡∏ö‡∏∏‡∏ä‡∏∑‡πà‡∏≠‡∏ä‡∏¥‡πâ‡∏ô‡∏á‡∏≤‡∏ô"}</p></div>
-          <div className="dispatch-confirm-details"><div><small>KIT Tag</small><b>{dispatchKitSelection?.stockTagCode || "‚Äî"}</b></div><div><small>Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤</small><b>{dispatchConfirmation.tag?.tagId || "‚Äî"}</b></div><div><small>FAC / Line</small><b>{dispatchConfirmation.due ? dispatchConfirmation.due.fact + " / " + (dispatchConfirmation.due.line || "‚Äî") : "‚Äî"}</b></div><div><small>DO / Seq</small><b>{dispatchConfirmation.due ? dispatchConfirmation.due.doNo + " / " + dispatchConfirmation.due.seq : "‚Äî"}</b></div><div><small>‡∏Å‡∏≥‡∏´‡∏ô‡∏î‡∏™‡πà‡∏á</small><b>{dispatchConfirmation.due ? formatDate(dispatchConfirmation.due.deliveryDate) + " " + dispatchConfirmation.due.deliveryTime : "‚Äî"}</b></div><div><small>Job / ‡∏à‡∏≥‡∏ô‡∏ß‡∏ô KIT</small><b>{dispatchKitSelection ? `${dispatchKitSelection.jobNo || "‚Äî"} / ${fmt(dispatchKitSelection.waitingQty)} ‡∏ä‡∏¥‡πâ‡∏ô` : "‚Äî"}</b></div></div>
-          <div className="dispatch-confirm-qty"><div><small>Due ‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î</small><b>{fmt(dispatchConfirmation.due?.reqQty || 0)}</b><em>‡∏ä‡∏¥‡πâ‡∏ô</em></div><div><small>‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‡πÅ‡∏•‡πâ‡∏ß</small><b>{fmt(dispatchConfirmation.due?.alreadyQty || 0)}</b><em>‡∏ä‡∏¥‡πâ‡∏ô</em></div><div className="current"><small>‡∏Ç‡∏≤‡∏¢‡∏Ñ‡∏£‡∏±‡πâ‡∏á‡∏ô‡∏µ‡πâ</small><b>{fmt(dispatchConfirmation.tag?.qty || 0)}</b><em>{dispatchConfirmation.tag?.unit || "‡∏ä‡∏¥‡πâ‡∏ô"}</em></div><div><small>‡∏Ñ‡∏á‡πÄ‡∏´‡∏•‡∏∑‡∏≠‡∏´‡∏•‡∏±‡∏á‡∏Ç‡∏≤‡∏¢</small><b>{fmt(dispatchConfirmation.due?.remainingAfter || 0)}</b><em>‡∏ä‡∏¥‡πâ‡∏ô</em></div></div>
-          {dispatchConfirmation.stagedAvail !== undefined && <p className="dispatch-staged-note">‡∏á‡∏≤‡∏ô‡∏ó‡∏µ‡πà‡∏à‡∏±‡∏î‡∏£‡∏≠‡∏Ç‡∏≤‡∏¢‡πÑ‡∏ß‡πâ {fmt(dispatchConfirmation.stagedAvail)} ‡∏ä‡∏¥‡πâ‡∏ô</p>}
-        </section>
-      </div>
-      {(dispatchConfirmation.verdict === "ready" || dispatchConfirmation.verdict === "ready_noimg") ? <footer><button type="button" className="button secondary" onClick={() => { setDispatchConfirmation(null); setRawTag(""); }}>‡∏¢‡∏Å‡πÄ‡∏•‡∏¥‡∏Å / ‡∏™‡πÅ‡∏Å‡∏ô Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤‡πÉ‡∏´‡∏°‡πà</button><button type="button" className="button confirm-dispatch-button" disabled={checkingTag} onClick={() => void confirmDispatch()}>{checkingTag ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‚Ä¶" : "‚úì ‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‡πÅ‡∏•‡∏∞‡∏ï‡∏±‡∏î‡∏¢‡∏≠‡∏î"}</button></footer> : <footer className="dispatch-confirm-blocked"><p>‡πÑ‡∏°‡πà‡∏™‡∏≤‡∏°‡∏≤‡∏£‡∏ñ‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å‡πÑ‡∏î‡πâ: {dispatchConfirmation.message || "‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡πÑ‡∏°‡πà‡∏û‡∏£‡πâ‡∏≠‡∏°‡∏Ç‡∏≤‡∏¢‡∏≠‡∏≠‡∏Å"}</p><button type="button" className="button secondary" onClick={() => { setDispatchConfirmation(null); setRawTag(""); window.setTimeout(() => tagInput.current?.focus(), 50); }}>‡πÄ‡∏Å‡πá‡∏ö KIT Tag / ‡∏™‡πÅ‡∏Å‡∏ô‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤‡πÉ‡∏´‡∏°‡πà</button><button type="button" className="button secondary" onClick={() => { setDispatchConfirmation(null); setDispatchKitSelection(null); setRawTag(""); window.setTimeout(() => tagInput.current?.focus(), 50); }}>‡∏•‡πâ‡∏≤‡∏á‡∏ó‡∏±‡πâ‡∏á‡∏Ñ‡∏π‡πà / ‡πÄ‡∏£‡∏¥‡πà‡∏°‡πÉ‡∏´‡∏°‡πà</button></footer>}
-    </div></div>}
-    {jobQtyAdjustment && <div className="modal-backdrop job-qty-adjust-backdrop" role="dialog" aria-modal="true" aria-labelledby="job-qty-adjust-title"><section className="job-qty-adjust-modal">
-      <header><div><span>¬±</span><div><small>‡∏Å‡πà‡∏≠‡∏ô‡∏õ‡∏¥‡∏î‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤ Job</small><h3 id="job-qty-adjust-title">‡∏õ‡∏£‡∏±‡∏ö‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ú‡∏•‡∏¥‡∏ï‡∏à‡∏£‡∏¥‡∏á</h3></div></div><button type="button" disabled={jobQtySaving} onClick={closeJobQuantityAdjustment} aria-label="‡∏õ‡∏¥‡∏î">√ó</button></header>
-      <div className="job-qty-adjust-content">
-        <section className="job-qty-adjust-job"><div><small>JOB</small><b>{jobQtyAdjustment.jobNo}</b></div><div><small>PART</small><b>{jobQtyAdjustment.materialCode}</b><span>{jobQtyAdjustment.partName}</span></div></section>
-        {!jobQtyPreview && !jobQtyAdjusted && <form id="job-qty-adjust-form" onSubmit={(event) => void previewJobQuantity(event)}>
-          <div className="job-qty-current"><small>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô Tag ‡∏õ‡∏±‡∏à‡∏à‡∏∏‡∏ö‡∏±‡∏ô</small><b>{fmt(jobQtyAdjustment.currentQty)}</b><em>‡∏ä‡∏¥‡πâ‡∏ô</em></div>
-          <label><span>‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ú‡∏•‡∏¥‡∏ï‡∏à‡∏£‡∏¥‡∏á‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î *</span><input type="number" min="0" step="1" inputMode="numeric" value={jobQtyTarget} onChange={(event) => setJobQtyTarget(event.target.value)} required /><small>‡∏Å‡∏£‡∏≠‡∏Å‡∏¢‡∏≠‡∏î‡∏£‡∏ß‡∏°‡∏ó‡∏µ‡πà‡∏ú‡∏•‡∏¥‡∏ï‡πÑ‡∏î‡πâ‡∏à‡∏£‡∏¥‡∏á ‡πÑ‡∏°‡πà‡πÉ‡∏ä‡πà‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡πÉ‡∏ö Tag</small></label>
-          <label><span>‡∏™‡∏≤‡πÄ‡∏´‡∏ï‡∏∏ *</span><textarea value={jobQtyReason} onChange={(event) => setJobQtyReason(event.target.value)} maxLength={300} placeholder="‡πÄ‡∏ä‡πà‡∏ô ‡∏ú‡∏•‡∏¥‡∏ï‡πÄ‡∏Å‡∏¥‡∏ô‡πÅ‡∏ú‡∏ô / ‡∏ú‡∏•‡∏¥‡∏ï‡πÑ‡∏°‡πà‡∏Ñ‡∏£‡∏ö‡∏ï‡∏≤‡∏° Job" required /></label>
-        </form>}
-        {jobQtyPreview && <>
-          <div className="job-qty-compare"><article><small>Tag ‡∏õ‡∏±‡∏à‡∏à‡∏∏‡∏ö‡∏±‡∏ô</small><b>{fmt(jobQtyPreview.currentQty)}</b></article><span>‚Üí</span><article><small>‡∏ú‡∏•‡∏¥‡∏ï‡∏à‡∏£‡∏¥‡∏á</small><b>{fmt(jobQtyPreview.targetQty)}</b></article><article className={jobQtyPreview.difference > 0 ? "positive" : "negative"}><small>‡∏ú‡∏•‡∏ï‡πà‡∏≤‡∏á</small><b>{jobQtyPreview.difference > 0 ? "+" : ""}{fmt(jobQtyPreview.difference)}</b></article></div>
-          <div className="job-qty-safety"><span>‡∏¢‡∏≠‡∏î‡∏ó‡∏µ‡πà‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤/‡∏ô‡∏≥‡πÑ‡∏õ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡πÅ‡∏•‡πâ‡∏ß <b>{fmt(jobQtyPreview.lockedQty)}</b> ‡∏ä‡∏¥‡πâ‡∏ô ‚Äî ‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡πÑ‡∏°‡πà‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç</span><span>‡∏¢‡∏Å‡πÄ‡∏•‡∏¥‡∏Å Tag ‡πÄ‡∏î‡∏¥‡∏° <b>{fmt(jobQtyPreview.cancelledTags.length)}</b> ‡πÉ‡∏ö / ‡∏™‡∏£‡πâ‡∏≤‡∏á Tag ‡πÉ‡∏´‡∏°‡πà <b>{fmt(jobQtyPreview.newTagQtys.length)}</b> ‡πÉ‡∏ö</span>{jobQtyPreview.difference > 0 && jobQtyPreview.cancelledTags.length > 0 && <span>‡∏£‡∏∞‡∏ö‡∏ö‡∏ô‡∏≥ Tag ‡πÄ‡∏®‡∏©‡∏ó‡∏µ‡πà‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡∏°‡∏≤‡∏£‡∏ß‡∏°‡∏Å‡∏±‡∏ö‡∏¢‡∏≠‡∏î‡πÄ‡∏û‡∏¥‡πà‡∏° ‡πÅ‡∏•‡πâ‡∏ß‡πÅ‡∏ö‡πà‡∏á‡πÉ‡∏´‡∏°‡πà‡∏ï‡∏≤‡∏° Packing Qty ‚Äî ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏ó‡∏≥‡∏•‡∏≤‡∏¢ Tag ‡πÉ‡∏ö‡πÄ‡∏Å‡πà‡∏≤</span>}</div>
-          {jobQtyPreview.cancelledTags.length > 0 && <section className="job-qty-tag-list cancelled"><b>Tag ‡∏ó‡∏µ‡πà‡∏à‡∏∞‡∏¢‡∏Å‡πÄ‡∏•‡∏¥‡∏Å</b>{jobQtyPreview.cancelledTags.map((tag) => <span key={tag.id}><code>{tag.tagId}</code><em>{fmt(tag.qty)} ‡∏ä‡∏¥‡πâ‡∏ô</em></span>)}</section>}
-          {jobQtyPreview.newTagQtys.length > 0 && <section className="job-qty-tag-list created"><b>Tag ‡πÉ‡∏´‡∏°‡πà‡∏ó‡∏µ‡πà‡∏à‡∏∞‡∏™‡∏£‡πâ‡∏≤‡∏á</b>{jobQtyPreview.newTagQtys.map((qty, index) => <span key={index}><code>‡πÉ‡∏ö‡πÉ‡∏´‡∏°‡πà {index + 1}</code><em>{fmt(qty)} ‡∏ä‡∏¥‡πâ‡∏ô</em></span>)}</section>}
-          <p className="job-qty-reason"><b>‡∏™‡∏≤‡πÄ‡∏´‡∏ï‡∏∏:</b> {jobQtyReason}</p>
-          {jobQtyAdjusted && <div className="job-qty-success"><b>‚úì ‡∏õ‡∏£‡∏±‡∏ö‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ú‡∏•‡∏¥‡∏ï‡∏à‡∏£‡∏¥‡∏á‡πÄ‡∏£‡∏µ‡∏¢‡∏ö‡∏£‡πâ‡∏≠‡∏¢</b><span>{jobQtyCreatedTags.length ? `‡∏™‡∏£‡πâ‡∏≤‡∏á Tag ‡πÉ‡∏´‡∏°‡πà ${fmt(jobQtyCreatedTags.length)} ‡πÉ‡∏ö ‡∏Å‡∏£‡∏∏‡∏ì‡∏≤‡∏û‡∏¥‡∏°‡∏û‡πå‡πÅ‡∏•‡∏∞‡∏ô‡∏≥‡πÑ‡∏õ‡πÉ‡∏ä‡πâ‡πÅ‡∏ó‡∏ô` : "‡πÑ‡∏°‡πà‡∏°‡∏µ Tag ‡πÉ‡∏´‡∏°‡πà‡∏ó‡∏µ‡πà‡∏ï‡πâ‡∏≠‡∏á‡∏û‡∏¥‡∏°‡∏û‡πå"}</span></div>}
-        </>}
-      </div>
-      <footer>{!jobQtyPreview && !jobQtyAdjusted ? <><button type="button" className="button secondary" onClick={closeJobQuantityAdjustment}>‡∏¢‡∏Å‡πÄ‡∏•‡∏¥‡∏Å</button><button type="submit" form="job-qty-adjust-form" className="button primary" disabled={jobQtySaving}>{jobQtySaving ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö‚Ä¶" : "‡∏ï‡∏£‡∏ß‡∏à‡∏™‡∏≠‡∏ö Tag ‡∏ó‡∏µ‡πà‡∏à‡∏∞‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô"}</button></> : jobQtyAdjusted ? <><button type="button" className="button secondary" onClick={closeJobQuantityAdjustment}>‡∏õ‡∏¥‡∏î</button>{jobQtyCreatedTags.length > 0 && <><button type="button" className="button secondary" onClick={() => void printStockTags(jobQtyCreatedTags, "a4")}>‚ñ§ A4</button><button type="button" className="button primary" onClick={() => void printStockTags(jobQtyCreatedTags, "100x55")}>‚ñ§ RPP04</button></>}</> : <><button type="button" className="button secondary" disabled={jobQtySaving} onClick={() => setJobQtyPreview(null)}>‡∏Å‡∏•‡∏±‡∏ö‡πÑ‡∏õ‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç</button><button type="button" className="button primary" disabled={jobQtySaving} onClick={() => void confirmJobQuantityAdjustment()}>{jobQtySaving ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‚Ä¶" : "‚úì ‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡∏õ‡∏£‡∏±‡∏ö‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ú‡∏•‡∏¥‡∏ï‡∏à‡∏£‡∏¥‡∏á"}</button></>}</footer>
-    </section></div>}
-    {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>{cameraPurpose === "stock" ? stockLocation ? `‡∏™‡πÅ‡∏Å‡∏ô KIT Tag ‡∏£‡∏±‡∏ö‡πÄ‡∏Ç‡πâ‡∏≤‡∏ä‡∏±‡πâ‡∏ô ${stockLocation.code}` : "‡∏™‡πÅ‡∏Å‡∏ô QR ‡∏´‡∏ô‡πâ‡∏≤‡∏ä‡∏±‡πâ‡∏ô‡∏à‡∏±‡∏î‡πÄ‡∏Å‡πá‡∏ö" : cameraPurpose === "stock-count" ? "‡∏™‡πÅ‡∏Å‡∏ô Tag ‡∏ï‡∏£‡∏ß‡∏à‡∏ô‡∏±‡∏ö‡∏™‡∏¥‡πâ‡∏ô‡πÄ‡∏î‡∏∑‡∏≠‡∏ô" : page === "dispatch" && dispatchKitSelection ? "‡∏™‡πÅ‡∏Å‡∏ô QR Tag ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ (‡πÇ‡∏´‡∏°‡∏î‡∏•‡∏∞‡πÄ‡∏≠‡∏µ‡∏¢‡∏î)" : "‡∏™‡πÅ‡∏Å‡∏ô Tag ‡∏î‡πâ‡∏ß‡∏¢‡∏Å‡∏•‡πâ‡∏≠‡∏á"}</h3><button onClick={() => setCameraOpen(false)}>√ó</button></header><div className={`camera-view ${page === "dispatch" && dispatchKitSelection ? "customer-qr-camera" : ""}`}><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div>{page === "dispatch" && dispatchKitSelection ? <p className="camera-customer-hint"><b>‡∏ô‡∏≥‡πÄ‡∏â‡∏û‡∏≤‡∏∞‡∏ä‡πà‡∏≠‡∏á QR ‡πÄ‡∏Ç‡πâ‡∏≤‡πÉ‡∏ô‡∏Å‡∏£‡∏≠‡∏ö‡∏™‡∏µ‡πÄ‡∏Ç‡∏µ‡∏¢‡∏ß</b><span>‡πÑ‡∏°‡πà‡∏ï‡πâ‡∏≠‡∏á‡πÉ‡∏´‡πâ‡∏õ‡πâ‡∏≤‡∏¢‡∏ó‡∏±‡πâ‡∏á‡πÉ‡∏ö‡∏≠‡∏¢‡∏π‡πà‡πÉ‡∏ô‡∏†‡∏≤‡∏û ¬∑ ‡∏ñ‡∏∑‡∏≠‡πÉ‡∏´‡πâ‡∏ô‡∏¥‡πà‡∏á‡∏õ‡∏£‡∏∞‡∏°‡∏≤‡∏ì 1 ‡∏ß‡∏¥‡∏ô‡∏≤‡∏ó‡∏µ</span></p> : <p className="camera-format-hint">‡∏£‡∏≠‡∏á‡∏£‡∏±‡∏ö QR ¬∑ Data Matrix ¬∑ Code 128 ¬∑ Code 39</p>}{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>‡∏õ‡∏¥‡∏î‡∏Å‡∏•‡πâ‡∏≠‡∏á</button></div></div>}
-    {splitTagRequest&&<SplitTagPopup {...splitTagRequest} page={page} onClose={closeSplitTag}/>}
-    <OperationWarningPopup voiceEnabled={settings.sound}/>
-    {userEditorOpen && <div className="modal-backdrop"><form className="user-modal permission-modal" onSubmit={saveUser}>
-      <header><div><h3>{userForm.id ? "‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡πÅ‡∏•‡∏∞‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå" : "‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô"}</h3><p>‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ö‡∏ó‡∏ö‡∏≤‡∏ó‡πÅ‡∏•‡∏∞‡∏Å‡∏≥‡∏´‡∏ô‡∏î‡∏´‡∏ô‡πâ‡∏≤‡∏ó‡∏µ‡πà‡πÅ‡∏ï‡πà‡∏•‡∏∞‡∏Ñ‡∏ô‡∏™‡∏≤‡∏°‡∏≤‡∏£‡∏ñ‡πÄ‡∏õ‡∏¥‡∏î‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡πÑ‡∏î‡πâ</p></div><button type="button" onClick={() => setUserEditorOpen(false)}>√ó</button></header>
-      <div className="user-form-grid">
-        <label><span>‡∏£‡∏´‡∏±‡∏™‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô *</span><input value={userForm.employeeCode} onChange={(e) => setUserForm((current) => ({ ...current, employeeCode: e.target.value.toUpperCase() }))} placeholder="‡πÄ‡∏ä‡πà‡∏ô DISP001" required /></label>
-        <label><span>‡∏ä‡∏∑‡πà‡∏≠‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô *</span><input value={userForm.displayName} onChange={(e) => setUserForm((current) => ({ ...current, displayName: e.target.value }))} placeholder="‡∏ä‡∏∑‡πà‡∏≠-‡∏ô‡∏≤‡∏°‡∏™‡∏Å‡∏∏‡∏•" required /></label>
-        <label><span>‡∏ö‡∏ó‡∏ö‡∏≤‡∏ó *</span><select value={userForm.role} onChange={(e) => { const role = e.target.value as UserRole; setUserForm((current) => ({ ...current, role })); }}><option value="production">Production</option><option value="stock">Stock</option><option value="qc">QC</option><option value="delivery">Delivery</option>{(userForm.role === "dispatcher" || userForm.role === "inspector") && <option value={userForm.role}>{ROLE_LABELS[userForm.role]}</option>}</select></label>
-        <label><span>{userForm.id ? "‡∏ï‡∏±‡πâ‡∏á PIN ‡πÉ‡∏´‡∏°‡πà (‡πÄ‡∏ß‡πâ‡∏ô‡∏ß‡πà‡∏≤‡∏á‡∏´‡∏≤‡∏Å‡πÑ‡∏°‡πà‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô)" : "PIN 6 ‡∏´‡∏•‡∏±‡∏Å *"}</span><input type="password" inputMode="numeric" maxLength={6} pattern="[0-9]{6}" value={userForm.pin} onChange={(e) => setUserForm((current) => ({ ...current, pin: e.target.value.replace(/\D/g, "") }))} required={!userForm.id} placeholder="‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢‚Ä¢" /></label>
-        <label className="wide"><span>‡∏≠‡∏µ‡πÄ‡∏°‡∏• (‡πÑ‡∏°‡πà‡∏ö‡∏±‡∏á‡∏Ñ‡∏±‡∏ö)</span><input type="email" value={userForm.email} onChange={(e) => setUserForm((current) => ({ ...current, email: e.target.value }))} /></label>
-      </div>
-      <section className="individual-permissions"><div className="permission-title"><div><b>‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡πÄ‡∏Ç‡πâ‡∏≤‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡∏£‡∏≤‡∏¢‡∏ö‡∏∏‡∏Ñ‡∏Ñ‡∏•</b><p>‡πÄ‡∏•‡∏∑‡∏≠‡∏Å ‚Äú‡∏î‡∏π‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‚Äù ‡πÄ‡∏û‡∏∑‡πà‡∏≠‡πÄ‡∏õ‡∏¥‡∏î‡∏´‡∏ô‡πâ‡∏≤ ‡πÅ‡∏•‡∏∞‡πÄ‡∏•‡∏∑‡∏≠‡∏Å ‚Äú‡πÄ‡∏û‡∏¥‡πà‡∏° / ‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç‚Äù ‡πÄ‡∏â‡∏û‡∏≤‡∏∞‡∏ú‡∏π‡πâ‡∏ó‡∏µ‡πà‡∏ó‡∏≥‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡πÑ‡∏î‡πâ ‡∏Å‡∏≤‡∏£‡∏•‡∏ö‡∏™‡∏á‡∏ß‡∏ô‡πÑ‡∏ß‡πâ‡∏™‡∏≥‡∏´‡∏£‡∏±‡∏ö Admin</p></div></div>
-        <div className="permission-grid">{NAV.map((item) => {
-          const checked = userForm.permissions.includes(item.key);
-          const editable = EDITABLE_PAGE_KEYS.includes(item.key as EditablePageKey);
-          const editKey = `${item.key}-edit` as EditPermission;
-          const canEdit = editable && userForm.permissions.includes(editKey);
-          return <div key={item.key} className={`permission-option permission-option-levels ${checked ? "checked" : ""}`}>
-            <span>{item.icon}</span><div className="permission-option-copy"><b>{item.label}</b><small>{PERMISSION_HELP[item.key]}</small></div>
-            <div className="permission-levels">
-              <label><input type="checkbox" checked={checked} onChange={(event) => setUserForm((current) => ({
-                ...current,
-                permissions: event.target.checked
-                  ? [...new Set([...current.permissions, item.key])]
-                  : current.permissions.filter((key) => key !== item.key && key !== editKey && (item.key !== "stock-all" || !["stock-all-details", "stock-all-export"].includes(key)) && (item.key !== "parts" || key !== "parts-add")),
-              }))} /> ‡∏î‡∏π‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•</label>
-              {editable ? <label><input type="checkbox" checked={canEdit} onChange={(event) => setUserForm((current) => ({
-                ...current,
-                permissions: event.target.checked
-                  ? [...new Set([...current.permissions, item.key, editKey])]
-                  : current.permissions.filter((key) => key !== editKey && (item.key !== "parts" || key !== "parts-add")),
-              }))} /> ‡πÄ‡∏û‡∏¥‡πà‡∏° / ‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç</label> : <em>‡∏î‡∏π‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡πÄ‡∏ó‡πà‡∏≤‡∏ô‡∏±‡πâ‡∏ô</em>}
-            </div>
-          </div>;
-        })}</div>
-        <div className="permission-grid">{([{key:"stock-all-details",label:"Stock ‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î: ‡∏î‡∏π Tag / Job / Movement"},{key:"stock-all-export",label:"Stock ‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î: ‡∏™‡πà‡∏á‡∏≠‡∏≠‡∏Å Excel"}] as const).map((item) => <label key={item.key} className="permission-option"><input type="checkbox" disabled={!userForm.permissions.includes("stock-all")} checked={userForm.permissions.includes(item.key)} onChange={(event) => setUserForm((current) => ({...current,permissions:event.target.checked ? [...new Set([...current.permissions,item.key])] : current.permissions.filter((key) => key !== item.key)}))}/><div><b>{item.label}</b><small>‡∏ï‡πâ‡∏≠‡∏á‡∏°‡∏µ‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå‡∏î‡∏π‡∏´‡∏ô‡πâ‡∏≤ Stock ‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î‡∏î‡πâ‡∏ß‡∏¢</small></div></label>)}</div>
-      </section>
-      <footer><button type="button" className="button secondary" onClick={() => setUserEditorOpen(false)}>‡∏¢‡∏Å‡πÄ‡∏•‡∏¥‡∏Å</button><button className="button primary" disabled={userSaving || !userForm.permissions.length}>{userSaving ? "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‚Ä¶" : "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏á‡∏≤‡∏ô‡πÅ‡∏•‡∏∞‡∏™‡∏¥‡∏ó‡∏ò‡∏¥‡πå"}</button></footer>
-    </form></div>}
-  </div>;
-}
-
+Y™Áäx-ÆÈ‹j◊ù¢Îi∫⁄+äßj[hëÈ‹¢ÈÌ◊è}ﬂTËµ©h∫⁄n∂XßzÕHù\ŸH€Y[ùé¬Çã à\€[ùY\ÿXõHô^€ô^€õÀZ[YÀY[[Y[ù
+ã¬Çö[\‹ù»⁄[ôŸQ]ô[ùõ‹õQ]ô[ù[›\ŸQ]ô[ù\»ôXX›[›\ŸQ]ô[ùôXX›õŸK\ŸQYôôX›\ŸSY[[À\ŸTôYã\ŸT›]HHúõ€HúôXX›é¬ö[\‹ù»ò[Y\úò[ôŸ[Y[ù]X[ù]HHúõ€Hããÿ\úò[ôŸ[Y[ù\]X[ù]Hé¬ö[\‹ù‹]Y‘‹\úõ€Hãã‹‹]]YÀ\‹\é¬ö[\‹ù‹\ò][€ïÿ\õö[ô‘‹\úõ€Hãã€‹\ò][€ã]ÿ\õö[ôÀ\‹\é¬ö[\‹ù»ô\‹ù‹\ò][€ïÿ\õö[ô»Húõ€Hãã€‹\ò][€ã]ÿ\õö[ô»é¬ö[\‹ù\⁄õÿ\ô€€ùõ€Ÿ[ù\àúõ€HããŸ\⁄õÿ\ôX€€ùõ€XŸ[ù\àé¬ö[\‹ù›ô\ôYU€‹ö‘YŸHúõ€Hãã€›ô\ôYK]€‹öÀ\YŸHé¬ö[\‹ù›ÿ⁄–[YŸHúõ€Hãã‹›ÿ⁄ÀX[\YŸHé¬ö[\‹ù»›ô\ùöY]“X€€ã›ô\ùöY]”Ÿ€À›ô\ùöY]—òX›‹ûK’ëTïíQU◊”êUó“P””î»Húõ€Hãã‹›ÿ⁄À[›ô\ùöY]ÀZX€€ú»é¬ö[\‹ù»‹ôX]Qõ‹ôXÿ\›^‹ù€‹öÿõ€⁄À‹ôX]Qõ‹ôXÿ\›^‹ùö[ò\ûHHúõ€HããŸõ‹ôXÿ\›Y^‹ùé¬ö[\‹ù»õ‹õX[^ôQYQ^Ÿ[]HHúõ€HããŸYKY^Ÿ[Y]Hé¬ö[\‹ù»‹XZ’ZP[\ùHúõ€Hãã›õ⁄XŸKX[\ùé¬ö[\‹ùõ⁄XŸP[\ù€€ùõ€úõ€Hãã›õ⁄XŸKX[\ùX€€ùõ€é¬ö[\‹ù»‹[îú[ôõ⁄YúöYŸK\HúY»Húõ€Hãã‹úY\ôX›\ö[ùé¬Çù\HYŸRŸ^HHú›ÿ⁄ÀX[àõ›ô\ôYHàô\⁄õÿ\ôàú›ÿ⁄»àõX[ùX[\›ÿ⁄»àú›ÿ⁄ÀX€›[ùàôõ‹ôXÿ\›àú\ù»àùY‹»àú[ààò\úò[ôŸHàúô\XŸ[Y[ùàùô\öYûHàô\‹]⁄àô^‹ù»àúô\‹ù»àö\›‹ûHàúŸ][ô‹»àù\Ÿ\ú»é¬Çù\HY]XõTYŸRŸ^HHú›ÿ⁄»àõX[ùX[\›ÿ⁄»àú›ÿ⁄ÀX€›[ùàôõ‹ôXÿ\›àú\ù»àùY‹»àú[ààò\úò[ôŸHàúô\XŸ[Y[ùàô\‹]⁄é¬ù\HY]\õZ\‹⁄[€àH	—Y]XõTYŸRŸ^_KYY]¬ù\H\\õZ\‹⁄[€àHYŸRŸ^HY]\õZ\‹⁄[€àú›ÿ⁄ÀX[Y]Z[»àú›ÿ⁄ÀX[Y^‹ùàú\ùÀXYàú\õZ\‹⁄[€ã[[Ÿ[]åàé¬Çò€€ú›QUPìW‘Q—W“—VTŒàY]XõTYŸRŸ^V◊HH»ú›ÿ⁄»ãõX[ùX[\›ÿ⁄»ãú›ÿ⁄ÀX€›[ùãôõ‹ôXÿ\›ãú\ù»ãùY‹»ãú[àãò\úò[ôŸHãúô\XŸ[Y[ùãô\‹]⁄óN¬Çò€€ú›’–“◊–P–—T‘◊”PëSŒàôX€‹ô›ö[ôÀ›ö[ôœàH»ú›ÿ⁄ÀX[Y]Z[»éàî›ÿ⁄»8.%¯.,x.bx.!¯.*¯.(x.%à8.%8..HY»»õÿà»[›ô[Y[ùãú›ÿ⁄ÀX[Y^‹ùéàî›ÿ⁄»8.%¯.,x.bx.!¯.*¯.(x.%à8.*∏.b8.!¯.+x.+x. H^Ÿ[ãú\ùÀXYéà∏.%¯.,8.`8.&∏.-x.(∏.&H\ùà8.`8.'∏.-8.b8.(x. ∏.bx.+x.(x..x.)H\ù8.`¯.*¯.(x.bàN¬Çù\HYS[ôHH¬àYàù[Xô\é¬à[\‹ùYàù[Xô\é¬à”õŒà›ö[ôŒ¬àŸ\Nàù[Xô\é¬àX]\öX[€ŸNà›ö[ôŒ¬àX]\öX[\ÿ‹ö\[€éà›ö[ôŒ¬à⁄]Nà›ö[ôŒ¬àòX›à›ö[ôŒ¬à[ôNà›ö[ôŒ¬à⁄‹à›ö[ôŒ¬àô\T]Nàù[Xô\é¬à[]ô\ûQ]Nà›ö[ôŒ¬à[]ô\ûU[YNà›ö[ôŒ¬à›]\Œà›ö[ôŒ¬àÿÿ[õôY]Nàù[Xô\é¬à\úò[ôŸY]Nàù[Xô\é¬àY–€›[ùàù[Xô\é¬üN¬Çù\HYTÿÿ[àH¬àYàù[Xô\é¬àYS[ôRYàù[Xô\é¬àY“Yà›ö[ôŒ¬à]Nàù[Xô\é¬à[ö]à›ö[ôŒ¬àÿÿ][€éà›ö[ôŒ¬àÿÿ[õôYûSò[YNà›ö[ôŒ¬à‹ôX]Y]à›ö[ôŒ¬àX]\öX[€ŸNà›ö[ôŒ¬àòX›à›ö[ôŒ¬à[]ô\ûQ]Nà›ö[ôŒ¬à[]ô\ûU[YNà›ö[ôŒ¬üN¬Çù\HYR[\‹ùH¬àYàù[Xô\é¬àö[Sò[YNà›ö[ôŒ¬àõ›–€›[ùàù[Xô\é¬à›[]Nàù[Xô\é¬à[\‹ùYûSò[YNà›ö[ôŒ¬à‹ôX]Y]à›ö[ôŒ¬üN¬ù\HYTôXŸZ\H»Yàù[Xô\é»YS[ôRYàù[Xô\é»Y“Yà›ö[ôŒ»]Nàù[Xô\é»[ö]à›ö[ôŒ»ÿÿ][€éà›ö[ôŒ»ôXŸZ]ôYûSò[YNà›ö[ôŒ»‹ôX]Y]à›ö[ôŒ»X]\öX[€ŸNà›ö[ôŒ»òX›à›ö[ô»N¬Çù\HY‘ô]öY]»H¬àYŒà¬àY“Yà›ö[ôŒ¬à]Nàù[Xô\é¬à[ö]à›ö[ôŒ¬àX]\öX[€ŸNà›ö[ôŒ¬àÿÿ][€éà›ö[ôŒ¬à”õŒà›ö[ôŒ¬à[]ô\ûQ]Nà›ö[ôŒ¬à[ôNà›ö[ôŒ¬à⁄‹à›ö[ôŒ¬àŸ\Nàù[Xô\é¬àN¬àYNàYS[ôH	à¬àô[XZ[ö[ô‘]Nàù[Xô\é¬àõ⁄ôX›Y]Nàù[Xô\é¬àô[XZ[ö[ô–Yù\éàù[Xô\é¬àõ⁄ôX›Y›]\Œà›ö[ôŒ¬àN¬à›ÿ⁄–[ÿÿ][€úœŒà\úò^O¬à›ÿ⁄’Y“Yàù[Xô\é»›ÿ⁄’Y–€ŸOŒà›ö[ôŒ»]Nàù[Xô\é»õÿìõœŒà›ö[ôŒ¬àõŸX›[€ë]OŒà›ö[ôŒ»ôXŸZ]ôY]Œà›ö[ôŒ»X⁄ŸYûSò[YOŒà›ö[ôŒ»X⁄ŸY]Œà›ö[ôŒ¬àOé¬üN¬Çù\H[\‹ùõ›»H€Z]YS[ôKöYàö[\‹ùYàú›]\»àúÿÿ[õôY]Hàò\úò[ôŸY]HàùY–€›[ùèà	à»€›\òŸRŸ^Nà›ö[ô»N¬ù\HYT^[ÿYH»Y\ŒàYS[ôV◊N»[\‹ùŒàYR[\‹ù◊N»ÿÿ[úŒàYTÿÿ[ñ◊N»ôXŸZ\ŒàYTôXŸZ\◊N»\úõ‹èŒà›ö[ô»N¬ù\Hﬁ\›[U\Ÿ\àH»Yàù[Xô\é»[\ﬁYYP€ŸNà›ö[ôŒ»\‹^Sò[YNà›ö[ôŒ»[XZ[à›ö[ôŒ»õ€Nà›ö[ôŒ»X›]ôNàõ€€X[é»\õZ\‹⁄[€úŒà\\õZ\‹⁄[€ñ◊N»‹ôX]Y]Œà›ö[ô»N¬ù\H\ù[XYŸSX\[ô»H»X]\öX[€ŸNà›ö[ôŒ»‹öY⁄[ò[ò[YNà›ö[ôŒ»€€ù[ù\Nà›ö[ôŒ»\]YûSò[YNà›ö[ôŒ»\]Y]à›ö[ôŒ»X]\öX[\ÿ‹ö\[€èŒà›ö[ô»N¬ù\H›ÿ⁄‘\ùH»X]\öX[€ŸNà›ö[ôŒ»\ùò[YNà›ö[ôŒ»›\›€Y\éà›ö[ôŒ»ÿÿ][€éà›ö[ôŒ»›[ô\ô]Nàù[Xô\é»X›]ôNàõ€€X[àN¬ù\H\ù[\‹ù][HHX⁄œ›ÿ⁄‘\ùõX]\öX[€ŸHàú\ùò[YHàò›\›€Y\ààõÿÿ][€ààú›[ô\ô]Hèé¬ù\H\ùù[ôTõ›»H»\ùà\ù[\‹ù][N»X\›\ëö[OŒàö[N»X›X[ö[OŒàö[HN¬ù\H\ùù[ôTô]öY]»H¬àö[Sò[YNà›ö[ôŒ¬àõ›‹Œà\ùù[ôTõ›÷◊N¬à[õX]⁄YX\›\éà›ö[ô÷◊N¬à[õX]⁄YX›X[à›ö[ô÷◊N¬à\Xÿ]R[XYŸ\Œà›ö[ô÷◊N¬üN¬ù\H›ÿ⁄’Y»H»Yàù[Xô\é»Y“Yà›ö[ôŒ»X]\öX[€ŸNà›ö[ôŒ»\ùò[YNà›ö[ôŒ»›\›€Y\éà›ö[ôŒ»]Nàù[Xô\é»ô[XZ[ö[ô‘]Nàù[Xô\é»ô\Ÿ\ùôY]Nàù[Xô\é»ôXŸZ]ôY]OŒàù[Xô\é»ô‘]OŒàù[Xô\é»õÿìõŒà›ö[ôŒ»õŸX›[€ë]Nà›ö[ôŒ»›]\Œà›ö[ôŒ»ö[ùYûSò[YNà›ö[ôŒ»ôXŸZ]ôYûSò[YNà›ö[ôŒ»ôXŸZ]ôY]Œà›ö[ôŒ»‹ôX]Y]à›ö[ôŒ»^[ÿYŒà›ö[ôŒ»õﬁõœŒàù[Xô\é»õﬁ€›[ùŒàù[Xô\é»[]ô\ûT]OŒàù[Xô\é»ÿÿ][€èŒà›ö[ôŒ»‹]Xô[YŒà›ö[ôŒ»‹]\‹›YY]Œà›ö[ô»N¬ù\H›ÿ⁄‘ôXŸZ]ôTô]öY]»H»X›[€éàúôXŸZ]ôW‹ô]öY]»é»ò]‘^[ÿYà›ö[ôŒ»YŒà›ÿ⁄’YŒ»X\›\éà»X]\öX[€ŸNà›ö[ôŒ»\ùò[YNà›ö[ôŒ»›\›€Y\éà›ö[ôŒ»\“[XYŸNàõ€€X[àN»Ÿ[X›Yÿÿ][€éà›ö[ô»N¬ù\H›ÿ⁄”ÿÿ][€îŸ[X›[€àH»€ŸNà›ö[ôŒ»\ù€›[ùàù[Xô\àN¬ù\H›ÿ⁄–[ÿÿ][€àH»Yàù[Xô\é»›\›€Y\ïY“Yà›ö[ôŒ»›ÿ⁄’Y–€ŸNà›ö[ôŒ»X]\öX[€ŸNà›ö[ôŒ»]Nàù[Xô\é»›]\Œà›ö[ôŒ»ô\Ÿ\ùôYûSò[YNà›ö[ôŒ»ô\Ÿ\ùôY]à›ö[ôŒ»\‹]⁄YûSò[YNà›ö[ôŒ»\‹]⁄Y]Œà›ö[ô»N¬ù\H›ÿ⁄‘X⁄»H¬àYàù[Xô\é»YS[ôRYàù[Xô\é»X⁄ŸY]Nàù[Xô\é»\‹]⁄Y]Nàù[Xô\é»›]\Œà›ö[ôŒ¬àX⁄ŸYûSò[YNà›ö[ôŒ»X⁄ŸYûP€ŸNà›ö[ôŒ»X⁄ŸY]à›ö[ôŒ»›ÿ⁄’Y–€ŸNà›ö[ôŒ¬àX]\öX[€ŸNà›ö[ôŒ»õÿìõŒà›ö[ôŒ»õŸX›[€ë]Nà›ö[ôŒ»ôXŸZ]ôY]Œà›ö[ôŒ¬à”õŒà›ö[ôŒ»Ÿ\Nàù[Xô\é»òX›à›ö[ôŒ»[ôNà›ö[ôŒ»⁄‹à›ö[ôŒ¬à[]ô\ûQ]Nà›ö[ôŒ»[]ô\ûU[YNà›ö[ôŒ¬üN¬ù\H›ÿ⁄—\‹]⁄[ö»H¬àYàù[Xô\é»›\›€Y\ïY“Yà›ö[ôŒ»]Nàù[Xô\é»\‹]⁄YûSò[YNà›ö[ôŒ¬à\‹]⁄YûP€ŸNà›ö[ôŒ»\‹]⁄Y]à›ö[ôŒ»X⁄ŸYûSò[YNà›ö[ôŒ»X⁄ŸY]à›ö[ôŒ¬à›ÿ⁄’Y–€ŸNà›ö[ôŒ»X]\öX[€ŸNà›ö[ôŒ»õÿìõŒà›ö[ôŒ»õŸX›[€ë]Nà›ö[ôŒ¬àôXŸZ]ôY]Œà›ö[ôŒ»”õŒà›ö[ôŒ»òX›à›ö[ôŒ»[ôNà›ö[ôŒ¬üN¬ù\H›ÿ⁄“õÿê€‹›\ôHH¬àYàù[Xô\é»õÿìõŒà›ö[ôŒ»X]\öX[€ŸNà›ö[ôŒ»›[]Nàù[Xô\é»ôXŸZ]ôY]Nàù[Xô\é¬àô‘]Nàù[Xô\é»ô’Y–€›[ùàù[Xô\é»ôX\€€éà›ö[ôŒ»€‹ŸYûSò[YNà›ö[ôŒ¬à€‹ŸYûP€ŸNà›ö[ôŒ»€‹ŸY]à›ö[ôŒ¬üN¬ù\Hõÿî]X[ù]PYù\›Y[ùô]öY]»H¬àõÿìõŒà›ö[ôŒ»X]\öX[€ŸNà›ö[ôŒ»\ùò[YNà›ö[ôŒ»›\›€Y\éà›ö[ôŒ»X⁄‘]Nàù[Xô\é¬à›\úô[ù]Nàù[Xô\é»\ôŸ]]Nàù[Xô\é»Yôô\ô[òŸNàù[Xô\é»ÿ⁄ŸY]Nàù[Xô\é»[ô[ô‘]Nàù[Xô\é¬àõŸX›[€ë]Nà›ö[ôŒ»Ÿ\Y–€›[ùàù[Xô\é¬àÿ[òŸ[YY‹Œà\úò^O»Yàù[Xô\é»Y“Yà›ö[ôŒ»]Nàù[Xô\àOé¬àô]’Y‘]\Œàù[Xô\ñ◊N¬üN¬ù\Hõÿî]X[ù]PYù\›Y[ùH¬àõÿìõŒà›ö[ôŒ»X]\öX[€ŸNà›ö[ôŒ»\ùò[YNà›ö[ôŒ»›\úô[ù]Nàù[Xô\é¬üN¬ù\H›ÿ⁄”X[ùX[ôXŸZ\H¬àYàù[Xô\é»›ÿ⁄’Y“Yàù[Xô\é»Y“Yà›ö[ôŒ»X]\öX[€ŸNà›ö[ôŒ»\ùò[YNà›ö[ôŒ¬à]Nàù[Xô\é»õÿìõŒà›ö[ôŒ»õŸX›[€ë]Nà›ö[ôŒ»ôYô\ô[òŸSõŒà›ö[ôŒ»õ›Nà›ö[ôŒ¬àôXŸZ]ôYûSò[YNà›ö[ôŒ»ôXŸZ]ôYûP€ŸNà›ö[ôŒ»ôXŸZ]ôY]à›ö[ôŒ¬àò[úÿX›[€ìõŒà›ö[ôŒ»ò[úÿX›[€ï›[]Nàù[Xô\é»X⁄‘]Nàù[Xô\é»Y–€›[ùàù[Xô\é¬à\Xÿ]P€€ôö\õYYàù[Xô\é¬üN¬ù\HX[ùX[\Xÿ]RõÿàH¬àX]\öX[€ŸNà›ö[ôŒ»\ùò[YNà›ö[ôŒ»õÿìõŒà›ö[ôŒ»ô]ö[›\‘]Nàù[Xô\é¬àô]ö[›\’Y–€›[ùàù[Xô\é»[ò€€Z[ô‘]Nàù[Xô\é»[ò€€Z[ô’Y–€›[ùàù[Xô\é¬à›[Yù\éàù[Xô\é»\›ôXŸZ]ôY]à›ö[ôŒ¬üN¬ù\HX[ùX[ôXŸZ\›XÿŸ\‹»H¬àò[úÿX›[€ìõŒà›ö[ôŒ»Y‹Œà›ÿ⁄’Y÷◊N»›[]Nàù[Xô\é»X⁄‘]Nàù[Xô\é¬àõﬁ€›[ùàù[Xô\é»\Xÿ]P€€ôö\õYYàõ€€X[é¬üN¬ù\H›ÿ⁄–€›[ùYù\›Y[ùH¬àYàù[Xô\é»Yù\›Y[ùõŒà›ö[ôŒ»€›[ù]Nà›ö[ôŒ»X]\öX[€ŸNà›ö[ôŒ»\ùò[YNà›ö[ôŒ¬àﬁ\›[T]Nàù[Xô\é»€›[ùY]Nàù[Xô\é»Yôô\ô[òŸNàù[Xô\é»ôX\€€éà›ö[ôŒ¬àYù\›YûSò[YNà›ö[ôŒ»Yù\›YûP€ŸNà›ö[ôŒ»Yù\›Y]à›ö[ôŒ»YôôX›YY–€›[ùàù[Xô\é¬üN¬ù\H›ÿ⁄–€›[ùYù\›Y[ù[ôHH¬àYàù[Xô\é»Yù\›Y[ùYàù[Xô\é»›ÿ⁄’Y“Yàù[Xô\é»›ÿ⁄’Y–€ŸNà›ö[ôŒ¬à]P⁄[ôŸNàù[Xô\é»ôYõ‹ôT]Nàù[Xô\é»Yù\î]Nàù[Xô\é»‹ôX]Y]à›ö[ôŒ¬üN¬ù\H›ÿ⁄”[›ô[Y[ù^HH»]Nà›ö[ôŒ»ôXŸZ]ôY]Nàù[Xô\é»\úò[ôŸY]Nàù[Xô\é»Yù\›Y]Nàù[Xô\àN¬ù\H›ÿ⁄–€›[ùô]öY]»H¬àX›[€éàúô]öY]◊›Y◊ÿ€›[ùé»Y“Yà›ö[ôŒ»X]\öX[€ŸNà›ö[ôŒ»\ùò[YNà›ö[ôŒ¬à›\›€Y\éà›ö[ôŒ»õÿìõŒà›ö[ôŒ»õŸX›[€ë]Nà›ö[ôŒ»›]\Œà›ö[ôŒ¬àﬁ\›[T]Nàù[Xô\é»€›[ùY]Nàù[Xô\é»Yôô\ô[òŸNàù[Xô\é»ô\Ÿ\ùôY]Nàù[Xô\é¬à›ÿ⁄–\ôXTﬁ\›[T]Nàù[Xô\é»›ÿ⁄–\ôXP€›[ùY]Nàù[Xô\é»ô]’›[]Nàù[Xô\é¬à]òZ[XõT]Nàù[Xô\é»X]\öX[›[]Nàù[Xô\é»X]\öX[›[Yù\éàù[Xô\é»€›[ù]Nà›ö[ôŒ¬üN¬ù\H›ÿ⁄‘^[ÿYH¬à\ùŒà›ÿ⁄‘\ù◊N»Y‹Œà›ÿ⁄’Y÷◊N»[ÿÿ][€úŒà›ÿ⁄–[ÿÿ][€ñ◊N¬àX⁄‹Œà›ÿ⁄‘X⁄÷◊N»\‹]⁄[ö‹Œà›ÿ⁄—\‹]⁄[ö÷◊N»õÿê€‹›\ô\Œà›ÿ⁄“õÿê€‹›\ôV◊N¬àX[ùX[ôXŸZ\Œà›ÿ⁄”X[ùX[ôXŸZ\◊N»€›[ùYù\›Y[ùŒà›ÿ⁄–€›[ùYù\›Y[ù◊N¬à€›[ùYù\›Y[ù[ô\Œà›ÿ⁄–€›[ùYù\›Y[ù[ôV◊N¬à[›ô[Y[ù^\Œà›ÿ⁄”[›ô[Y[ù^V◊N¬üN¬ù\H\úò[ôŸ[Y[ùô]öY]»H¬àX›[€éàú›YŸYé¬àX⁄Œà›ÿ⁄‘X⁄Œ¬àYŒà›ÿ⁄’YŒ¬àYNàYS[ôH	à»ô[XZ[ö[ô’–\úò[ôŸNàù[Xô\é»ô[XZ[ö[ô‘]Nàù[Xô\àN¬üN¬ù\H\úò[ôŸP€€ôö\õX][€àH¬àX›[€éàúô]öY]◊‹›YŸHé»YŒà›ÿ⁄’YŒ»YNàYS[ôN¬àX⁄ŸY]Nàù[Xô\é»Y–]òZ[XõT]Nàù[Xô\é»YS‹[î]Nàù[Xô\é»ô[XZ[ö[ô–Yù\éàù[Xô\é¬àò]‘^[ÿYà›ö[ôŒ»[]ô\ûQ]Nà›ö[ôŒ»[]ô\ûU[YNà›ö[ôŒ»òX›à›ö[ôŒ¬üN¬ù\Hô\XŸ[Y[ùô\]Y\›H¬àYàù[Xô\é»ô\]Y\›õŒà›ö[ôŒ»X]\öX[€ŸNà›ö[ôŒ»\ùò[YNà›ö[ôŒ»›\›€Y\éà›ö[ôŒ¬àô\]Y\›Y]Nàù[Xô\é»\‹›YY]Nàù[Xô\é»ô[XZ[ö[ô‘]Nàù[Xô\é»ôX\€€ï\NàôYôX›àú⁄‹ùYŸHàõ›\àé¬àôX\€€ë]Z[à›ö[ôŒ»ôYYY]Nà›ö[ôŒ»›]\Œàú[ô[ô»àú\ùX[àò€€\]Yàòÿ[òŸ[Yé¬àô\]Y\›YûSò[YNà›ö[ôŒ»ô\]Y\›YûP€ŸNà›ö[ôŒ»ô\]Y\›Y]à›ö[ôŒ»€€\]Y]Œà›ö[ôŒ¬üN¬ù\Hô\XŸ[Y[ù\‹›YHH¬àYàù[Xô\é»ô\]Y\›Yàù[Xô\é»›ÿ⁄’Y“Yàù[Xô\é»›ÿ⁄’Y–€ŸNà›ö[ôŒ»]Nàù[Xô\é¬àõ›XŸSõŒà›ö[ôŒ»\‹›YYûSò[YNà›ö[ôŒ»\‹›YYûP€ŸNà›ö[ôŒ»\‹›YY]à›ö[ôŒ¬àö[ùYûSò[YOŒà›ö[ôŒ»ö[ùYûP€ŸOŒà›ö[ôŒ»ö[ùY]Œà›ö[ôŒ»õÿìõœŒà›ö[ôŒ»õŸX›[€ë]OŒà›ö[ôŒ¬üN¬ù\Hô\XŸ[Y[ù^[ÿYH»ô\]Y\›Œàô\XŸ[Y[ùô\]Y\›◊N»\‹›Y\Œàô\XŸ[Y[ù\‹›YV◊HN¬ù\Hô\XŸ[Y[ù\‹›YTô]öY]»H¬àX›[€éàúô]öY]»é»ô\]Y\›àô\XŸ[Y[ùô\]Y\›¬àYŒà›ÿ⁄’Y»	à»]òZ[XõT]Nàù[Xô\é»›YŸY]OŒàù[Xô\é»YÿXﬁTô\Ÿ\ùôY]OŒàù[Xô\é»ÿÿ][€èŒà›ö[ô»N¬à›YŸŸ\›Y]Nàù[Xô\é¬üN¬ù\Hõ‹ôXÿ\›[\‹ùH¬àYàù[Xô\é»[\‹ù⁄Ÿ[éà›ö[ôŒ»ö[Sò[YNà›ö[ôŒ»€›\òŸPÿ[›[]Y]à›ö[ôŒ¬àõ›–€›[ùàù[Xô\é»X]\öX[€›[ùàù[Xô\é»›[]Nàù[Xô\é»›]\Œà›ö[ôŒ¬à[\‹ùYûSò[YNà›ö[ôŒ»[\‹ùYûP€ŸNà›ö[ôŒ»‹ôX]Y]à›ö[ôŒ»X›]ò]Y]Œà›ö[ô»ù[¬üN¬ù\Hõ‹ôXÿ\›€›ô\òYŸHH¬àX]\öX[€ŸNà›ö[ôŒ»\ÿ‹ö\[€éà›ö[ôŒ»›ÿ⁄‘]Nàù[Xô\é»õ‹ôXÿ\›]Nàù[Xô\é¬à\‹]⁄YYù\í[\‹ùàù[Xô\é»›]›[ô[ô‘]Nàù[Xô\é»›ô\ôYT]Nàù[Xô\é¬à€›ô\ôYõ›Y⁄]Nà›ö[ôŒ»€›ô\ôYõ›Y⁄[YNà›ö[ôŒ»⁄‹ùYŸQ]Nà›ö[ôŒ¬à⁄‹ùYŸU[YNà›ö[ôŒ»ö\ú›⁄‹ùYŸT]Nàù[Xô\é»›[⁄‹ùYŸNàù[Xô\é¬àô[XZ[ö[ô‘›ÿ⁄–Yù\ëõ‹ôXÿ\›àù[Xô\é»›]\Œàò€›ô\ôYàú⁄‹ùYŸHàõõ◊‹›ÿ⁄»é¬àòX›‹öY\Œà›ö[ô÷◊N»^\’‘⁄‹ùYŸNàù[Xô\àù[¬à[Y[[ôOŒà\úò^O»[]ô\ûQ]Nà›ö[ôŒ»[]ô\ûU[YNà›ö[ôŒ»[X[ô]Nàù[Xô\é»õ⁄ôX›Yò[[òŸNàù[Xô\àOé¬àö\⁄—‹õ›\àõ›ô\ôYHàù⁄][å»àù⁄][ç»àù⁄][åMàõ›ô\åMé¬üN¬ù\Hõ‹ôXÿ\››[[X\ûHH¬àX]\öX[€›[ùàù[Xô\é»›ÿ⁄‘]Nàù[Xô\é»›]›[ô[ô‘]Nàù[Xô\é»›ô\ôYT]Nàù[Xô\é¬à›[⁄‹ùYŸNàù[Xô\é»€›ô\ôYX]\öX[Œàù[Xô\é»⁄‹ùYŸSX]\öX[Œàù[Xô\é¬àö\⁄—‹õ›\ŒàôX€‹ôõ›ô\ôYHàù⁄][å»àù⁄][ç»àù⁄][åMàõ›ô\åMãù[Xô\èé¬üN¬ù\Hõ‹ôXÿ\›ô[ôH»]Nà›ö[ôŒ»[X[ô]Nàù[Xô\é»›[][]]ôQ[X[ôàù[Xô\é»õ⁄ôX›Y›ÿ⁄Œàù[Xô\é»⁄‹ùYŸT\ùŒàù[Xô\àN¬ù\Hõ‹ôXÿ\›^[ÿYH¬àX›]ôR[\‹ùàõ‹ôXÿ\›[\‹ùù[»[\‹ùŒàõ‹ôXÿ\›[\‹ù◊N¬à€›ô\òYŸNàõ‹ôXÿ\›€›ô\òYŸV◊N»›[[X\ûNàõ‹ôXÿ\››[[X\ûHù[»ô[ôŒàõ‹ôXÿ\›ô[ô◊N»ÿ[›[]Y]Œà›ö[ôŒ»\úõ‹èŒà›ö[ôŒ¬üN¬ù\Hõ‹ôXÿ\›\ÿYõ›»H¬à€›\òŸRŸ^Nà›ö[ôŒ»X]\öX[€ŸNà›ö[ôŒ»\ÿ‹ö\[€éà›ö[ôŒ»[]ô\ûQ]Nà›ö[ôŒ¬à[]ô\ûU[YNà›ö[ôŒ»õŸ]Nàù[Xô\é»[]ô\ûT‹›à›ö[ôŒ»òX›‹ûNà›ö[ôŒ»⁄‹à›ö[ôŒ»[ôNà›ö[ôŒ¬üN¬ù\Hõ‹ôXÿ\›ô]öY]»H¬àö[Sò[YNà›ö[ôŒ»€›\òŸPÿ[›[]Y]à›ö[ôŒ»€›\òŸSXô[à›ö[ôŒ»€›\òŸTõ›–€›[ùàù[Xô\é¬àX]\öX[€›[ùàù[Xô\é»›[]Nàù[Xô\é»\Xÿ]Tõ›–€›[ùàù[Xô\é»õ›‹Œàõ‹ôXÿ\›\ÿYõ›÷◊N¬üN¬ù\H\Ÿ\îõ€HHúõŸX›[€ààú›ÿ⁄»àúX»àô[]ô\ûHàô\‹]⁄\ààö[ú‹X›‹àé¬ù\H\Ÿ\ëõ‹õHH»YŒàù[Xô\é»[\ﬁYYP€ŸNà›ö[ôŒ»\‹^Sò[YNà›ö[ôŒ»[XZ[à›ö[ôŒ»õ€Nà\Ÿ\îõ€N»[éà›ö[ôŒ»X›]ôNàõ€€X[é»\õZ\‹⁄[€úŒà\\õZ\‹⁄[€ñ◊HN¬ù\H]Y]Ÿ»H¬àYàù[Xô\é»[Ÿ[RŸ^Nà›ö[ôŒ»[Ÿ[SXô[à›ö[ôŒ»X›[€íŸ^Nà›ö[ôŒ»X›[€ìXô[à›ö[ôŒ¬à[ù]U\Nà›ö[ôŒ»[ù]RYà›ö[ôŒ»›[[X\ûNà›ö[ôŒ»]Z[ú€€éà›ö[ôŒ¬àôYõ‹ôRú€€éà›ö[ôŒ»Yù\íú€€éà›ö[ôŒ»X›‹ê€ŸNà›ö[ôŒ»X›‹ìò[YNà›ö[ôŒ¬àX›‹ë[XZ[à›ö[ôŒ»X›‹îõ€Nà›ö[ôŒ»\Yô\‹Œà›ö[ôŒ»‹ôX]Y]à›ö[ôŒ¬üN¬Çò€€ú›ì”W”PëSŒàôX€‹ô›ö[ôÀ›ö[ôœàH¬àYZ[éà∏.'8..x.bx.%8..x.`x.)x.(¯.,8.&∏.&àãàõŸX›[€éàîõŸX›[€àãà›ÿ⁄Œàî›ÿ⁄»ãàXŒàîP»ãà[]ô\ûNàë[]ô\ûHãà\‹]⁄\éà∏.'8..x.bx."8.,x.%8.!¯.,∏.&H
+YÿXﬁJHãà[ú‹X›‹éà∏.'8..x.bx.%x.(¯.)¯."8.!¯.,∏.&H
+YÿXﬁJHãüN¬ò€€ú›STW’T—Téà\Ÿ\ëõ‹õHH»[\ﬁYYP€ŸNààã\‹^Sò[YNààã[XZ[ààãõ€NàúõŸX›[€àã[éààãX›]ôNàùYK\õZ\‹⁄[€úŒà◊HN¬Çò€€ú›êUéà\úò^O»Ÿ^NàYŸRŸ^N»Xô[à›ö[ôŒ»X€€éà›ö[ô»OàH¬à»Ÿ^Nàô\⁄õÿ\ôãXô[à∏.*¯.&x.bx.,∏.*¯.)x.,x. HãX€€éà∏£ ààKà»Ÿ^Nàú›ÿ⁄»ãXô[àî›ÿ⁄»ãX€€éà∏•©ààKà»Ÿ^Nàú›ÿ⁄ÀX[ãXô[àî›ÿ⁄»8.%¯.,x.bx.!¯.*¯.(x.%ãX€€éà∏•©ààKà»Ÿ^NàõX[ùX[\›ÿ⁄»ãXô[à∏.(¯.,x.&∏.`8. ∏.bx.,à›ÿ⁄»8.`x.&∏.&∏.!8.-x.(∏.c8.`8.+x.!»ãX€€éàªÔ"»àKà»Ÿ^Nàú›ÿ⁄ÀX€›[ùãXô[à∏.%x.(¯.)¯."8.&x.,x.&ã¯.&¯.(¯.,x.&∏.(∏.+x.%8.*∏.-8.bx.&x.`8.%8.-¯.+x.&HãX€€éà∏¢b»àKà»Ÿ^Nàôõ‹ôXÿ\›ãXô[àëõ‹ôXÿ\››ÿ⁄»ãX€€éà∏•©»àKà»Ÿ^Nàú\ù»ãXô[à∏.%¯.,8.`8.&∏.-x.(∏.&H\ùãX€€éà∏•©ààKà»Ÿ^NàùY‹»ãXô[à∏.'∏.-8.(x.'∏.cY»ãX€€éà∏•©àKà»Ÿ^Nàú[àãXô[à∏.`x.'8.&x.*∏.b8.!¯.!¯.,∏.&H
+YJHãX€€éà∏•©àKà»Ÿ^Nàõ›ô\ôYHãXô[à∏.!¯.,∏.&x.%x.-8.%8.)x.&à»8.!8.bx.,∏.!¯.*∏.b8.!»ãX€€éààHàKà»Ÿ^Nàò\úò[ôŸHãXô[à∏."8.,x.%8.!¯.,∏.&HãX€€éà∏°ÈHàKà»Ÿ^Nàúô\XŸ[Y[ùãXô[à∏.`8.&∏.-8. x.!¯.,∏.&x.%¯.%8.`x.%¯.&HãX€€éà∏°ÆààKà»Ÿ^Nàô\‹]⁄ãXô[à∏.%x.(¯.)¯."8.`x.)x.,8. ∏.,∏.(∏.+x.+x. HãX€€éà∏£%»àKà»Ÿ^Nàô^‹ù»ãXô[à∏.(¯.,∏.(∏. x.,∏.(¯.*∏.b8.!¯.+x.+x. HãX€€éà∏•¨HàKà»Ÿ^Nàúô\‹ù»ãXô[à∏.(¯.,∏.(∏.!¯.,∏.&HãX€€éà∏•©HàKà»Ÿ^Nàö\›‹ûHãXô[à∏.&¯.(¯.,8.)¯.,x.%x.-ãX€€éà∏•Ì»àKà»Ÿ^NàúŸ][ô‹»ãXô[à∏.%x.,x.bx.!¯.!8.b8.,àãX€€éà∏¶¶HàKà»Ÿ^Nàù\Ÿ\ú»ãXô[à∏.'8..x.bx.`¯."∏.bx.!¯.,∏.&HãX€€éà∏¶fHàKóN¬Çò€€ú›QW—UW‘Q—TŒàYŸRŸ^V◊HH»ô\⁄õÿ\ôãú[àãõ›ô\ôYHãò\úò[ôŸHãô\‹]⁄ãô^‹ù»ãúô\‹ù»ãö\›‹ûHóN¬Çò€€ú›Q—W“—VT»Hô]»Ÿ]YŸRŸ^OäÀããìêUãõX\
+
+][JHOà][KöŸ^JKùô\öYûHãõ›ô\ôYHóJN¬Çôù[ò›[€àYŸQúõ€U\õ
+
+NàYŸRŸ^Hù[¬àYà
+\[Ÿà⁄[ô›»OOHù[ôYö[ôYäHô]\õàù[¬à€€ú›ÿ[ôY]HHô]»TìŸX\ò⁄\ò[\ ⁄[ô›Àõÿÿ][€ãúŸX\ò⁄
+KôŸ]
+úYŸHäN¬àô]\õàÿ[ôY]H	âàQ—W“—VTÀö\ ÿ[ôY]H\»YŸRŸ^JH»ÿ[ôY]H\»YŸRŸ^Hàù[¬üBÇôù[ò›[€àYŸQúõ€Sÿÿ][€ä
+NàYŸRŸ^Hù[¬àYà
+\[Ÿà⁄[ô›»OOHù[ôYö[ôYäHô]\õàù[¬à€€ú›ÿ[ôY]HHYŸQúõ€U\õ
+
+H⁄[ô›Àõÿÿ[›‹òYŸKôŸ]][Jö⁄]X›\úô[ù\YŸHäN¬àô]\õàÿ[ôY]H	âàQ—W“—VTÀö\ ÿ[ôY]H\»YŸRŸ^JH»ÿ[ôY]H\»YŸRŸ^Hàù[¬üBÇôù[ò›[€à\]TYŸSÿÿ][€äô^àYŸRŸ^K[ŸNàú\⁄àúô\XŸHàHú\⁄äH¬à€€ú›\õHô]»Tì
+⁄[ô›Àõÿÿ][€ãöôYäN¬àYà
+ô^OOHô\⁄õÿ\ôäH\õúŸX\ò⁄\ò[\Àô[]JúYŸHäN¬à[ŸH\õúŸX\ò⁄\ò[\ÀúŸ]
+úYŸHãô^
+N¬à⁄[ô›Àõÿÿ[›‹òYŸKúŸ]][Jö⁄]X›\úô[ù\YŸHãô^
+N¬à€€ú›\ôŸ]H	›\õú]ò[Y_I›\õúŸX\ò⁄I›\õö\⁄X¬àYà
+[ŸHOOHúô\XŸHäH⁄[ô›Àö\›‹ûKúô\XŸT›]J»⁄]YŸNàô^Kàã\ôŸ]
+N¬à[ŸH⁄[ô›Àö\›‹ûKú\⁄›]J»⁄]YŸNàô^Kàã\ôŸ]
+N¬üBÇò€€ú›TìRT‘“S”ó“SàôX€‹ôYŸRŸ^K›ö[ôœàH¬à\⁄õÿ\ôà∏.(8.,∏.'∏.(¯.)¯.(HYH8.`x.)x.,8.*∏.%∏.,∏.&x.,8.!¯.,∏.&Hãà›ÿ⁄Œà∏.(¯.,x.&àY»8.`8. ∏.bx.,à›ÿ⁄»8.`x.)x.,8.%8..x.(∏.+x.%8.!8.!¯.`8.*¯.)x.-¯.+Hãàú›ÿ⁄ÀX[éà∏.%8..x.(8.,∏.'∏.(¯.)¯.(H›ÿ⁄»8.%¯..8. H\ù8.(¯.)¯.(x.(∏.+x.%
+8.*∏.-8.%¯.&8.-8.c8.(¯.,∏.(∏.)x.,8.`8.+x.-x.(∏.%8.`x.)x.,^Ÿ[8.`8.)x.-¯.+x. x.`x.(∏. x.%8.bx.,∏.&x.)x.b8.,∏.! HãàõX[ùX[\›ÿ⁄»éà∏.!8.-x.(∏.c8.(¯.,x.&∏.!¯.,∏.&x.`8. ∏.bx.,∏.`x.)x.,8.*∏.(¯.bx.,∏.!»Y»8.%x.,∏.(x."8.,¯.&x.)¯.&x.&∏.(¯.(¯."8..8.%x.b8.+x. x.)x.b8.+x.!»ãàú›ÿ⁄ÀX€›[ùéà∏.*∏.`x. x.&x.%x.(¯.)¯."8.&x.,x.&∏.`x.)x.,8.&¯.(¯.,x.&∏.(∏.+x.%8.%¯.-x.)x.,“U›ÿ⁄»Y»ãàõ‹ôXÿ\›à∏.&x.,¯.`8. ∏.bx.,àõ‹ôXÿ\›8.)x..x. x.!8.bx.,∏.`x.)x.,8.%x.(¯.)¯."8.)¯.b8.,∏.(∏.+x.%›ÿ⁄»8.*∏.b8.!¯.a8.%8.bx.%∏.-∏.!¯.)¯.,x.&x.a8.*¯.&Hãà\ùŒà∏.%¯.,8.`8.&∏.-x.(∏.&H\ù8.`x.)x.,8.(¯..x.&¯."∏.-8.bx.&x.!¯.,∏.&HãàY‹Œà∏.%¯.,8.`8.&∏.-x.(∏.&H\ù8.*∏.(¯.bx.,∏.!¯.`x.)x.,8.'∏.-8.(x.'∏.cY»ãà›ô\ôYNà∏.%8..x.!¯.,∏.&x.%x.-8.%8.)x.&à»8.!8.bx.,∏.!¯.*∏.b8.!¯.%¯..8. H\ù8.%¯..8. x.(¯.+x.&à8.%¯..8. HêP»8.`x.)x.,8.`8.&¯.-8.%8."8.+x.`x.*∏.%8.!¯.!¯.,∏.&x.!8.bx.,∏.!»ãà[éà∏.&x.,¯.`8. ∏.bx.,à8.%x.(¯.)¯."8.*∏.+x.&à8.`x.)x.,8.)x.&∏.`x.'8.&HYHãà\úò[ôŸNà∏.`8.)x.-¯.+x. HYH8.`x.)x.,8.(∏.-8.!»“UY»8.`8.'∏.-¯.b8.+x."8.,x.%8.!¯.,∏.&x.(¯.+x. ∏.,∏.(àãàô\XŸ[Y[ùàîP»8. ∏.+x.`8.&∏.-8. x.!¯.,∏.&x.`8.*∏.-x.(ã¯.!¯.,∏.&x. ∏.,∏.%8.`x.)x.,8.%¯.-x.(x."8.,x.%8.!¯.,∏.&x.(∏.-8.!»“UY»8.`8.'∏.-¯.b8.+x.%x.,x.%›ÿ⁄»ãàô\öYûNà∏.*∏.`x. x.&x.`8.%¯.-x.(∏.&∏.(¯..x.&»X\›\à8. x.b8.+x.&x. ∏.,∏.(∏.+x.+x. H
+8.a8.(x.b8.%x.,x.%›ÿ⁄À—YJHãà\‹]⁄à∏.(∏.-8.!»Y»8.)x..x. x.!8.bx.,∏.`8.'∏.-¯.b8.+x.%x.,x.%›ÿ⁄»8.`x.)x.,YHãà^‹ùŒà∏.%8..x.(¯.,∏.(∏. x.,∏.(¯.%¯.-x.b8.*∏.b8.!¯.+x.+x. x.`x.)x.bx.)»ãàô\‹ùŒà∏.%8..x.`x.)x.,8.*∏.b8.!¯.+x.+x. x.(¯.,∏.(∏.!¯.,∏.&Hãà\›‹ûNà∏.%x.(¯.)¯."8.*∏.+x.&∏.&¯.(¯.,8.)¯.,x.%x.-8.(¯.,∏.(∏. x.,∏.(»ãàŸ][ô‹Œà∏.%x.,x.bx.!¯.!8.b8.,∏.(¯.,8.&∏.&∏.`x.)x.,8.(¯..x.&¯."∏.-8.bx.&x.!¯.,∏.&Hãà\Ÿ\úŒà∏.`8.'∏.-8.b8.(x.'8..x.bx.`¯."∏.bx.`x.)x.,8. x.,¯.*¯.&x.%8.*∏.-8.%¯.&8.-8.cãüN¬Çò€€ú›Q—W‘’PïUNàôX€‹ôYŸRŸ^K›ö[ôœàH¬à\⁄õÿ\ôà∏.(8.,∏.'∏.(¯.)¯.(x. x.,∏.(¯.*∏.b8.!¯.!¯.,∏.&x.`x.)x.,8.*∏.%∏.,∏.&x.,8.)x.b8.,∏.*∏..8.%ãàú›ÿ⁄ÀX[éà∏.%8..H›ÿ⁄»8.%¯..8. H\ù8.(¯.)¯.(x.(∏.+x.%8.%8..HY»»õÿà8.`x.)x.,8.*∏.b8.!¯.+x.+x. H^Ÿ[8.`∏.%8.(∏.`x.(∏. x."8.,∏. x.*¯.&x.bx.,∏.(¯.,x.&∏.`8. ∏.bx.,àãà›ÿ⁄Œà∏.*∏.`x. x.&x.(¯.,x.&∏.`8. ∏.bx.,à8.%x.(¯.)¯."8.*∏.+x.&∏.(∏.+x.%8.!8.!¯.`8.*¯.)x.-¯.+H8.`x.)x.,8.&¯.(¯.,8.)¯.,x.%x.-›ÿ⁄»ãàõX[ùX[\›ÿ⁄»éà∏.!8.-x.(∏.c8.(¯.,x.&∏.`8. ∏.bx.,à8.`x.&∏.b8.!¯."8.,¯.&x.)¯.&x.%x.,∏.(x.&∏.(¯.(¯."8..8.%x.b8.+x. x.)x.b8.+x.!»8.`x.)x.,8.*∏.(¯.bx.,∏.!»Y»8.+x.,x.%x.`∏.&x.(x.,x.%x.-ãàú›ÿ⁄ÀX€›[ùéà∏.*∏.`x. x.&x.`x.)x.,8.&∏.,x.&x.%¯.-∏. x.(∏.+x.%8."8.(¯.-8.!¯.%¯.-x.)x.,Y»8.'∏.(¯.bx.+x.(x.&¯.(¯.,x.&∏.(∏.+x.%›ÿ⁄»8.(¯.)¯.(Hãàõ‹ôXÿ\›à∏.&x.,¯.`8. ∏.bx.,àõ‹ôXÿ\›8.(¯.,∏.(∏.)¯.,x.&x.`x.)x.,8.%x.(¯.)¯."8.*∏.+x.&∏.)¯.b8.,∏.(∏.+x.%›ÿ⁄»8.*∏.b8.!¯.a8.%8.bx.%∏.-∏.!¯.)¯.,x.&x.a8.*¯.&Hãà\ùŒà∏.`8.'∏.-8.b8.(H8.&x.,¯.`8. ∏.bx.,à8.`x.)x.,8."8.,x.%8. x.,∏.(¯.(¯..x.&¯."∏.-8.bx.&x.!¯.,∏.&x. ∏.+x.!¯.`x.%x.b8.)x.,\ùãàY‹Œà∏.%¯.,8.`8.&∏.-x.(∏.&H\ù8.*∏.(¯.bx.,∏.!»Y»8.`x.)x.,8.'∏.-8.(x.'∏.cY»8.(¯.,x.&∏.!¯.,∏.&x.`8. ∏.bx.,à›ÿ⁄»ãà›ô\ôYNà∏.!¯.,∏.&x.!8.bx.,∏.!¯.*∏.b8.!¯.%¯..8. H\ù8.%¯..8. x.)¯.,x.&x.%¯.-x.b8.%¯..8. x.(¯.+x.&à8.`x.)x.,8.%¯..8. HêP»ãà[éà∏.%x.(¯.)¯."8.*∏.+x.&∏.`x.'8.&x.*∏.b8.!¯.!¯.,∏.&x."8.,∏. x.a8.'¯.)x.c^Ÿ[ãà\úò[ôŸNà∏.'8..x.bx."8.,x.%8.!¯.,∏.&x.`8.)x.-¯.+x. HYH8.`x.)x.bx.)¯.(∏.-8.!»“U›ÿ⁄»Y»8.`8.'∏.-¯.b8.+x.&∏.,x.&x.%¯.-∏. x.!¯.,∏.&x.(¯.+x. ∏.,∏.(àãàô\XŸ[Y[ùàîP»8.`x."8.bx.!¯. ∏.+x.`8.&∏.-8. x.!¯.,∏.&x.%¯.%8.`x.%¯.&H8.%¯.-x.(x."8.,x.%8.!¯.,∏.&x.(∏.-8.!»“UY»8.`x.)x.,8.'∏.-8.(x.'∏.c8.`¯.&∏.`x."8.bx.!¯.+x.+x. Hãàô\öYûNà∏.*∏.`x. x.&x."∏.-8.bx.&x.!¯.,∏.&x.`¯.&x. x.)x.b8.+x.!¯.`8.'∏.-¯.b8.+x.`8.%¯.-x.(∏.&∏.(¯..x.&»X\›\à8.`x.)x.,8.!¯.,∏.&x.%¯.-x.b8.%x.bx.+x.!¯.*∏.b8.!¯.+x.+x. H8. x.b8.+x.&x.(∏.-¯.&x.(∏.,x.&x. ∏.,∏.(∏.+x.+x. Hãà\‹]⁄à∏.'8..x.bx.%x.(¯.)¯."8.*∏.`x. x.&H“UY»8.%¯.-x.b8."8.,x.%8.!¯.,∏.&x.`x.)x.bx.)¯.`x.)x.,Y»8.)x..x. x.!8.bx.,∏.`¯.*¯.bx.%x.(¯.!¯. x.,x.&x. x.b8.+x.&x. ∏.,∏.(∏.+x.+x. Hãà^‹ùŒà∏.(¯.,∏.(∏. x.,∏.(¯.%¯.-x.b8.%x.,x.%8.(∏.+x.%8.`x.)x.,8.*∏.b8.!¯.+x.+x. x.`x.)x.bx.)»ãàô\‹ùŒà∏.*∏.(¯..8.&¯.'8.)x. x.,∏.(¯.*∏.b8.!¯.!¯.,∏.&x.%x.,∏.(x.)¯.,x.&x.`x.)x.,8.`∏.(¯.!¯.!¯.,∏.&Hãà\›‹ûNà∏.%x.(¯.)¯."8.*∏.+x.&∏.&¯.(¯.,8.)¯.,x.%x.-8. x.,∏.(¯.*∏.`x. x.&x.`x.)x.,8.%x.,x.%8.(∏.+x.%ãàŸ][ô‹Œà∏. x.,¯.*¯.&x.%8.!8.b8.,∏. x.,∏.(¯.%¯.,¯.!¯.,∏.&x. ∏.+x.!¯.(¯.,8.&∏.&àãà\Ÿ\úŒà∏.'8..x.bx.`¯."∏.bx.!¯.,∏.&x.%¯.-x.b8.(x.-x.*∏.-8.%¯.&8.-8.c8.`8. ∏.bx.,∏.%∏.-∏.!¯.(¯.,8.&∏.&àãüN¬Çù\Hô\öYûUô\ôX›HúôXYHàúôXYW€õ⁄[Y»àú⁄‹ùàõ›ô\ààõõ◊ŸYHàò[XöY›[›\»àò[ôXYHàòòY›Y»àúZ\ó€Z\€X]⁄é¬ù\H\‹]⁄⁄]Ÿ[X›[€àH¬àX⁄“Yàù[Xô\é»YS[ôRYàù[Xô\é»ÿZ][ô‘]Nàù[Xô\é»X⁄ŸYûSò[YNà›ö[ôŒ»X⁄ŸY]à›ö[ôŒ¬à›ÿ⁄’Y“Yàù[Xô\é»›ÿ⁄’Y–€ŸNà›ö[ôŒ»X]\öX[€ŸNà›ö[ôŒ»õÿìõŒà›ö[ôŒ¬àõŸX›[€ë]Nà›ö[ôŒ»”õŒà›ö[ôŒ»Ÿ\Nàù[Xô\é»òX›à›ö[ôŒ»[ôNà›ö[ôŒ¬à⁄‹à›ö[ôŒ»[]ô\ûQ]Nà›ö[ôŒ»[]ô\ûU[YNà›ö[ôŒ¬üN¬ù\Hô\öYûTô\›[H¬àX›[€éàùô\öYûHé¬àô\ôX›àô\öYûUô\ôX›¬àY\‹ÿYŸOŒà›ö[ôŒ¬àYœŒà»ò]‘^[ÿYà›ö[ôŒ»Y“Yà›ö[ôŒ»X]\öX[€ŸNà›ö[ôŒ»]Nàù[Xô\é»[ö]à›ö[ôŒ»”õŒà›ö[ôŒ»Ÿ\Nàù[Xô\é»[]ô\ûQ]Nà›ö[ôŒ»[ôNà›ö[ôŒ»⁄‹à›ö[ôŒ»ÿÿ][€éà›ö[ô»N¬àX\›\èŒà»X]\öX[€ŸNà›ö[ôŒ»\ùò[YNà›ö[ôŒ»›\›€Y\éà›ö[ôŒ»\“[XYŸNàõ€€X[àN¬àYOŒà»Yàù[Xô\é»”õŒà›ö[ôŒ»Ÿ\Nàù[Xô\é»X]\öX[€ŸNà›ö[ôŒ»X]\öX[\ÿ‹ö\[€éà›ö[ôŒ»òX›à›ö[ôŒ»[ôNà›ö[ôŒ»⁄‹à›ö[ôŒ»⁄]Nà›ö[ôŒ»ô\T]Nàù[Xô\é»[]ô\ûQ]Nà›ö[ôŒ»[]ô\ûU[YNà›ö[ôŒ»[ôXYT]Nàù[Xô\é»ô[XZ[ö[ô—YNàù[Xô\é»õ⁄ôX›Y]Nàù[Xô\é»ô[XZ[ö[ô–Yù\éàù[Xô\àN¬à›YŸY]òZ[Œàù[Xô\é¬àZ\ôY⁄]Œà»X⁄“YŒàù[Xô\é»›ÿ⁄’Y“YŒàù[Xô\é»›ÿ⁄’Y–€ŸOŒà›ö[ôŒ»X]\öX[€ŸOŒà›ö[ôŒ»õÿìõœŒà›ö[ôŒ»õŸX›[€ë]OŒà›ö[ôŒ»ÿZ][ô‘]OŒàù[Xô\àN¬üN¬Çôù[ò›[€àù[Xô\äò[YNà[ö€õ›€äH¬à€€ú›\úŸYHù[Xô\ä›ö[ô ò[YHœ»àäKúô\XŸJÀŸÀàäJN¬àô]\õàù[Xô\ãö\—ö[ö]J\úŸY
+H»X]úõ›[ô
+\úŸY
+Hà¬üBÇôù[ò›[€à^
+ò[YNà[ö€õ›€äH¬àô]\õà›ö[ô ò[YHœ»àäKùö[J
+N¬üBÇôù[ò›[€àõ‹õX[^ôQ]Jò[YNà[ö€õ›€ãﬁà\[Ÿà[\‹ù
+ûﬁäJH¬àYà
+ò[YH[ú›[òŸ[Ÿà]H	âàSù[Xô\ãö\”òSäò[YKôŸ][YJ
+JJH¬àô]\õà	›ò[YKôŸ]ù[YX\ä
+_KI‘›ö[ô ò[YKôŸ][€ù
+
+H
+»JKúY›\ù
+ãåä_KI‘›ö[ô ò[YKôŸ]]J
+JKúY›\ù
+ãåä_X¬àBàYà
+\[Ÿàò[YHOOHõù[Xô\àäH¬à€€ú›\úŸYHﬁî‘—ãú\úŸWŸ]Wÿ€ŸJò[YJN¬àYà
+\úŸY
+Hô]\õà	‹\úŸYû_KI‘›ö[ô \úŸYõJKúY›\ù
+ãåä_KI‘›ö[ô \úŸYô
+KúY›\ù
+ãåä_X¬àBà€€ú›ò]»H^
+ò[YJKú‹]
+àäVÃN¬à€€ú›ZHHò]ÀõX]⁄
+◊äÃKüJW ÃKüJW ÕJI N¬àYà
+ZJHô]\õà	›ZVÃ◊_KI›ZVÃóKúY›\ù
+ãåä_KI›ZVÃWKúY›\ù
+ãåä_X¬à€€ú›\€»Hò]ÀõX]⁄
+◊äÕJKJÃKüJKJÃKüJI N¬àYà
+\€ Hô]\õà	⁄\€÷ÃW_KI⁄\€÷ÃóKúY›\ù
+ãåä_KI⁄\€÷Ã◊KúY›\ù
+ãåä_X¬àô]\õààé¬üBÇôù[ò›[€àõ‹õX[^ôU[YJò[YNà[ö€õ›€äH¬àYà
+ò[YH[ú›[òŸ[Ÿà]JHô]\õà	‘›ö[ô ò[YKôŸ]›\ú 
+JKúY›\ù
+ãåä_Nâ‘›ö[ô ò[YKôŸ]Z[ù]\ 
+JKúY›\ù
+ãåä_X¬àYà
+\[Ÿàò[YHOOHõù[Xô\àà	âàò[YHèH	âàò[YHJH¬à€€ú›Z[ù]\»HX]úõ›[ô
+ò[YH
+àç
+àå
+N¬àô]\õà	‘›ö[ô X]ôõ€‹äZ[ù]\»»å
+H	Hç
+KúY›\ù
+ãåä_Nâ‘›ö[ô Z[ù]\»	Hå
+KúY›\ù
+ãåä_X¬àBàô]\õà^
+ò[YJKú€XŸJJN¬üBÇôù[ò›[€àõ]
+ò[YNàù[Xô\äH¬àô]\õàù[Xô\äò[YH
+Kù”ÿÿ[T›ö[ô ùUäN¬üBÇôù[ò›[€àõ‹õX]]Jò[YNà›ö[ô H¬àYà
+]ò[YJHô]\õà∏†%é¬à€€ú›ﬁYX\ã[€ù^WHHò[YKú‹]
+ãHäN¬àô]\õà	Ÿ^_K…€[€ùK…ﬁYX\üX¬üBÇôù[ò›[€àõ‹õX]]U[YJò[YNà›ö[ô H¬à€€ú›õ‹õX[^ôYHò[YKö[ò€Y\ ïäH»ò[YHà	›ò[YKúô\XŸJàãïä_Vò¬à€€ú›]HHô]»]Jõ‹õX[^ôY
+N¬àYà
+ù[Xô\ãö\”òSä]KôŸ][YJ
+JJHô]\õàò[YN¬àô]\õàô]»[ùë]U[YQõ‹õX]
+ùUã»]T›[Nàú⁄‹ùã[YT›[Nàú⁄‹ùàJKôõ‹õX]
+]JN¬üBÇôù[ò›[€àõ‹õX]]S€õJò[YNà›ö[ô H¬àYà
+]ò[YJHô]\õà∏†%é¬à€€ú›õ‹õX[^ôYHò[YKö[ò€Y\ ïäH»ò[YHà	›ò[YKúô\XŸJàãïä_Vò¬à€€ú›]HHô]»]Jõ‹õX[^ôY
+N¬àYà
+ù[Xô\ãö\”òSä]KôŸ][YJ
+JJHô]\õàõ‹õX]]Jò[YKú€XŸJL
+JN¬àô]\õà	‘›ö[ô ]KôŸ]]J
+JKúY›\ù
+ãåä_K…‘›ö[ô ]KôŸ][€ù
+
+H
+»JKúY›\ù
+ãåä_K…Ÿ]KôŸ]ù[YX\ä
+_X¬üBÇã äà8.`x.&¯.)x.!¯.`8.)¯.)x.,∏."8.,∏. x.$8.,∏.&x. ∏.bx.+x.(x..x.)H
+U»8.a8.(x.b8.(x.-x.`∏."¯.&x.%x.b8.+x.%¯.bx.,∏.(äH8.`8.&¯.a¯.&H]H8.%x.,∏.(x.`8.)¯.)x.,∏.`8.!8.(¯.-¯.b8.+x.!¯.'8..x.bx.`¯."∏.bH
+ã¬ôù[ò›[€à”ÿÿ[]Jò[YNà›ö[ô H¬àYà
+]ò[YJHô]\õàù[¬à€€ú›õ‹õX[^ôYHò[YKö[ò€Y\ ïäH»ò[YHà	›ò[YKúô\XŸJàãïä_Vò¬à€€ú›]HHô]»]Jõ‹õX[^ôY
+N¬àô]\õàù[Xô\ãö\”òSä]KôŸ][YJ
+JH»ù[à]N¬üBÇôù[ò›[€àõ‹õX][YJò[YNà›ö[ô H¬à€€ú›]HH”ÿÿ[]Jò[YJN¬àYà
+Y]JHô]\õà∏†%é¬àô]\õàô]»[ùë]U[YQõ‹õX]
+ùUã»›\éàåãYY⁄]ãZ[ù]NàåãYY⁄]àJKôõ‹õX]
+]JN¬üBÇã äà8.)¯.,x.&x.&x.-x.bx.%x.,∏.(x.`8.)¯.)x.,∏.`8.!8.(¯.-¯.b8.+x.!¯.'8..x.bx.`¯."∏.bH8.a8.(x.b8.`¯."∏.bU»8.(x.-8."x.,8.&x.,x.bx.&x.(∏.+x.%8.%x.+x.&x.`8.(∏.a¯.&x."8.,8. ∏.bx.,∏.(x.)¯.,x.&x.'8.-8.%
+ã¬ôù[ò›[€à\’Ÿ^Jò[YNà›ö[ô H¬à€€ú›]HH”ÿÿ[]Jò[YJN¬àYà
+Y]JHô]\õàò[ŸN¬à€€ú›õ›»Hô]»]J
+N¬àô]\õà]KôŸ]ù[YX\ä
+HOOHõ›ÀôŸ]ù[YX\ä
+Bà	âà]KôŸ][€ù
+
+HOOHõ›ÀôŸ][€ù
+
+Bà	âà]KôŸ]]J
+HOOHõ›ÀôŸ]]J
+N¬üBÇôù[ò›[€à[
+ò[YNà[ö€õ›€äH¬àô]\õà›ö[ô ò[YHœ»àäKúô\XŸJ÷…èàâ◊KŸÀ
+⁄\òX›\äHOà
+»âàéàâò[\»ãèéàâõ»ãèàéàâô›»ã	»âŒàâú][›»ãâ»éàâàÃŒN»àJVÿ⁄\òX›\óH⁄\òX›\äN¬üBÇò€€ú›êSë“”“◊—UW’SQW—ì‘ìPUTàHô]»[ùë]U[YQõ‹õX]
+ô[ãP–Hã¬à[YVõ€ôNàê\⁄XK–ò[ô⁄€⁄»ãàYX\éàõù[Y\öX»ãà[€ùàåãYY⁄]ãà^NàåãYY⁄]ãà›\éàåãYY⁄]ãàZ[ù]NàåãYY⁄]ãà›\êﬁX€Nàöå»ãüJN¬Çôù[ò›[€àò[ô⁄€⁄—]U[YRŸ^Jò[YHHô]»]J
+JH¬à€€ú›\ù»HÿöôX›ôúõ€Q[ùöY\ àêSë“”“◊—UW’SQW—ì‘ìPUTãôõ‹õX]‘\ù ò[YJBàôö[\ä
+\ù
+HOà\ùù\HOOHõ]\ò[äBàõX\
+
+\ù
+HOà‹\ùù\K\ùùò[YWJKà
+N¬àô]\õà	‹\ùÀûYX\üKI‹\ùÀõ[€ùKI‹\ùÀô^_U	‹\ùÀö›\üNâ‹\ùÀõZ[ù]_X¬üBÇôù[ò›[€à\úŸP‹›ä^ò[YNà›ö[ô H¬à€€ú›õ›‹Œà›ö[ô÷◊V◊HH◊N¬à]õ›Œà›ö[ô÷◊HH◊N¬à]Ÿ[Hàé¬à]][›YHò[ŸN¬à€€ú›€›\òŸHH^ò[YKúô\XŸJ◊óQëQëãÀàäN¬àõ‹à
+][ô^H»[ô^€›\òŸKõ[ô›»[ô^
+œHJH¬à€€ú›⁄\òX›\àH€›\òŸV⁄[ô^N¬àYà
+⁄\òX›\àOOH	»â H¬àYà
+][›Y	âà€›\òŸV⁄[ô^
+»WHOOH	»â H¬àŸ[
+œH	»âŒ¬à[ô^
+œHN¬àH[ŸH][›YH\][›Y¬àH[ŸHYà
+⁄\òX›\àOOHãà	âà\][›Y
+H¬àõ›Àú\⁄
+Ÿ[
+N¬àŸ[Hàé¬àH[ŸHYà
+
+⁄\òX›\àOOHóàà⁄\òX›\àOOHóàäH	âà\][›Y
+H¬àYà
+⁄\òX›\àOOHóàà	âà€›\òŸV⁄[ô^
+»WHOOHóàäH[ô^
+œHN¬àõ›Àú\⁄
+Ÿ[
+N¬àYà
+õ›Àú€€YJ
+ò[YJHOàò[YKùö[J
+JJHõ›‹Àú\⁄
+õ› N¬àõ›»H◊N¬àŸ[Hàé¬àH[ŸHŸ[
+œH⁄\òX›\é¬àBàõ›Àú\⁄
+Ÿ[
+N¬àYà
+õ›Àú€€YJ
+ò[YJHOàò[YKùö[J
+JJHõ›‹Àú\⁄
+õ› N¬àô]\õàõ›‹Œ¬üBÇôù[ò›[€àõ‹õX[^ôQõ‹ôXÿ\›]Jò[YNà›ö[ô H¬à€€ú›X]⁄Hò[YKùö[J
+KõX]⁄
+◊äÃKüJW ÃKüJW ÕJI N¬àYà
+[X]⁄
+Hô]\õààé¬àô]\õà	€X]⁄Ã◊_KI€X]⁄ÃóKúY›\ù
+ãåä_KI€X]⁄ÃWKúY›\ù
+ãåä_X¬üBÇôù[ò›[€àõ‹õX[^ôQõ‹ôXÿ\›[YJò[YNà›ö[ô H¬à€€ú›X]⁄Hò[YKùö[J
+KõX]⁄
+◊äÃKüJNäÃüJJŒéäÃüJJO… N¬àYà
+[X]⁄
+Hô]\õààé¬àô]\õà	€X]⁄ÃWKúY›\ù
+ãåä_Nâ€X]⁄Ãó_Nâ€X]⁄Ã◊HåüX¬üBÇò\ﬁ[ò»ù[ò›[€à\úŸQõ‹ôXÿ\›ö[Jö[Nàö[JNàõ€Z\ŸOõ‹ôXÿ\›ô]öY]œà¬à€€ú›õ›‹»H\úŸP‹›ä]ÿZ]ö[Kù^
+
+JN¬àYà
+õ›‹Àõ[ô› Hõ›»ô]»\úõ‹ä∏.a8.'¯.)x.cõ‹ôXÿ\›8.a8.(x.b8.(x.-x. ∏.bx.+x.(x..x.)HäN¬à€€ú›€›\òŸSX]⁄H
+õ›‹÷ÃVÃHàäKõX]⁄
+◊
+
+ÃKüJW ÃKüJW ÕJW  ÃKüNóÃüNóÃüJW
+K N¬àYà
+\€›\òŸSX]⁄
+Hõ›»ô]»\úõ‹ä∏.a8.(x.b8.'∏.&∏.`8.)¯.)x.,à\›ÿ[›[]H»8.`¯.&x.a8.'¯.)x.cäN¬à€€ú›€›\òŸQ]HH	‹€›\òŸSX]⁄Ã◊_KI‹€›\òŸSX]⁄ÃóKúY›\ù
+ãåä_KI‹€›\òŸSX]⁄ÃWKúY›\ù
+ãåä_X¬à€€ú›€›\òŸU[YHHõ‹õX[^ôQõ‹ôXÿ\›[YJ€›\òŸSX]⁄ÕJN¬à€€ú›€›\òŸPÿ[›[]Y]Hô]»]J	‹€›\òŸQ]_U	‹€›\òŸU[Y_JÃŒå
+Kù“T”‘›ö[ô 
+N¬à€€ú›XY\ú»Hõ›‹÷ÃWKõX\
+
+ò[YJHOàò[YKùö[J
+JN¬à€€ú›€€[[àH
+ò[YNà›ö[ô HOàXY\úÀö[ô^Ÿäò[YJN¬àõ‹à
+€€ú›ô\]Z\ôYŸà»ìX]\öX[ãë\ÿ‹ö\[€àãîõŸî]Kàãë[]ô\ûH]Hãë[]ô\ûH[YHóJH¬àYà
+€€[[äô\]Z\ôY
+H
+Hõ›»ô]»\úõ‹ä8.a8.'¯.)x.c8.a8.(x.b8.(x.-x.!8.+x.)x.,x.(x.&x.c	‹ô\]Z\ôYX
+N¬àBà€€ú›‹õ›\YHô]»X\›ö[ôÀõ‹ôXÿ\›\ÿYõ›œä
+N¬à]€›\òŸTõ›–€›[ùH¬à][ùò[Yõ›–€›[ùH¬à]\Xÿ]Tõ›–€›[ùH¬àõ‹à
+€€ú›Ÿ[»Ÿàõ›‹Àú€XŸJäJH¬à€€ú›X]\öX[€ŸHH›ö[ô Ÿ[÷ÿ€€[[äìX]\öX[äWHàäKùö[J
+Kù’\\êÿ\ŸJ
+N¬à€€ú›[]ô\ûQ]HHõ‹õX[^ôQõ‹ôXÿ\›]J›ö[ô Ÿ[÷ÿ€€[[äë[]ô\ûH]HäWHàäJN¬à€€ú›[]ô\ûU[YHHõ‹õX[^ôQõ‹ôXÿ\›[YJ›ö[ô Ÿ[÷ÿ€€[[äë[]ô\ûH[YHäWHàäJN¬à€€ú›õŸ]HHù[Xô\äŸ[÷ÿ€€[[äîõŸî]KàäWJN¬àYà
+XŸ[Àú€€YJ
+Ÿ[
+HOà›ö[ô Ÿ[àäKùö[J
+JJH€€ù[ùYN¬àYà
+[X]\öX[€ŸHY[]ô\ûQ]HY[]ô\ûU[YHõŸ]HH
+H¬à[ùò[Yõ›–€›[ù
+œHN¬à€€ù[ùYN¬àBà€›\òŸTõ›–€›[ù
+œHN¬à€€ú›€›\òŸRŸ^HH	€X]\öX[€Ÿ__	Ÿ[]ô\ûQ]__	Ÿ[]ô\ûU[Y_X¬à€€ú›^\›[ô»H‹õ›\YôŸ]
+€›\òŸRŸ^JN¬àYà
+^\›[ô H»^\›[ôÀúõŸ]H
+œHõŸ]N»\Xÿ]Tõ›–€›[ù
+œHN»Bà[ŸH‹õ›\YúŸ]
+€›\òŸRŸ^K¬à€›\òŸRŸ^KX]\öX[€ŸK[]ô\ûQ]K[]ô\ûU[YKõŸ]Kà\ÿ‹ö\[€éà›ö[ô Ÿ[÷ÿ€€[[äë\ÿ‹ö\[€àäWHàäKùö[J
+Kà[]ô\ûT‹›à›ö[ô Ÿ[÷ÿ€€[[äë[]ô\ûH‹›äWHàäKùö[J
+KàòX›‹ûNà›ö[ô Ÿ[÷ÿ€€[[äëòX›‹ûHäWHàäKùö[J
+Kà⁄‹à›ö[ô Ÿ[÷ÿ€€[[äî⁄‹äWHàäKùö[J
+Kà[ôNà›ö[ô Ÿ[÷ÿ€€[[äì[ôHäWHàäKùö[J
+KàJN¬àBà€€ú›\ÿYõ›‹»HÀããô‹õ›\Yùò[Y\ 
+WKú€‹ù
+
+YùöY⁄
+HOÇàYùõX]\öX[€ŸKõÿÿ[P€€\\ôJöY⁄õX]\öX[€ŸJBàYùô[]ô\ûQ]Kõÿÿ[P€€\\ôJöY⁄ô[]ô\ûQ]JBàYùô[]ô\ûU[YKõÿÿ[P€€\\ôJöY⁄ô[]ô\ûU[YJBà
+N¬àYà
+[ùò[Yõ›–€›[ùà
+Hõ›»ô]»\úõ‹ä8.'∏.&∏. ∏.bx.+x.(x..x.)x.'8.-8.%8.(¯..x.&¯.`x.&∏.&à	⁄[ùò[Yõ›–€›[ùH8.`x.%∏.)»8. x.(¯..8.$¯.,∏.%x.(¯.)¯."\ùõÀã8.)¯.,x.&x.%¯.-x.b8.`8.)¯.)x.,à8.`x.)x.,]X[ù]X
+N¬àYà
+]\ÿYõ›‹Àõ[ô›
+Hõ›»ô]»\úõ‹ä∏.a8.(x.b8.'∏.&∏.(¯.,∏.(∏. x.,∏.(»õ‹ôXÿ\›8.%¯.-x.b8.(x.-x.(∏.+x.%8.(x.,∏. x. x.)¯.b8.,àäN¬àô]\õà¬àö[Sò[YNàö[Kõò[YKà€›\òŸPÿ[›[]Y]à€›\òŸSXô[à	‹€›\òŸSX]⁄ÃWKúY›\ù
+ãåä_K…‹€›\òŸSX]⁄ÃóKúY›\ù
+ãåä_K…‹€›\òŸSX]⁄Ã◊_H	‹€›\òŸU[Y_Xà€›\òŸTõ›–€›[ùàX]\öX[€›[ùàô]»Ÿ]
+\ÿYõ›‹ÀõX\
+
+õ› HOàõ›ÀõX]\öX[€ŸJJKú⁄^ôKà›[]Nà\ÿYõ›‹ÀúôYXŸJ
+›[Kõ› HOà›[H
+»õ›ÀúõŸ]K
+Kà\Xÿ]Tõ›–€›[ùàõ›‹Œà\ÿYõ›‹ÀàN¬üBÇôù[ò›[€à\—[]ô\ûS›ô\ôYJYNàYS[ôKõ›»Hô]»]J
+JH¬à€€ú››]\»H›ö[ô YKú›]\»àäKùö[J
+Kù”›Ÿ\êÿ\ŸJ
+N¬àYà
+»ò€€\]Yãòÿ[òŸ[Yãòÿ[òŸ[YóKö[ò€Y\ ›]\ JHô]\õàò[ŸN¬à€€ú›ô\]Z\ôYHù[Xô\äYKúô\T]JN¬à€€ú›\‹]⁄YHù[Xô\äYKúÿÿ[õôY]JN¬àYà
+Sù[Xô\ãö\—ö[ö]Jô\]Z\ôY
+Hô\]Z\ôYHSù[Xô\ãö\—ö[ö]J\‹]⁄Y
+H\‹]⁄YèHô\]Z\ôY
+Hô]\õàò[ŸN¬Çà€€ú›]SX]⁄HYKô[]ô\ûQ]KõX]⁄
+◊äÕJKJÃüJKJÃüJI N¬à€€ú›[YSX]⁄HYKô[]ô\ûU[YKõX]⁄
+◊äÃWWñÃL◊JNäÃMWW
+I N¬àYà
+Y]SX]⁄][YSX]⁄
+Hô]\õàò[ŸN¬à€€ú›YX\àHù[Xô\ä]SX]⁄ÃWJN¬à€€ú›[€ùHù[Xô\ä]SX]⁄ÃóJN¬à€€ú›^HHù[Xô\ä]SX]⁄Ã◊JN¬à€€ú›ò[Y]HHô]»]J]KïU YX\ã[€ùHK^JJN¬àYà
+ò[Y]KôŸ]U—ù[YX\ä
+HOOHYX\àò[Y]KôŸ]U”[€ù
+
+HOOH[€ùHHò[Y]KôŸ]U—]J
+HOOH^JHô]\õàò[ŸN¬Çàô]\õà	ŸYKô[]ô\ûQ]_U	ŸYKô[]ô\ûU[Y_Xò[ô⁄€⁄—]U[YRŸ^Jõ› N¬üBÇôù[ò›[€à›]SŸäYNàYS[ôKõ›»Hô]»]J
+JH¬à€€ú›ÿÿ[õôYHù[Xô\äYKúÿÿ[õôY]JN¬àYà
+ÿÿ[õôYèHù[Xô\äYKúô\T]JJHô]\õàò€€\]Yé¬àYà
+\—[]ô\ûS›ô\ôYJYKõ› JHô]\õàõ›ô\àé¬àYà
+ÿÿ[õôYà
+Hô]\õàú\ùX[é¬àô]\õàú[ô[ô»é¬üBÇôù[ò›[€à›]SXô[
+YNàYS[ôKõ›»Hô]»]J
+JH¬à€€ú››]HH›]SŸäYKõ› N¬àYà
+›]HOOHõ›ô\àäHô]\õà∏.`8. x.-8.&x.%8.-8.)¯."8.,x.%8.*∏.b8.!¯.!¯.,∏.&Hé¬àYà
+›]HOOHò€€\]YäHô]\õà∏.!8.(¯.&∏.%x.,∏.(x.`x.'8.&Hé¬àYà
+ù[Xô\äYKò\úò[ôŸY]JHà	âàù[Xô\äYKúÿÿ[õôY]JHà
+Hô]\õà∏.*∏.b8.!¯.&∏.,∏.!¯.*∏.b8.)¯.&H»8.(x.-x.!¯.,∏.&x.(¯.+Hé¬àYà
+ù[Xô\äYKò\úò[ôŸY]JHà
+Hô]\õà∏."8.,x.%8.`x.)x.bx.)»8.(¯.+x. ∏.,∏.(∏.+x.+x. Hé¬àYà
+›]HOOHú\ùX[äHô]\õà∏.*∏.b8.!¯.&∏.,∏.!¯.*∏.b8.)¯.&Hé¬àô]\õà∏.(∏.,x.!¯.a8.(x.b8.*∏.b8.!»é¬üBÇò\ﬁ[ò»ù[ò›[€à^S›ô\ôYP[\ù€ôJ]Y[–€€ù^ôYéà»›\úô[ùà]Y[–€€ù^ù[JH¬àûH¬à€€ú›]Y[’⁄[ô›»H⁄[ô›»\»\[Ÿà⁄[ô›»	à»ŸXö⁄]]Y[–€€ù^Œà\[Ÿà]Y[–€€ù^N¬à€€ú›]Y[–€€ù^€\‹»H]Y[’⁄[ô›Àê]Y[–€€ù^]Y[’⁄[ô›ÀùŸXö⁄]]Y[–€€ù^¬àYà
+P]Y[–€€ù^€\‹ Hô]\õàò[ŸN¬à€€ú›^\›[ô–€€ù^H]Y[–€€ù^ôYãò›\úô[ù¬à€€ú›€€ù^H^\›[ô–€€ù^	âà^\›[ô–€€ù^ú›]HOOHò€‹ŸYà»^\›[ô–€€ù^àô]»]Y[–€€ù^€\‹ 
+N¬à]Y[–€€ù^ôYãò›\úô[ùH€€ù^¬àYà
+€€ù^ú›]HOOHúù[õö[ô»äH]ÿZ]€€ù^úô\›[YJ
+N¬Çà€€ú››\ù]H€€ù^ò›\úô[ù[YH
+»åé¬àﬁ»úô\]Y[òﬁNàŸôúŸ]àK»úô\]Y[òﬁNàçåŸôúŸ]àåàWKôõ‹ëXX⁄
+
+»úô\]Y[òﬁKŸôúŸ]JHOà¬à€€ú›‹ÿ⁄[]‹àH€€ù^ò‹ôX]S‹ÿ⁄[]‹ä
+N¬à€€ú›ÿZ[àH€€ù^ò‹ôX]QÿZ[ä
+N¬à€€ú›€ôT›\ùH›\ù]
+»ŸôúŸ]¬à‹ÿ⁄[]‹ãù\HHú⁄[ôHé¬à‹ÿ⁄[]‹ãôúô\]Y[òﬁKúŸ]ò[YP][YJúô\]Y[òﬁK€ôT›\ù
+N¬àÿZ[ãôÿZ[ãúŸ]ò[YP][YJåK€ôT›\ù
+N¬àÿZ[ãôÿZ[ãô^€ô[ùX[ò[\’ò[YP][YJåLã€ôT›\ù
+»åçJN¬àÿZ[ãôÿZ[ãô^€ô[ùX[ò[\’ò[YP][YJåK€ôT›\ù
+»åMäN¬à‹ÿ⁄[]‹ãò€€õôX›
+ÿZ[äN¬àÿZ[ãò€€õôX›
+€€ù^ô\›[ò][€äN¬à‹ÿ⁄[]‹ãú›\ù
+€ôT›\ù
+N¬à‹ÿ⁄[]‹ãú›‹
+€ôT›\ù
+»åN
+N¬àJN¬àô]\õàùYN¬àHÿ]⁄¬àô]\õàò[ŸN¬àBüBÇôù[ò›[€àY]öX–ÿ\ô
+»€ôKX€€ãXô[ò[YK›Yôö^õ›HNà»€ôNà›ö[ôŒ»X€€éà›ö[ôŒ»Xô[à›ö[ôŒ»ò[YNà›ö[ôŒ»›Yôö^Œà›ö[ôŒ»õ›OŒà›ö[ô»JH¬àô]\õà
+à\ùX€H€\‹”ò[YO^ÿY]öXÀXÿ\ô€ôKI›€ô_XOÇà‹[à€\‹”ò[YOHõY]öXÀZX€€àèû⁄X€€üO‹‹[èÇà]èè‹[à€\‹”ò[YOHõY]öXÀ[Xô[èû€Xô[O‹‹[èè›õ€ôœû›ò[Y_O‹›õ€ôœè€X[û‹›Yôö^^€õ›H»0≠»	€õ›_XààüO‹€X[èŸ]èÇàÿ\ùX€OÇà
+N¬üBÇôù[ò›[€àÿ\ô
+»]KX›[€ã⁄[ô[ã€\‹”ò[YHHààNà»]OŒàôXX›õŸN»X›[€èŒàôXX›õŸN»⁄[ô[éàôXX›õŸN»€\‹”ò[YOŒà›ö[ô»JH¬àô]\õà
+àŸX›[€à€\‹”ò[YO^ÿ[ô[	ÿ€\‹”ò[Y_XOÇà ]HX›[€äH	âàXY\à€\‹”ò[YOHú[ô[ZXYèû›]H	âàœû›]_O⁄œü^ÿX›[€üO⁄XY\èüBàÿ⁄[ô[üBà‹ŸX›[€èÇà
+N¬üBÇôù[ò›[€à[\J»]HH∏.(∏.,x.!¯.a8.(x.b8.(x.-x. ∏.bx.+x.(x..x.)Hã^H∏.&x.,¯.`8. ∏.bx.,∏.`x.'8.&x.*∏.b8.!¯.!¯.,∏.&x.`8.'∏.-¯.b8.+x.`8.(¯.-8.b8.(x.`¯."∏.bx.!¯.,∏.&x.(¯.,8.&∏.&ààNà»]OŒà›ö[ôŒ»^Œà›ö[ô»JH¬àô]\õà]à€\‹”ò[YOHô[\Hèè‹[è∏•©è‹‹[èè›õ€ôœû›]_O‹›õ€ôœèû›^O‹èŸ]èé¬üBÇã äÇà
+à8.(¯..x.&¯."∏.-8.bx.&x.!¯.,∏.&Bà
+Çà
+àô\ú⁄[€à8.!8.-¯.+x.`8.)¯.)x.,∏.%¯.-x.b8.(¯..x.&¯.%∏..x. x.`x. x.bx.a8. ∏.)x.b8.,∏.*∏..8.%8.`¯.*∏.b8.%x.b8.+x.%¯.bx.,∏.(àTì8.`8.'∏.-¯.b8.+x.`¯.*¯.bx.`8.&∏.(¯.,∏.)¯.c8.`8."¯.+x.(¯.c8.(¯..x.bx.)¯.b8.,Çà
+à8.`8.&¯.a¯.&x.!8.&x.)x.,8.(¯..x.&¯. x.,x.&∏.%¯.-x.b8.`8.!8.(∏.`x.!8."∏.a8.)¯.bH8.(x.-8."x.,8.&x.,x.bx.&x.+x.,x.&¯.`∏.*¯.)x.%8.(¯..x.&¯.`¯.*¯.(x.b8.%¯.,x.&∏.`x.)x.bx.)¯."8.,8.(∏.,x.!¯.`8.*¯.a¯.&x.(¯..x.&¯.`8. x.b8.,Çà
+à8.`8.'∏.(¯.,∏.,Tì8.`8.%8.-8.(x.+x.bx.,∏.!¯.%8.bx.)¯.(àX]\öX[€ŸH8.+x.(∏.b8.,∏.!¯.`8.%8.-x.(∏.)¬à
+ã¬ôù[ò›[€à\ù[XYŸJ»X]\öX[€ŸK€€\X›Hò[ŸKô\ú⁄[€ã€›HõX\›\àã›öX›Hò[ŸHNà»X]\öX[€ŸNà›ö[ôŒ»€€\X›Œàõ€€X[é»ô\ú⁄[€èŒà›ö[ôŒ»€›ŒàõX\›\ààòX›X[é»›öX›Œàõ€€X[àJH¬à€€ú›Ÿ^HH	‹€›Nâ€X]\öX[€Ÿ_Nâ›ô\ú⁄[€àù[ùô\ú⁄[€ôYüNâ‹›öX›»ú›öX›ààò€€\]XõHüX¬à€€ú›ŸòZ[YŸ^KŸ]òZ[YŸ^WHH\ŸT›]JàäN¬àYà
+òZ[YŸ^HOOHŸ^JHô]\õà]à€\‹”ò[YO^ÿ\ù\›ÀYò[òX⁄»	ÿ€€\X›»ò€€\X›àààüXOè‹[è∏•‚‹‹[èè€X[∏.(∏.,x.!¯.a8.(x.b8.(x.-x.(¯..x.&œ‹€X[èŸ]èé¬à€€ú›€›\òŸHHÿ\K‹\ùZ[XYŸ\œ€X]\öX[€ŸOIŸ[ò€ŸUTíP€€\€ô[ù
+X]\öX[€ŸJ_I‹€›OOHòX›X[à»âú€›XX›X[àààüI‹›öX›»âú›öX›LHàààüI›ô\ú⁄[€à»	ùèIŸ[ò€ŸUTíP€€\€ô[ù
+ô\ú⁄[€ä_XààüX¬à€€ú›[XYŸSXô[H€›OOHòX›X[à»∏.(¯..x.&¯."∏.-8.bx.&x.!¯.,∏.&x.`¯.&x. x.)x.b8.+x.!»àà∏.(¯..x.&¯.%x.,x.)¯.+x.(∏.b8.,∏.!»X\›\àé¬àô]\õà]à€\‹”ò[YO^ÿ\ù\›»	ÿ€€\X›»ò€€\X›àààüXOè[Y»‹òœ^‹€›\òŸ_H[^ÿ	⁄[XYŸSXô[H	€X]\öX[€Ÿ_XHÿY[ôœHõ^ûHàX€Ÿ[ôœHò\ﬁ[ò»à€ë\úõ‹è^ 
+HOàŸ]òZ[YŸ^JŸ^J_HœèŸ]èé¬üBÇò€€ú›QëëP’UëW“SPQ—W‘ì“ëP’S”ó’ëTî“S”àHúŸ\\ò]KZ[XYŸK\€›À]çé¬Çã äÇà
+à8.`∏."∏.)¯.c8.(¯..x.&¯.!8..x.b8. x.,x.&x.%x.,∏.(x.%x.,¯.`x.*¯.&x.b8.!¯.%¯.-x.b8.'8..x.bx.`¯."∏.bx.!¯.,∏.&x.!8..8.bx.&x.`8.!8.(éà8.(¯..x.&¯."∏.-8.bx.&x.!¯.,∏.&x.+x.(∏..x.b8."¯.bx.,∏.(à8.`x.)x.,8.(¯..x.&¯.%x.,x.)¯.+x.(∏.b8.,∏.!¯.+x.(∏..x.b8. ∏.)¯.,Çà
+à8.`¯."∏.bx.%x.+x.&x.*∏.`x. x.&x.`8.'∏.-¯.b8.+x.`¯.*¯.bx.'8..x.bx.%x.(¯.)¯."8.`8.%¯.-x.(∏.&∏.)¯.b8.,∏."∏.-8.bx.&x.!¯.,∏.&x.`¯.&x. x.)x.b8.+x.!¯.%x.(¯.!¯. x.,x.&∏.%x.,x.)¯.+x.(∏.b8.,∏.!¯."8.(¯.-8.!¬à
+Çà
+à8.'8..x.bx.`¯."∏.bH›ÿ⁄À—[]ô\ûH8.a8.(x.b8.(x.-x.*∏.-8.%¯.&8.-8.c8.`∏.*¯.)x.%Y]Y]H8.(¯..x.&»8."8.-∏.!¯.a8.(x.b8.(x.-H\]Y]8.*∏.,¯.*¯.(¯.,x.&àÿX⁄Hù\›[ô¬à
+àõ⁄ôX›[€ïô\ú⁄[€à8.%¯.,¯.`¯.*¯.bH‹\8.a8.(x.b8.`¯."∏.bHTì[ùô\ú⁄[€ôY8.%¯.-x.b8.+x.,∏."8.!8.bx.,∏.!¯."8.,∏. HŸ[X[ùX‹»8. x.b8.+x.&HYÿXﬁHò[òX⁄¬à
+ã¬ôù[ò›[€à\ù[XYŸTZ\ä»X]\öX[€ŸKX\›\ïô\ú⁄[€ãX›X[ô\ú⁄[€ãX\›\ê]òZ[XõHHùYKX›X[]òZ[XõHHùYKõ⁄ôX›[€ïô\ú⁄[€àHQëëP’UëW“SPQ—W‘ì“ëP’S”ó’ëTî“S”ã›öX›€›»Hò[ŸHNà»X]\öX[€ŸNà›ö[ôŒ»X\›\ïô\ú⁄[€èŒà›ö[ôŒ»X›X[ô\ú⁄[€èŒà›ö[ôŒ»X\›\ê]òZ[XõOŒàõ€€X[é»X›X[]òZ[XõOŒàõ€€X[é»õ⁄ôX›[€ïô\ú⁄[€èŒà›ö[ôŒ»›öX›€›œŒàõ€€X[àJH¬à€€ú›ÿ\›[NàôXX›ê‘‘‘õ‹\ùY\»H»õ€ù⁄^ôNàLKõ€ùŸZY⁄àå€€‹éààÕòçÕŒ»ãX\ô⁄[êõ›€NàK^[Y€éàòŸ[ù\àã]\î‹X⁄[ôŒàååô[HàN¬à€€ú›öY‘›[NàôXX›ê‘‘‘õ‹\ùY\»H»X\ô⁄[éàõ^àåHHLÃãZ[ï⁄YàN¬à€€ú›ò[òX⁄»H]à€\‹”ò[YOHú\ù\›ÀYò[òX⁄»èè‹[è∏•‚‹‹[èè€X[∏.(∏.,x.!¯.a8.(x.b8.(x.-x.(¯..x.&œ‹€X[èŸ]èé¬àô]\õà]à€\‹”ò[YOHú\ùZ[XYŸK\Z\àà›[O^ﬁ»\‹^Nàôõ^ãÿ\àLãõ^‹ò\àù‹ò\ã⁄YàåL	Hà_OÇàöY›\ôH›[O^ŸöY‘›[_OèöYÿÿ\[€à›[O^ÿÿ\›[_O∏.(¯..x.&¯."∏.-8.bx.&x.!¯.,∏.&x.`¯.&x. x.)x.b8.+x.!œŸöYÿÿ\[€èûÿX›X[]òZ[XõH»\ù[XYŸHX]\öX[€ŸO^€X]\öX[€Ÿ_H€›HòX›X[àô\ú⁄[€è^ÿX›X[ô\ú⁄[€àõ⁄ôX›[€ïô\ú⁄[€üH›öX›^‹›öX›€›ﬂHœààò[òX⁄ﬂOŸöY›\ôOÇàöY›\ôH›[O^ŸöY‘›[_OèöYÿÿ\[€à›[O^ÿÿ\›[_O∏.(¯..x.&¯.%x.,x.)¯.+x.(∏.b8.,∏.!»
+X\›\äOŸöYÿÿ\[€èû€X\›\ê]òZ[XõH»\ù[XYŸHX]\öX[€ŸO^€X]\öX[€Ÿ_H€›HõX\›\ààô\ú⁄[€è^€X\›\ïô\ú⁄[€àõ⁄ôX›[€ïô\ú⁄[€üH›öX›^‹›öX›€›ﬂHœààò[òX⁄ﬂOŸöY›\ôOÇàŸ]èé¬üBÇô^‹ùYò][ù[ò›[€à[]ô\ûP€€ùõ€\
+»\Ÿ\ã⁄Y€ì›]][€ö]‹ì[ŸHHò[ŸHNà»\Ÿ\éà»Yàù[Xô\é»[\ﬁYYP€ŸNà›ö[ôŒ»\‹^Sò[YNà›ö[ôŒ»[XZ[à›ö[ôŒ»õ€Nà›ö[ôŒ»\õZ\‹⁄[€úŒà\\õZ\‹⁄[€ñ◊HN»⁄Y€ì›]]à›ö[ôŒ»[€ö]‹ì[ŸOŒàõ€€X[àJH¬àÀ»8.+x.+x. x."8.,∏. x.(¯.,8.&∏.&∏.%8.bx.)¯.(à‘’8.`8.%¯.b8.,∏.&x.,x.bx.&H8.&¯..8.b8.(x.(∏.,x.!¯.`8.&¯.a¯.&HOà8.`8.'∏.-¯.b8.+x.`¯.*¯.bx.*∏.a8.%x.)x.c8.`8.%8.-8.(H
+ù‹]\Ÿ\àKàÀ»õ[ÿö[K[Ÿ€›]
+H8.`¯."∏.bx.a8.%8.bx.%x.b8.+x.`∏.%8.(∏.a8.(x.b8.%x.bx.+x.!¯.`x. x.bH‘‘»8.`x.%x.b8.%x.,x.)¯.!8.,¯. ∏.+x."8.(¯.-8.!¯.`8.&¯.a¯.&H‘’à\ﬁ[ò»ù[ò›[€à⁄Y€ì›]
+]ô[ùàôXX›[›\ŸQ]ô[ùS[ò⁄‹ë[[Y[ùäH¬à]ô[ùúô]ô[ùYò][
+
+N¬à]ÿZ]ô]⁄
+⁄Y€ì›]]»Y]Ÿàî‘’àJKòÿ]⁄
+
+
+HOà[ôYö[ôY
+N¬à⁄[ô›Àõÿÿ][€ãöôYàHã€Ÿ⁄[àé¬àBÇà€€ú›[ö]X[YŸHH[€ö]‹ì[ŸH»õ›ô\ôYHàà\Ÿ\ãúõ€HOOHòYZ[àÇà»ô\⁄õÿ\ôÇààêUãôö[ô
+
+][JHOà\Ÿ\ãú\õZ\‹⁄[€úÀö[ò€Y\ ][KöŸ^JJOÀöŸ^Hô\⁄õÿ\ôé¬à€€ú›\—YQ]T\õZ\‹⁄[€àH\Ÿ\ãúõ€HOOHòYZ[ààQW—UW‘Q—TÀú€€YJ
+Ÿ^JHOà\Ÿ\ãú\õZ\‹⁄[€úÀö[ò€Y\ Ÿ^JJN¬à€€ú›‹YŸKŸ]YŸWHH\ŸT›]OYŸRŸ^Oä[ö]X[YŸJN¬à€€ú›€Y[ùS‹[ãŸ]Y[ùS‹[óHH\ŸT›]Jò[ŸJN¬à€€ú›‹›ÿ⁄”Y[ùP€€\ŸYŸ]›ÿ⁄”Y[ùP€€\ŸYHH\ŸT›]Jò[ŸJN¬à€€ú›‹›ÿ⁄”›ô\ùöY]‘ŸX\ò⁄Ÿ]›ÿ⁄”›ô\ùöY]‘ŸX\ò⁄O]\ŸT›]JàäN¬à\ŸQYôôX›
+
+
+OOûÿ€€ú›ﬁ[òœJ]ô[ùë]ô[ù
+OOúŸ]›ÿ⁄”›ô\ùöY]‘ŸX\ò⁄
+›ö[ô 
+]ô[ù\»›\›€Q]ô[ù
+Kô]Z[àäJN›⁄[ô›ÀòY]ô[ù\›[ô\äú›ÿ⁄À[›ô\ùöY]À\ŸX\ò⁄]ò[YHãﬁ[ò N‹ô]\õä
+OOù⁄[ô›Àúô[[›ôQ]ô[ù\›[ô\äú›ÿ⁄À[›ô\ùöY]À\ŸX\ò⁄]ò[YHãﬁ[ò NﬂK◊JN¬à€€ú›‹^[ÿYŸ]^[ÿYHH\ŸT›]OYT^[ÿYä»Y\Œà◊K[\‹ùŒà◊Kÿÿ[úŒà◊KôXŸZ\Œà◊HJN¬à€€ú›€ÿY[ôÀŸ]ÿY[ô◊HH\ŸT›]J\—YQ]T\õZ\‹⁄[€äN¬à€€ú›Ÿ\úõ‹ãŸ]\úõ‹î›]WHH\ŸT›]JàäN¬à€€ú›Ÿ]\úõ‹àH
+ò[YNà›ö[ô HOà»Ÿ]\úõ‹î›]Jò[YJN»Yäò[YJHô\‹ù‹\ò][€ïÿ\õö[ô ‹YŸKY\‹ÿYŸNùò[Y_JN»N¬à€€ú›€õ›XŸKŸ]õ›XŸT›]WHH\ŸT›]O»\Nàú›XÿŸ\‹»àô\úõ‹àé»^à›ö[ô»Hù[äù[
+N¬à€€ú›Ÿ]õ›XŸHH
+ò[YNà»\Nàú›XÿŸ\‹»àô\úõ‹àé»^à›ö[ôŒ»ÿ\õö[ô“[ôYŒàõ€€X[àHù[
+HOà¬àŸ]õ›XŸT›]Jò[YJN¬àYäò[YOÀù\HOOHô\úõ‹àà	âà]ò[YKùÿ\õö[ô“[ôY
+Hô\‹ù‹\ò][€ïÿ\õö[ô ‹YŸKY\‹ÿYŸNùò[YKù^JN¬àN¬à€€ú›ŸYSÿYY]Ÿ]YSÿYY]HH\ŸT›]O›ö[ô»ù[äù[
+N¬à€€ú›ŸXY[ôP€ÿ⁄ÀŸ]XY[ôP€ÿ⁄◊HH\ŸT›]J
+
+HOà]Kõõ› 
+JN¬à€€ú›€›ô\ôYT€›[ô[òXõYŸ]›ô\ôYT€›[ô[òXõYHH\ŸT›]Jò[ŸJN¬à€€ú››ô\ôYP]Y[–€€ù^ôYàH\ŸTôYè]Y[–€€ù^ù[äù[
+N¬à€€ú›ô]ö[›\”›ô\ôYRY‘ôYàH\ŸTôYèŸ]ù[Xô\èàù[äù[
+N¬à\ŸQYôôX›
+
+
+HOà¬àYà
+[õ›XŸJHô]\õé¬à€€ú›[Y\àH⁄[ô›ÀúŸ][Y[›]
+
+
+HOàŸ]õ›XŸJù[
+K
+N¬àô]\õà
+
+HOà⁄[ô›Àò€X\ï[Y[›]
+[Y\äN¬àK€õ›XŸWJN¬à\ŸQYôôX›
+
+
+HOà¬à][Y\éàù[Xô\à[ôYö[ôY¬à€€ú›ôYúô\⁄€ÿ⁄»H
+
+HOàŸ]XY[ôP€ÿ⁄ ]Kõõ› 
+JN¬à€€ú›ÿ⁄Y[Sô^Z[ù]HH
+
+HOà¬àYà
+[Y\àOOH[ôYö[ôY
+H⁄[ô›Àò€X\ï[Y[›]
+[Y\äN¬à€€ú›[^HHåÃH
+]Kõõ› 
+H	HåÃ
+H
+»L¬à[Y\àH⁄[ô›ÀúŸ][Y[›]
+
+
+HOà¬àôYúô\⁄€ÿ⁄ 
+N¬àÿ⁄Y[Sô^Z[ù]J
+N¬àK[^JN¬àN¬à€€ú›ôYúô\⁄⁄[ïö\⁄XõHH
+
+HOà¬àYà
+ÿ›[Y[ùùö\⁄Xö[]T›]HOOHùö\⁄XõHäHô]\õé¬àôYúô\⁄€ÿ⁄ 
+N¬àÿ⁄Y[Sô^Z[ù]J
+N¬àN¬àÿ⁄Y[Sô^Z[ù]J
+N¬à⁄[ô›ÀòY]ô[ù\›[ô\äôõÿ›\»ãôYúô\⁄⁄[ïö\⁄XõJN¬àÿ›[Y[ùòY]ô[ù\›[ô\äùö\⁄Xö[]X⁄[ôŸHãôYúô\⁄⁄[ïö\⁄XõJN¬àô]\õà
+
+HOà¬àYà
+[Y\àOOH[ôYö[ôY
+H⁄[ô›Àò€X\ï[Y[›]
+[Y\äN¬à⁄[ô›Àúô[[›ôQ]ô[ù\›[ô\äôõÿ›\»ãôYúô\⁄⁄[ïö\⁄XõJN¬àÿ›[Y[ùúô[[›ôQ]ô[ù\›[ô\äùö\⁄Xö[]X⁄[ôŸHãôYúô\⁄⁄[ïö\⁄XõJN¬àN¬àK◊JN¬à€€ú›Ÿö[KŸ]ö[WHH\ŸT›]Oö[Hù[äù[
+N¬à€€ú›‹ô]öY]‘õ›‹ÀŸ]ô]öY]‘õ›‹◊HH\ŸT›]O[\‹ùõ›÷◊Oä◊JN¬à€€ú›‹\ú⁄[ôÀŸ]\ú⁄[ô◊HH\ŸT›]Jò[ŸJN¬à€€ú›⁄[\‹ù[ôÀŸ][\‹ù[ô◊HH\ŸT›]Jò[ŸJN¬à€€ú›Ÿõ‹ôXÿ\›Ÿ]õ‹ôXÿ\›HH\ŸT›]Oõ‹ôXÿ\›^[ÿYä»X›]ôR[\‹ùàù[[\‹ùŒà◊K€›ô\òYŸNà◊K›[[X\ûNàù[JN¬à€€ú›Ÿõ‹ôXÿ\›ÿY[ôÀŸ]õ‹ôXÿ\›ÿY[ô◊HH\ŸT›]Jò[ŸJN¬à€€ú›Ÿõ‹ôXÿ\›ö[KŸ]õ‹ôXÿ\›ö[WHH\ŸT›]Oö[Hù[äù[
+N¬à€€ú›Ÿõ‹ôXÿ\›ô]öY]ÀŸ]õ‹ôXÿ\›ô]öY]◊HH\ŸT›]Oõ‹ôXÿ\›ô]öY]»ù[äù[
+N¬à€€ú›Ÿõ‹ôXÿ\›\ú⁄[ôÀŸ]õ‹ôXÿ\›\ú⁄[ô◊HH\ŸT›]Jò[ŸJN¬à€€ú›Ÿõ‹ôXÿ\›[\‹ù[ôÀŸ]õ‹ôXÿ\›[\‹ù[ô◊HH\ŸT›]Jò[ŸJN¬à€€ú›Ÿõ‹ôXÿ\›õŸ‹ô\‹ÀŸ]õ‹ôXÿ\›õŸ‹ô\‹◊HH\ŸT›]J
+N¬à€€ú›Ÿõ‹ôXÿ\›ŸX\ò⁄Ÿ]õ‹ôXÿ\›ŸX\ò⁄HH\ŸT›]JàäN¬à€€ú›Ÿõ‹ôXÿ\›^‹ù[ôÀŸ]õ‹ôXÿ\›^‹ù[ô◊HH\ŸT›]Jò[ŸJN¬à€€ú›Ÿõ‹ôXÿ\››]\ÀŸ]õ‹ôXÿ\››]\◊HH\ŸT›]Oò[àõ›ô\ôYHàù⁄][å»àù⁄][ç»àù⁄][åMàõ›ô\åMàú⁄‹ùYŸHàò€›ô\ôYèäò[äN¬à€€ú›Ÿõ‹ôXÿ\›òX›‹ûKŸ]õ‹ôXÿ\›òX›‹ûWHH\ŸT›]JêSäN¬à€€ú›Ÿõ‹ôXÿ\›ò[ôŸKŸ]õ‹ôXÿ\›ò[ôŸWHH\ŸT›]O»MÃäM
+N¬à€€ú›Ÿõ‹ôXÿ\›òY–X›]ôKŸ]õ‹ôXÿ\›òY–X›]ôWHH\ŸT›]Jò[ŸJN¬à€€ú›‹ò]’YÀŸ]ò]’Y◊HH\ŸT›]JàäN¬à€€ú››Y‘ô]öY]ÀŸ]Y‘ô]öY]◊HH\ŸT›]OY‘ô]öY]»ù[äù[
+N¬à€€ú›Ÿ\‹]⁄€€ôö\õX][€ãŸ]\‹]⁄€€ôö\õX][€óHH\ŸT›]Oô\öYûTô\›[ù[äù[
+N¬à€€ú›Ÿ\‹]⁄⁄]Ÿ[X›[€ãŸ]\‹]⁄⁄]Ÿ[X›[€óHH\ŸT›]O\‹]⁄⁄]Ÿ[X›[€àù[äù[
+N¬à€€ú›Ÿ\‹]⁄YQ]KŸ]\‹]⁄YQ]WHH\ŸT›]JàäN¬à€€ú›Ÿ\‹]⁄YU[YKŸ]\‹]⁄YU[YWHH\ŸT›]JàäN¬à€€ú›Ÿ\‹]⁄YQòX›Ÿ]\‹]⁄YQòX›HH\ŸT›]JàäN¬à€€ú›ÿ⁄X⁄⁄[ô’YÀŸ]⁄X⁄⁄[ô’Y◊HH\ŸT›]Jò[ŸJN¬à€€ú››ô\öYûTò]ÀŸ]ô\öYûTò]◊HH\ŸT›]JàäN¬à€€ú››ô\öYûTô\›[Ÿ]ô\öYûTô\›[HH\ŸT›]Oô\öYûTô\›[ù[äù[
+N¬à€€ú››ô\öYûSÿY[ôÀŸ]ô\öYûSÿY[ô◊HH\ŸT›]Jò[ŸJN¬à€€ú›ÿ\úò[ôŸQYQ]KŸ]\úò[ôŸQYQ]WHH\ŸT›]JàäN¬à€€ú›ÿ\úò[ôŸUÿ\õö[ôÀŸ]\úò[ôŸUÿ\õö[ô◊HH\ŸT›]O»Y\‹ÿYŸNà›ö[ôŒ»]Nà›ö[ôŒ»[YNà›ö[ôŒ»òX›à›ö[ô»Hù[äù[
+N¬à€€ú›ÿ\úò[ôŸQYU[YKŸ]\úò[ôŸQYU[YWHH\ŸT›]JàäN¬à€€ú›ÿ\úò[ôŸQYQòX›Ÿ]\úò[ôŸQYQòX›HH\ŸT›]JàäN¬à€€ú›ÿ\úò[ôŸUYÀŸ]\úò[ôŸUY◊HH\ŸT›]JàäN¬à€€ú›ÿ\úò[ôŸT]KŸ]\úò[ôŸT]WHH\ŸT›]JàäN¬à€€ú›ÿ\úò[ôŸQYTŸX\ò⁄Ÿ]\úò[ôŸQYTŸX\ò⁄HH\ŸT›]JàäN¬à€€ú›ÿ\úò[ôŸS\›YŸKŸ]\úò[ôŸS\›YŸWHH\ŸT›]JJN¬à€€ú›ÿ\úò[ôŸYŸX\ò⁄Ÿ]\úò[ôŸYŸX\ò⁄HH\ŸT›]JàäN¬à€€ú›ÿ\úò[ôŸYYŸKŸ]\úò[ôŸYYŸWHH\ŸT›]JJN¬à€€ú›ÿ\úò[ôŸP€€ôö\õT]KŸ]\úò[ôŸP€€ôö\õT]WO]\ŸT›]JàäN¬à€€ú›ÿ\úò[ôŸP€€ôö\õX][€ãŸ]\úò[ôŸP€€ôö\õX][€óHH\ŸT›]O\úò[ôŸP€€ôö\õX][€àù[äù[
+N¬à€€ú›\úò[ôŸTô\]Y\›ôYàH\ŸTôYäò[ŸJN¬à€€ú›\úò[ôŸP€€ôö\õPù]€îôYàH\ŸTôYèSù]€ë[[Y[ùäù[
+N¬à\ŸQYôôX›
+
+
+HOà»Yà
+\úò[ôŸP€€ôö\õX][€äH\úò[ôŸP€€ôö\õPù]€îôYãò›\úô[ùÀôõÿ›\ 
+N»Kÿ\úò[ôŸP€€ôö\õX][€óJN¬à€€ú›‹‹]Y‘ô\]Y\›Ÿ]‹]Y‘ô\]Y\›O]\ŸT›]O‹X⁄“YŒõù[Xô\é‹›ÿ⁄’Y–€ŸOŒú›ö[ôŒ€Xô[YŒú›ö[ôﬂ_ù[äù[
+N¬à\ŸQYôôX›
+
+
+OOûÿ€€ú›Y[ô]»TìŸX\ò⁄\ò[\ ⁄[ô›Àõÿÿ][€ãúŸX\ò⁄
+KôŸ]
+ú‹]Xô[äN⁄YäZY
+\ô]\õéÿ€€ú›[Y\è]⁄[ô›ÀúŸ][Y[›]
+
+
+OOúŸ]‹]Y‘ô\]Y\›
+€Xô[YöYJK
+N‹ô]\õä
+OOù⁄[ô›Àò€X\ï[Y[›]
+[Y\äNﬂK◊JN¬àù[ò›[€à€‹ŸT‹]Y 
+H¬àŸ]‹]Y‘ô\]Y\›
+ù[
+N¬à€€ú›\õ[ô]»Tì
+⁄[ô›Àõÿÿ][€ãöôYäN¬àYä\õúŸX\ò⁄\ò[\Àö\ ú‹]Xô[äJ^›\õúŸX\ò⁄\ò[\Àô[]Jú‹]Xô[äN›⁄[ô›Àö\›‹ûKúô\XŸT›]J⁄[ô›Àö\›‹ûKú›]Kàã\õú]ò[YJ›\õúŸX\ò⁄
+›\õö\⁄
+NﬂBàBà€€ú›ÿ\úò[ôŸ[Y[ùô]öY]ÀŸ]\úò[ôŸ[Y[ùô]öY]◊HH\ŸT›]O\úò[ôŸ[Y[ùô]öY]»ù[äù[
+N¬à€€ú›Ÿö[\ë]KŸ]ö[\ë]WHH\ŸT›]JàäN¬à€€ú›Ÿ\⁄õÿ\ô›]\—ö[\ãŸ]\⁄õÿ\ô›]\—ö[\óHH\ŸT›]Oò[àò€€\]Yàú[ô[ô»àõ›ô\àèäò[äN¬à€€ú›‹[îYŸKŸ][îYŸWHH\ŸT›]JJN¬à€€ú›‹[îYŸT⁄^ôKŸ][îYŸT⁄^ôWHH\ŸT›]JL
+N¬à€€ú›Ÿö[\ëòX›Ÿ]ö[\ëòX›HH\ŸT›]JêSäN¬à€€ú›Ÿö[\ï[YKŸ]ö[\ï[YWHH\ŸT›]JêSäN¬à€€ú›‹]Y\ûKŸ]]Y\ûWHH\ŸT›]JàäN¬à€€ú›Ÿö[\ú”‹[ãŸ]ö[\ú”‹[óHH\ŸT›]Jò[ŸJN¬à€€ú›ÿÿ[Y\òS‹[ãŸ]ÿ[Y\òS‹[óHH\ŸT›]Jò[ŸJN¬à€€ú›ÿÿ[Y\òT\ú‹ŸKŸ]ÿ[Y\òT\ú‹ŸWHH\ŸT›]Oúÿÿ[ààú›ÿ⁄»àú›ÿ⁄ÀX€›[ùèäúÿÿ[àäN¬à€€ú›ÿÿ[Y\òQ\úõ‹ãŸ]ÿ[Y\òQ\úõ‹î›]WHH\ŸT›]JàäN¬à€€ú›Ÿ]ÿ[Y\òQ\úõ‹àH
+ò[YNú›ö[ô HOà»Ÿ]ÿ[Y\òQ\úõ‹î›]Jò[YJN»Yäò[YJ\ô\‹ù‹\ò][€ïÿ\õö[ô ‹YŸKY\‹ÿYŸNùò[Y_JN»N¬à€€ú›‹Ÿ[X›Yÿÿ[ãŸ]Ÿ[X›Yÿÿ[óHH\ŸT›]OYTÿÿ[àù[äù[
+N¬à€€ú›‹Ÿ][ô‹ÀŸ]Ÿ][ô‹◊HH\ŸT›]J»\ùX[àùYK€€ôö\õNàùYK€›[ôàùYK]]—õÿ›\ŒàùYHJN¬àù[ò›[€à⁄[ôŸUõ⁄XŸQ[òXõY
+€›[ôòõ€€X[äH¬à€€ú›ô^^ÀããúŸ][ô‹À€›[ôN¬àŸ]Ÿ][ô‹ ô^
+N¬àûH›⁄[ô›Àõÿÿ[›‹òYŸKúŸ]][J	⁄⁄]YYK\Ÿ][ô‹…Àî””ãú›ö[ô⁄YûJô^
+JNﬂHÿ]⁄» àŸ][ô‹»ô[XZ[àX›]ôHõ‹à\»Ÿ\‹⁄[€à
+ã»BàBà\ŸQYôôX›
+
+
+HOà¬àYà
+õ›XŸJH‹XZ’ZP[\ù
+õ›XŸKù\KYŸKõ›XŸKù^Ÿ][ô‹Àú€›[ô
+N¬àK€õ›XŸKYŸKŸ][ô‹Àú€›[ôJN¬à€€ú›‹ﬁ\›[U\Ÿ\úÀŸ]ﬁ\›[U\Ÿ\ú◊HH\ŸT›]Oﬁ\›[U\Ÿ\ñ◊Oä◊JN¬à€€ú››\Ÿ\îŸX\ò⁄Ÿ]\Ÿ\îŸX\ò⁄HH\ŸT›]JàäN¬à€€ú››\Ÿ\ú”ÿY[ôÀŸ]\Ÿ\ú”ÿY[ô◊HH\ŸT›]Jò[ŸJN¬à€€ú››\Ÿ\îÿ]ö[ôÀŸ]\Ÿ\îÿ]ö[ô◊HH\ŸT›]Jò[ŸJN¬à€€ú››\Ÿ\ëõ‹õKŸ]\Ÿ\ëõ‹õWHH\ŸT›]O\Ÿ\ëõ‹õOäSTW’T—TäN¬à€€ú››\Ÿ\ëY]‹ì‹[ãŸ]\Ÿ\ëY]‹ì‹[óHH\ŸT›]Jò[ŸJN¬à€€ú›‹\ù[XYŸ\ÀŸ]\ù[XYŸ\◊HH\ŸT›]O\ù[XYŸSX\[ô÷◊Oä◊JN¬à€€ú›‹\ùX›X[[XYŸ\ÀŸ]\ùX›X[[XYŸ\◊HH\ŸT›]O\ù[XYŸSX\[ô÷◊Oä◊JN¬à€€ú›‹\ùX›X[[XYŸQö[KŸ]\ùX›X[[XYŸQö[WHH\ŸT›]Oö[Hù[äù[
+N¬à€€ú›‹\ù[XYŸ\”ÿY[ôÀŸ]\ù[XYŸ\”ÿY[ô◊HH\ŸT›]Jò[ŸJN¬à€€ú›‹\ù[XYŸP€ŸKŸ]\ù[XYŸP€ŸWHH\ŸT›]JàäN¬à€€ú›‹\ù[XYŸQö[KŸ]\ù[XYŸQö[WHH\ŸT›]Oö[Hù[äù[
+N¬à€€ú›‹\ù[XYŸTÿ]ö[ôÀŸ]\ù[XYŸTÿ]ö[ô◊HH\ŸT›]Jò[ŸJN¬à€€ú›ÿù[”X\›\í[XYŸQö[\ÀŸ]ù[”X\›\í[XYŸQö[\◊HH\ŸT›]Oö[V◊Oä◊JN¬à€€ú›ÿù[–X›X[[XYŸQö[\ÀŸ]ù[–X›X[[XYŸQö[\◊HH\ŸT›]Oö[V◊Oä◊JN¬à€€ú›ÿù[“[XYŸTù[õö[ôÀŸ]ù[“[XYŸTù[õö[ô◊HH\ŸT›]Jò[ŸJN¬à€€ú›ÿù[“[XYŸTõŸ‹ô\‹ÀŸ]ù[“[XYŸTõŸ‹ô\‹◊HH\ŸT›]J»€ôNà›[àJN¬à€€ú›ÿù[“[XYŸQòZ[YŸ]ù[“[XYŸQòZ[YHH\ŸT›]O\úò^O»ò[YNà›ö[ôŒ»ôX\€€éà›ö[ô»Oèä◊JN¬à€€ú›‹\ùù[ôQ^Ÿ[Ÿ]\ùù[ôQ^Ÿ[HH\ŸT›]Oö[Hù[äù[
+N¬à€€ú›‹\ùù[ôSX\›\ëö[\ÀŸ]\ùù[ôSX\›\ëö[\◊HH\ŸT›]Oö[V◊Oä◊JN¬à€€ú›‹\ùù[ôPX›X[ö[\ÀŸ]\ùù[ôPX›X[ö[\◊HH\ŸT›]Oö[V◊Oä◊JN¬à€€ú›‹\ùù[ôTô]öY]ÀŸ]\ùù[ôTô]öY]◊HH\ŸT›]O\ùù[ôTô]öY]»ù[äù[
+N¬à€€ú›‹\ùù[ôTù[õö[ôÀŸ]\ùù[ôTù[õö[ô◊HH\ŸT›]Jò[ŸJN¬à€€ú›‹\ùù[ôTõŸ‹ô\‹ÀŸ]\ùù[ôTõŸ‹ô\‹◊HH\ŸT›]J»€ôNà›[àJN¬à€€ú›‹\ùù[ôQòZ[YŸ]\ùù[ôQòZ[YHH\ŸT›]O\úò^O»ò[YNà›ö[ôŒ»ôX\€€éà›ö[ô»Oèä◊JN¬à€€ú›‹\ù[XYŸSôYYKŸ]\ù[XYŸSôYYWHH\ŸT›]JàäN¬à€€ú›Ÿ[][ô“[\‹ùYŸ][][ô“[\‹ùYHH\ŸT›]Où[Xô\àù[äù[
+N¬à€€ú›‹›ÿ⁄ÀŸ]›ÿ⁄◊HH\ŸT›]O›ÿ⁄‘^[ÿYä»\ùŒà◊KY‹Œà◊K[ÿÿ][€úŒà◊KX⁄‹Œà◊K\‹]⁄[ö‹Œà◊Kõÿê€‹›\ô\Œà◊KX[ùX[ôXŸZ\Œà◊K€›[ùYù\›Y[ùŒà◊K€›[ùYù\›Y[ù[ô\Œà◊K[›ô[Y[ù^\Œà◊HJN¬à€€ú›‹›ÿ⁄”\›^[ôYŸ]›ÿ⁄”\›^[ôYHH\ŸT›]Jò[ŸJN¬à€€ú›‹›ÿ⁄”X[ùX[[ùûKŸ]›ÿ⁄”X[ùX[[ùûWHH\ŸT›]Jò[ŸJN¬à€€ú›€\››ÿ⁄‘ôXŸZ\Ÿ]\››ÿ⁄‘ôXŸZ\HH\ŸT›]O»Y“Yà›ö[ôŒ»X]\öX[€ŸNà›ö[ôŒ»õÿìõŒà›ö[ôŒ»]Nàù[Xô\é»ÿÿ][€ê€ŸNà›ö[ô»Hù[äù[
+N¬à€€ú›€X[ùX[›ÿ⁄—õ‹õKŸ]X[ùX[›ÿ⁄—õ‹õWHH\ŸT›]J»X]\öX[€ŸNààã]NààãõÿìõŒààãõŸX›[€ë]Nàô]»]J
+Kù“T”‘›ö[ô 
+Kú€XŸJL
+KôYô\ô[òŸSõŒààãõ›NàààJN¬à€€ú›€X[ùX[\Xÿ]RõÿãŸ]X[ùX[\Xÿ]RõÿóHH\ŸT›]OX[ùX[\Xÿ]Rõÿàù[äù[
+N¬à€€ú›€X[ùX[ôXŸZ\›XÿŸ\‹ÀŸ]X[ùX[ôXŸZ\›XÿŸ\‹◊HH\ŸT›]OX[ùX[ôXŸZ\›XÿŸ\‹»ù[äù[
+N¬à€€ú›€X[ùX[ò[úÿX›[€ì‹[ãŸ]X[ùX[ò[úÿX›[€ì‹[óHH\ŸT›]JàäN¬à€€ú›‹›ÿ⁄–€›[ùõ‹õKŸ]›ÿ⁄–€›[ùõ‹õWHH\ŸT›]J»ò]‘^[ÿYààã€›[ùY]Nààã€›[ù]Nàô]»]J
+Kù“T”‘›ö[ô 
+Kú€XŸJL
+KôX\€€éà∏.&∏.,x.&x.%¯.-∏. x.(∏.+x.%8.%x.(¯.)¯."8.&x.,x.&à›ÿ⁄»8.*∏.-8.bx.&x.`8.%8.-¯.+x.&HàJN¬à€€ú›‹›ÿ⁄–€›[ùô]öY]ÀŸ]›ÿ⁄–€›[ùô]öY]◊HH\ŸT›]O›ÿ⁄–€›[ùô]öY]»ù[äù[
+N¬à€€ú›‹›ÿ⁄–€›[ù€€ôö\õS‹[ãŸ]›ÿ⁄–€›[ù€€ôö\õS‹[óHH\ŸT›]Jò[ŸJN¬à€€ú›‹›ÿ⁄”X[òYŸ[Y[ùÿ]ö[ôÀŸ]›ÿ⁄”X[òYŸ[Y[ùÿ]ö[ô◊HH\ŸT›]Jò[ŸJN¬à€€ú››ÿ⁄–€›[ù[ú]ôYàH\ŸTôYèS[ú][[Y[ùäù[
+N¬à€€ú›‹ô\XŸ[Y[ùŸ]ô\XŸ[Y[ùHH\ŸT›]Oô\XŸ[Y[ù^[ÿYä»ô\]Y\›Œà◊K\‹›Y\Œà◊HJN¬à€€ú›‹ô\XŸ[Y[ùÿY[ôÀŸ]ô\XŸ[Y[ùÿY[ô◊HH\ŸT›]Jò[ŸJN¬à€€ú›‹ô\XŸ[Y[ùÿ]ö[ôÀŸ]ô\XŸ[Y[ùÿ]ö[ô◊HH\ŸT›]Jò[ŸJN¬à€€ú›‹ô\XŸ[Y[ùŸX\ò⁄Ÿ]ô\XŸ[Y[ùŸX\ò⁄HH\ŸT›]JàäN¬à€€ú›‹ô\XŸ[Y[ùŸ[X›YYŸ]ô\XŸ[Y[ùŸ[X›YYHH\ŸT›]JàäN¬à€€ú›‹ô\XŸ[Y[ùYÀŸ]ô\XŸ[Y[ùY◊HH\ŸT›]JàäN¬à€€ú›‹ô\XŸ[Y[ù]KŸ]ô\XŸ[Y[ù]WHH\ŸT›]JàäN¬à€€ú›‹ô\XŸ[Y[ùô]öY]ÀŸ]ô\XŸ[Y[ùô]öY]◊HH\ŸT›]Oô\XŸ[Y[ù\‹›YTô]öY]»ù[äù[
+N¬à€€ú›‹ô\XŸ[Y[ùõ‹õKŸ]ô\XŸ[Y[ùõ‹õWHH\ŸT›]J¬àX]\öX[€ŸNààã›\›€Y\éààãô\]Y\›Y]NààãôX\€€ï\Nàú⁄‹ùYŸHãôX\€€ë]Z[ààãôYYY]NààãàJN¬à€€ú›ô\XŸ[Y[ù[ú]ôYàH\ŸTôYèS[ú][[Y[ùäù[
+N¬à€€ú›⁄õÿê€‹⁄[ô“Ÿ^KŸ]õÿê€‹⁄[ô“Ÿ^WHH\ŸT›]JàäN¬à€€ú›⁄õÿî]PYù\›Y[ùŸ]õÿî]PYù\›Y[ùHH\ŸT›]Oõÿî]X[ù]PYù\›Y[ùù[äù[
+N¬à€€ú›⁄õÿî]U\ôŸ]Ÿ]õÿî]U\ôŸ]HH\ŸT›]JàäN¬à€€ú›⁄õÿî]TôX\€€ãŸ]õÿî]TôX\€€óHH\ŸT›]JàäN¬à€€ú›⁄õÿî]Tô]öY]ÀŸ]õÿî]Tô]öY]◊HH\ŸT›]Oõÿî]X[ù]PYù\›Y[ùô]öY]»ù[äù[
+N¬à€€ú›⁄õÿî]Tÿ]ö[ôÀŸ]õÿî]Tÿ]ö[ô◊HH\ŸT›]Jò[ŸJN¬à€€ú›⁄õÿî]P‹ôX]YY‹ÀŸ]õÿî]P‹ôX]YY‹◊HH\ŸT›]O›ÿ⁄’Y÷◊Oä◊JN¬à€€ú›⁄õÿî]PYù\›YŸ]õÿî]PYù\›YHH\ŸT›]Jò[ŸJN¬à€€ú›⁄õÿê€‹ŸTŸX\ò⁄Ÿ]õÿê€‹ŸTŸX\ò⁄HH\ŸT›]JàäN¬à€€ú›⁄õÿê€‹ŸTYŸKŸ]õÿê€‹ŸTYŸWHH\ŸT›]JJN¬à€€ú›‹›ÿ⁄”ÿY[ôÀŸ]›ÿ⁄”ÿY[ô◊HH\ŸT›]Jò[ŸJN¬à€€ú›ÿ€X\ö[ô’\››ÿ⁄ÀŸ]€X\ö[ô’\››ÿ⁄◊HH\ŸT›]Jò[ŸJN¬à€€ú›‹›ÿ⁄‘\ùõ‹õKŸ]›ÿ⁄‘\ùõ‹õWHH\ŸT›]J»X]\öX[€ŸNààã\ùò[YNààã›\›€Y\éààãÿÿ][€éààã›[ô\ô]NàààJN¬à€€ú›‹\ùŸX\ò⁄Ÿ]\ùŸX\ò⁄HH\ŸT›]JàäN¬à€€ú›⁄\›‹ûT]Y\ûKŸ]\›‹ûT]Y\ûWHH\ŸT›]JàäN¬à€€ú›⁄\›‹ûQ]KŸ]\›‹ûQ]WHH\ŸT›]JàäN¬à€€ú›⁄\›‹ûQ]UÀŸ]\›‹ûQ]U◊HH\ŸT›]JàäN¬à€€ú›⁄\›‹ûU\KŸ]\›‹ûU\WHH\ŸT›]Jò[äN¬à€€ú›ÿ]Y]Ÿ‹ÀŸ]]Y]Ÿ‹◊HH\ŸT›]O]Y]Ÿ÷◊Oä◊JN¬à€€ú›ÿ]Y]Ÿ‹”ÿY[ôÀŸ]]Y]Ÿ‹”ÿY[ô◊HH\ŸT›]Jò[ŸJN¬à€€ú›‹\ùYŸKŸ]\ùYŸWHH\ŸT›]JJN¬à€€ú›‹\ùYŸT⁄^ôKŸ]\ùYŸT⁄^ôWHH\ŸT›]JL
+N¬à€€ú››Y‘ŸX\ò⁄Ÿ]Y‘ŸX\ò⁄HH\ŸT›]JàäN¬à€€ú››Y‘YŸKŸ]Y‘YŸWHH\ŸT›]JJN¬à€€ú››Y‘YŸT⁄^ôKŸ]Y‘YŸT⁄^ôWHH\ŸT›]JL
+N¬à€€ú›Ÿ[][ô‘\ù€ŸKŸ][][ô‘\ù€ŸWHH\ŸT›]JàäN¬à€€ú›Ÿ[][ô‘›ÿ⁄’Y“YŸ][][ô‘›ÿ⁄’Y“YHH\ŸT›]JàäN¬à€€ú›‹›ÿ⁄’Y—õ‹õKŸ]›ÿ⁄’Y—õ‹õWHH\ŸT›]J»X]\öX[€ŸNààã]NààãõÿìõŒààãõŸX›[€ë]Nàô]»]J
+Kù“T”‘›ö[ô 
+Kú€XŸJL
+HJN¬à€€ú›‹›ÿ⁄‘ÿÿ[ãŸ]›ÿ⁄‘ÿÿ[óHH\ŸT›]JàäN¬à€€ú›‹›ÿ⁄”ÿÿ][€ãŸ]›ÿ⁄”ÿÿ][€óHH\ŸT›]O›ÿ⁄”ÿÿ][€îŸ[X›[€àù[äù[
+N¬à€€ú›‹›ÿ⁄”ÿÿ][€êX›]ö]KŸ]›ÿ⁄”ÿÿ][€êX›]ö]WHH\ŸT›]J
+N¬à€€ú››ÿ⁄‘ÿÿ[í[ú]ôYàH\ŸTôYèS[ú][[Y[ùäù[
+N¬à€€ú››ÿ⁄‘ÿÿ[ï[Y\îôYàH\ŸTôYèù[Xô\àù[äù[
+N¬à€€ú››ÿ⁄‘ÿÿ[îô\]Y\›ôYàH\ŸTôYäò[ŸJN¬à€€ú›\‹]⁄ÿÿ[ï[Y\îôYàH\ŸTôYèù[Xô\àù[äù[
+N¬à€€ú›\‹]⁄ÿÿ[îô\]Y\›ôYàH\ŸTôYäò[ŸJN¬à€€ú›\ôÿ\ôTÿÿ[êùYôô\îôYàH\ŸTôYäàäN¬à€€ú›\ôÿ\ôTÿÿ[ì\›Ÿ^TôYàH\ŸTôYä
+N¬à€€ú›\ôÿ\ôTÿÿ[ï[Y\îôYàH\ŸTôYèù[Xô\àù[äù[
+N¬à€€ú›‹›ÿ⁄‘ôXŸZ]ôTô]öY]ÀŸ]›ÿ⁄‘ôXŸZ]ôTô]öY]◊HH\ŸT›]O›ÿ⁄‘ôXŸZ]ôTô]öY]»ù[äù[
+N¬à€€ú›‹›ÿ⁄‘ôXŸZ]ôT]KŸ]›ÿ⁄‘ôXŸZ]ôT]WHH\ŸT›]JàäN¬à€€ú›‹›ÿ⁄‘ôXŸZ]ôTõŸX›[€ë]KŸ]›ÿ⁄‘ôXŸZ]ôTõŸX›[€ë]WHH\ŸT›]JàäN¬à€€ú›‹›ÿ⁄‘ÿ]ö[ôÀŸ]›ÿ⁄‘ÿ]ö[ô◊HH\ŸT›]Jò[ŸJN¬àÀ»ÿÿ[õô\ãÿÿ[Y\òH[ô\ú»]ôH[ú⁄YHYôôX›»[ôÿ[à›\ù⁄\ŸHŸYH[à€›ÿ⁄»€ò\⁄›ÇàÀ»ŸY\H]\›]H[àHôYà€»H€õ›€àö[ùYY»ÿ[à‹[à]»€€ôö\õX][€à[[YYX][KÇà€€ú››ÿ⁄—]TôYàH\ŸTôYä›ÿ⁄ N¬à›ÿ⁄—]TôYãò›\úô[ùH›ÿ⁄Œ¬à€€ú›ÿ‹ôX]Y›ÿ⁄’Y‹ÀŸ]‹ôX]Y›ÿ⁄’Y‹◊HH\ŸT›]O›ÿ⁄’Y÷◊Oä◊JN¬à€€ú›ö[R[ú]H\ŸTôYèS[ú][[Y[ùäù[
+N¬à€€ú›\ùù[ôQ^Ÿ[[ú]H\ŸTôYèS[ú][[Y[ùäù[
+N¬à€€ú›\ùù[ôSX\›\í[ú]H\ŸTôYèS[ú][[Y[ùäù[
+N¬à€€ú›\ùù[ôPX›X[[ú]H\ŸTôYèS[ú][[Y[ùäù[
+N¬à€€ú›Y“[ú]H\ŸTôYèS[ú][[Y[ùäù[
+N¬à€€ú›öY[‘ôYàH\ŸTôYèSöY[—[[Y[ùäù[
+N¬à€€ú›Y‘ô\›[ôYàH\ŸTôYèS[[Y[ùäù[
+N¬à€€ú›ô\öYûR[ú]H\ŸTôYèS[ú][[Y[ùäù[
+N¬à€€ú›ô\öYûTô\›[ôYàH\ŸTôYèS[[Y[ùäù[
+N¬à€€ú›ÿ[ëY]YŸHH
+\ôŸ]àY]XõTYŸRŸ^JHOà\Ÿ\ãúõ€HOOHòYZ[àà\Ÿ\ãú\õZ\‹⁄[€úÀö[ò€Y\ 	›\ôŸ]KYY]
+N¬à€€ú›ÿ[îö[ùY‹»H\Ÿ\ãúõ€HOOHòYZ[àà\Ÿ\ãú\õZ\‹⁄[€úœÀö[ò€Y\ ùY‹»äN¬à€€ú›ÿ[ê‹ôX]Tô\XŸ[Y[ùHÿ[ëY]YŸJúô\XŸ[Y[ùäH	âà
+\Ÿ\ãúõ€HOOHòYZ[àà\Ÿ\ãúõ€HOOHúX»à\Ÿ\ãúõ€HOOHö[ú‹X›‹àäN¬à€€ú›ÿ[í\‹›YTô\XŸ[Y[ùHÿ[ëY]YŸJúô\XŸ[Y[ùäH	âà
+\Ÿ\ãúõ€HOOHòYZ[àà\Ÿ\ãúõ€HOOHô[]ô\ûHà\Ÿ\ãúõ€HOOHô\‹]⁄\àäN¬à€€ú›[›ŸYYŸ\»H\ŸSY[[ 
+
+HOà¬à€€ú›YŸ\»Hô]»Ÿ]YŸRŸ^OäêUãôö[\ä
+][JHOà\Ÿ\ãúõ€HOOHòYZ[àà\Ÿ\ãú\õZ\‹⁄[€úÀö[ò€Y\ ][KöŸ^JJKõX\
+
+][JHOà][KöŸ^JJN¬àô]\õàYŸ\Œ¬àK›\Ÿ\ãú\õZ\‹⁄[€úÀ\Ÿ\ãúõ€WJN¬à€€ú›ö\ú›[›ŸYYŸHHêUãôö[ô
+
+][JHOà[›ŸYYŸ\Àö\ ][KöŸ^JJOÀöŸ^Hô\⁄õÿ\ôé¬à€€ú›€‹öŸõ›‘YŸNàYŸRŸ^Hù[H[›ŸYYŸ\Àö\ ô\‹]⁄äBà»ô\‹]⁄Çàà[›ŸYYŸ\Àö\ ò\úò[ôŸHäH»ò\úò[ôŸHààù[¬Çà€€ú›ô\›‹ôYYŸTôYàH\ŸTôYäò[ŸJN¬à\ŸQYôôX›
+
+
+HOà¬àYà
+ô\›‹ôYYŸTôYãò›\úô[ù
+Hô]\õé¬àô\›‹ôYYŸTôYãò›\úô[ùHùYN¬à€€ú›ÿ]ôYYŸHH[€ö]‹ì[ŸH»õ›ô\ôYHààYŸQúõ€Sÿÿ][€ä
+N¬à€€ú›ô^YŸHHÿ]ôYYŸH	âà[›ŸYYŸ\Àö\ ÿ]ôYYŸJH»ÿ]ôYYŸHàö\ú›[›ŸYYŸN¬àŸ]YŸJô^YŸJN¬àYà
+[[€ö]‹ì[ŸJH\]TYŸSÿÿ][€äô^YŸKúô\XŸHäN¬àKÿ[›ŸYYŸ\Àö\ú›[›ŸYYŸK[€ö]‹ì[ŸWJN¬Çà\ŸQYôôX›
+
+
+HOà¬à€€ú›€í\›‹ûP⁄[ôŸHH
+
+HOà¬àYà
+[€ö]‹ì[ŸJHô]\õé¬à€€ú›ô\]Y\›YYŸHHYŸQúõ€U\õ
+
+N¬à€€ú›ô^YŸHHô\]Y\›YYŸH	âà[›ŸYYŸ\Àö\ ô\]Y\›YYŸJH»ô\]Y\›YYŸHàö\ú›[›ŸYYŸN¬à⁄[ô›Àõÿÿ[›‹òYŸKúŸ]][Jö⁄]X›\úô[ù\YŸHãô^YŸJN¬àŸ]YŸJô^YŸJN¬àYà
+ô^YŸHOOHú›ÿ⁄»äH¬àŸ]›ÿ⁄”ÿÿ][€äù[
+N¬àŸ]›ÿ⁄”ÿÿ][€êX›]ö]J
+N¬àŸ]›ÿ⁄‘ÿÿ[äàäN¬àBàYà
+ô^YŸHOOHú\ù»àô^YŸHOOHúŸ][ô‹»äHõ⁄YÿY\ù[XYŸ\ 
+N¬àŸ]Y[ùS‹[äò[ŸJN¬à⁄[ô›Àúÿ‹õ€ »‹àJN¬àN¬à⁄[ô›ÀòY]ô[ù\›[ô\äú‹›]Hã€í\›‹ûP⁄[ôŸJN¬àô]\õà
+
+HOà⁄[ô›Àúô[[›ôQ]ô[ù\›[ô\äú‹›]Hã€í\›‹ûP⁄[ôŸJN¬àKÿ[›ŸYYŸ\Àö\ú›[›ŸYYŸK[€ö]‹ì[ŸWJN»À»\€[ùY\ÿXõK[[ôHôXX›Z€⁄‹ÀŸ^]\›]ôKY\¬Çà\ﬁ[ò»ù[ò›[€àÿYYJ
+H¬àŸ]ÿY[ô ùYJN¬àŸ]\úõ‹äàäN¬àûH¬à€€ú›ô\‹€úŸHH]ÿZ]ô]⁄
+ãÿ\KŸYHã»ÿX⁄NàõõÀ\›‹ôHàJN¬à€€ú›]HH]ÿZ]ô\‹€úŸKöú€€ä
+H\»YT^[ÿY¬àYà
+\ô\‹€úŸKõ⁄ Hõ›»ô]»\úõ‹ä]Kô\úõ‹à∏.`∏.*¯.)x.%8. ∏.bx.+x.(x..x.)HYH8.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àŸ]^[ÿY
+]JN¬àŸ]YSÿYY]
+ô]»]J
+Kù“T”‘›ö[ô 
+JN¬àYà
+Yö[\ë]H	âà]KôY\Àõ[ô›
+H¬à€€ú›]\»HÀããõô]»Ÿ]
+]KôY\ÀõX\
+
+YJHOàYKô[]ô\ûQ]JJWKú€‹ù
+
+N¬à€€ú›Ÿ^HHò[ô⁄€⁄—]U[YRŸ^J
+Kú€XŸJL
+N¬àŸ]ö[\ë]J]\Àö[ò€Y\ Ÿ^JH»Ÿ^Hà]\Àò]
+LJHàäN¬àBàYà
+\Ÿ[X›Yÿÿ[à	âà]Kúÿÿ[úÀõ[ô›
+HŸ]Ÿ[X›Yÿÿ[ä]Kúÿÿ[ú÷ÃJN¬àHÿ]⁄
+ÿ]Y⁄
+H¬àŸ]\úõ‹äÿ]Y⁄[ú›[òŸ[Ÿà\úõ‹à»ÿ]Y⁄õY\‹ÿYŸHà∏.`∏.*¯.)x.%8. ∏.bx.+x.(x..x.)HYH8.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àHö[ò[H¬àŸ]ÿY[ô ò[ŸJN¬àBàBÇà\ﬁ[ò»ù[ò›[€àÿY›ÿ⁄ 
+H¬àŸ]›ÿ⁄”ÿY[ô ùYJN¬àûH¬à€€ú›ô\‹€úŸHH]ÿZ]ô]⁄
+ãÿ\K‹›ÿ⁄»ã»ÿX⁄NàõõÀ\›‹ôHàJN¬à€€ú›]HH]ÿZ]ô\‹€úŸKöú€€ä
+H\»›ÿ⁄‘^[ÿY	à»\úõ‹èŒà›ö[ô»N¬àYà
+\ô\‹€úŸKõ⁄ Hõ›»ô]»\úõ‹ä]Kô\úõ‹à∏.`∏.*¯.)x.%›ÿ⁄»8.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àŸ]›ÿ⁄ ¬à\ùŒà]Kú\ù»◊KY‹Œà]KùY‹»◊K[ÿÿ][€úŒà]Kò[ÿÿ][€ú»◊KàX⁄‹Œà]KúX⁄‹»◊K\‹]⁄[ö‹Œà]Kô\‹]⁄[ö‹»◊Kõÿê€‹›\ô\Œà]Köõÿê€‹›\ô\»◊KàX[ùX[ôXŸZ\Œà]KõX[ùX[ôXŸZ\»◊K€›[ùYù\›Y[ùŒà]Kò€›[ùYù\›Y[ù»◊Kà€›[ùYù\›Y[ù[ô\Œà]Kò€›[ùYù\›Y[ù[ô\»◊K[›ô[Y[ù^\Œà]Kõ[›ô[Y[ù^\»◊KàJN¬àHÿ]⁄
+ÿ]Y⁄
+H¬àŸ]õ›XŸJ»\Nàô\úõ‹àã^àÿ]Y⁄[ú›[òŸ[Ÿà\úõ‹à»ÿ]Y⁄õY\‹ÿYŸHà∏.`∏.*¯.)x.%›ÿ⁄»8.a8.(x.b8.*∏.,¯.`8.(¯.a¯."àJN¬àHö[ò[H¬àŸ]›ÿ⁄”ÿY[ô ò[ŸJN¬àBàBÇà\ﬁ[ò»ù[ò›[€àÿYõ‹ôXÿ\›
+
+H¬àŸ]õ‹ôXÿ\›ÿY[ô ùYJN¬àûH¬à€€ú›ô\‹€úŸHH]ÿZ]ô]⁄
+ãÿ\KŸõ‹ôXÿ\›ã»ÿX⁄NàõõÀ\›‹ôHàJN¬à€€ú›]HH]ÿZ]ô\‹€úŸKöú€€ä
+H\»õ‹ôXÿ\›^[ÿY¬àYà
+\ô\‹€úŸKõ⁄ Hõ›»ô]»\úõ‹ä]Kô\úõ‹à∏.`∏.*¯.)x.%õ‹ôXÿ\››ÿ⁄»8.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àŸ]õ‹ôXÿ\›
+¬àX›]ôR[\‹ùà]KòX›]ôR[\‹ùù[à[\‹ùŒà]Kö[\‹ù»◊Kà€›ô\òYŸNà]Kò€›ô\òYŸH◊Kà›[[X\ûNà]Kú›[[X\ûHù[àô[ôà]Kùô[ô◊Kàÿ[›[]Y]à]Kòÿ[›[]Y]àJN¬àHÿ]⁄
+ÿ]Y⁄
+H¬àŸ]õ›XŸJ»\Nàô\úõ‹àã^àÿ]Y⁄[ú›[òŸ[Ÿà\úõ‹à»ÿ]Y⁄õY\‹ÿYŸHà∏.`∏.*¯.)x.%õ‹ôXÿ\››ÿ⁄»8.a8.(x.b8.*∏.,¯.`8.(¯.a¯."àJN¬àHö[ò[H¬àŸ]õ‹ôXÿ\›ÿY[ô ò[ŸJN¬àBàBÇà\ﬁ[ò»ù[ò›[€àÿY]Y]Ÿ‹ 
+H¬àŸ]]Y]Ÿ‹”ÿY[ô ùYJN¬àûH¬à€€ú›ô\‹€úŸHH]ÿZ]ô]⁄
+ãÿ\Kÿ]Y][Ÿ‹œ€[Z]Låã»ÿX⁄NàõõÀ\›‹ôHàJN¬à€€ú›]HH]ÿZ]ô\‹€úŸKöú€€ä
+H\»»Ÿ‹œŒà]Y]Ÿ÷◊N»\úõ‹èŒà›ö[ô»N¬àYà
+\ô\‹€úŸKõ⁄ Hõ›»ô]»\úõ‹ä]Kô\úõ‹à∏.`∏.*¯.)x.%8.&¯.(¯.,8.)¯.,x.%x.-8. x.,∏.(¯.%8.,¯.`8.&x.-8.&x. x.,∏.(¯.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àŸ]]Y]Ÿ‹ ]KõŸ‹»◊JN¬àHÿ]⁄
+ÿ]Y⁄
+H¬àŸ]õ›XŸJ»\Nàô\úõ‹àã^àÿ]Y⁄[ú›[òŸ[Ÿà\úõ‹à»ÿ]Y⁄õY\‹ÿYŸHà∏.`∏.*¯.)x.%8.&¯.(¯.,8.)¯.,x.%x.-8. x.,∏.(¯.%8.,¯.`8.&x.-8.&x. x.,∏.(¯.a8.(x.b8.*∏.,¯.`8.(¯.a¯."àJN¬àHö[ò[H¬àŸ]]Y]Ÿ‹”ÿY[ô ò[ŸJN¬àBàBÇà\ﬁ[ò»ù[ò›[€àô\\ôQõ‹ôXÿ\›ö[JŸ[X›Yàö[Hù[
+H¬àŸ]õ‹ôXÿ\›ö[JŸ[X›Y
+N¬àŸ]õ‹ôXÿ\›ô]öY] ù[
+N¬àYà
+\Ÿ[X›Y
+Hô]\õé¬àYà
+\Ÿ[X›Yõò[YKù”›Ÿ\êÿ\ŸJ
+Kô[ô’⁄]
+ãò‹›àäJH¬àŸ]õ‹ôXÿ\›ö[Jù[
+N¬àŸ]õ›XŸJ»\Nàô\úõ‹àã^à∏.(¯.+x.!¯.(¯.,x.&∏.`8."x.'∏.,∏.,8.a8.'¯.)x.cõ‹ôXÿ\›ò‹›ààJN¬àô]\õé¬àBàŸ]õ‹ôXÿ\›\ú⁄[ô ùYJN¬àûH¬à€€ú›\úŸYH]ÿZ]\úŸQõ‹ôXÿ\›ö[JŸ[X›Y
+N¬àŸ]õ‹ôXÿ\›ô]öY] \úŸY
+N¬àHÿ]⁄
+ÿ]Y⁄
+H¬àŸ]õ‹ôXÿ\›ö[Jù[
+N¬àŸ]õ›XŸJ»\Nàô\úõ‹àã^àÿ]Y⁄[ú›[òŸ[Ÿà\úõ‹à»ÿ]Y⁄õY\‹ÿYŸHà∏.+x.b8.,∏.&x.a8.'¯.)x.cõ‹ôXÿ\›8.a8.(x.b8.*∏.,¯.`8.(¯.a¯."àJN¬àHö[ò[H¬àŸ]õ‹ôXÿ\›\ú⁄[ô ò[ŸJN¬àBàBÇà\ﬁ[ò»ù[ò›[€àŸ[X›õ‹ôXÿ\›ö[J]ô[ùà⁄[ôŸQ]ô[ùS[ú][[Y[ùäH¬à]ÿZ]ô\\ôQõ‹ôXÿ\›ö[J]ô[ùù\ôŸ]ôö[\œÀñÃHù[
+N¬à]ô[ùù\ôŸ]ùò[YHHàé¬àBÇà\ﬁ[ò»ù[ò›[€à[\‹ùõ‹ôXÿ\›
+
+H¬àYà
+Yõ‹ôXÿ\›ö[HYõ‹ôXÿ\›ô]öY]»õ‹ôXÿ\›[\‹ù[ô Hô]\õé¬àŸ]õ‹ôXÿ\›[\‹ù[ô ùYJN¬àŸ]õ‹ôXÿ\›õŸ‹ô\‹ 
+N¬à][\‹ùYH¬àûH¬à€€ú›[\‹ù⁄Ÿ[àHŸõ‹ôXÿ\›ö[Kõò[YKõ‹ôXÿ\›ö[Kú⁄^ôKõ‹ôXÿ\›ö[Kõ\›[ŸYöYYõ‹ôXÿ\›ô]öY]Àú€›\òŸPÿ[›[]Y]Köõ⁄[äüäN¬à€€ú›ôY⁄[îô\‹€úŸHH]ÿZ]ô]⁄
+ãÿ\KŸõ‹ôXÿ\›ã¬àY]Ÿàî‘’ãXY\úŒà»ò€€ù[ù]\Héàò\Xÿ][€ã⁄ú€€ààKàõŸNàî””ãú›ö[ô⁄YûJ¬àX›[€éàòôY⁄[ó⁄[\‹ùã[\‹ù⁄Ÿ[ãö[Sò[YNàõ‹ôXÿ\›ö[Kõò[YKà€›\òŸPÿ[›[]Y]àõ‹ôXÿ\›ô]öY]Àú€›\òŸPÿ[›[]Y]àJKàJN¬à€€ú›ôY⁄[àH]ÿZ]ôY⁄[îô\‹€úŸKöú€€ä
+H\»»[\‹ùYŒàù[Xô\é»\úõ‹èŒà›ö[ô»N¬àYà
+XôY⁄[îô\‹€úŸKõ⁄»XôY⁄[ãö[\‹ùY
+Hõ›»ô]»\úõ‹äôY⁄[ãô\úõ‹à∏.`8.(¯.-8.b8.(x.&x.,¯.`8. ∏.bx.,àõ‹ôXÿ\›8.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬à[\‹ùYHôY⁄[ãö[\‹ùY¬à€€ú›⁄[ö‘⁄^ôHHL¬àõ‹à
+]ŸôúŸ]H»ŸôúŸ]õ‹ôXÿ\›ô]öY]Àúõ›‹Àõ[ô›»ŸôúŸ]
+œH⁄[ö‘⁄^ôJH¬à€€ú›õ›‹»Hõ‹ôXÿ\›ô]öY]Àúõ›‹Àú€XŸJŸôúŸ]ŸôúŸ]
+»⁄[ö‘⁄^ôJN¬à€€ú›ô\‹€úŸHH]ÿZ]ô]⁄
+ãÿ\KŸõ‹ôXÿ\›ã¬àY]Ÿàî‘’ãXY\úŒà»ò€€ù[ù]\Héàò\Xÿ][€ã⁄ú€€ààKàõŸNàî””ãú›ö[ô⁄YûJ»X›[€éàò\[ô‹õ›‹»ã[\‹ùYõ›‹»JKàJN¬à€€ú›]HH]ÿZ]ô\‹€úŸKöú€€ä
+H\»»\úõ‹èŒà›ö[ô»N¬àYà
+\ô\‹€úŸKõ⁄ Hõ›»ô]»\úõ‹ä]Kô\úõ‹à8.&x.,¯.`8. ∏.bx.,∏. ∏.bx.+x.(x..x.)x."∏..8.%8.%¯.-x.b	”X]ôõ€‹äŸôúŸ]»⁄[ö‘⁄^ôJH
+»_H8.a8.(x.b8.*∏.,¯.`8.(¯.a¯."
+N¬àŸ]õ‹ôXÿ\›õŸ‹ô\‹ X]õZ[äNKX]úõ›[ô
+
+
+ŸôúŸ]
+»õ›‹Àõ[ô›
+H»õ‹ôXÿ\›ô]öY]Àúõ›‹Àõ[ô›
+H
+àL
+JJN¬àBà€€ú›ö[ò[^ôTô\‹€úŸHH]ÿZ]ô]⁄
+ãÿ\KŸõ‹ôXÿ\›ã¬àY]Ÿàî‘’ãXY\úŒà»ò€€ù[ù]\Héàò\Xÿ][€ã⁄ú€€ààKàõŸNàî””ãú›ö[ô⁄YûJ»X›[€éàôö[ò[^ôW⁄[\‹ùã[\‹ùYJKàJN¬à€€ú›ö[ò[^ôYH]ÿZ]ö[ò[^ôTô\‹€úŸKöú€€ä
+H\»»\úõ‹èŒà›ö[ô»N¬àYà
+Yö[ò[^ôTô\‹€úŸKõ⁄ Hõ›»ô]»\úõ‹äö[ò[^ôYô\úõ‹à∏.(∏.-¯.&x.(∏.,x.&Hõ‹ôXÿ\›8."∏..8.%8.`¯.*¯.(x.b8.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àŸ]õ‹ôXÿ\›õŸ‹ô\‹ L
+N¬àŸ]õ‹ôXÿ\›ö[Jù[
+N¬àŸ]õ‹ôXÿ\›ô]öY] ù[
+N¬àŸ]õ›XŸJ»\Nàú›XÿŸ\‹»ã^à∏.&x.,¯.`8. ∏.bx.,àõ‹ôXÿ\›8."∏..8.%8.`¯.*¯.(x.b8.`x.)x.,8.!8.,¯.&x.)¯.$¯.(¯.,8.(∏.,›ÿ⁄»8.`8.(¯.-x.(∏.&∏.(¯.bx.+x.(ààJN¬à]ÿZ]ÿYõ‹ôXÿ\›
+
+N¬àHÿ]⁄
+ÿ]Y⁄
+H¬àYà
+[\‹ùY
+H¬à]ÿZ]ô]⁄
+ãÿ\KŸõ‹ôXÿ\›ã¬àY]Ÿàî‘’ãXY\úŒà»ò€€ù[ù]\Héàò\Xÿ][€ã⁄ú€€ààKàõŸNàî””ãú›ö[ô⁄YûJ»X›[€éàòÿ[òŸ[⁄[\‹ùã[\‹ùYJKàJKòÿ]⁄
+
+
+HOà[ôYö[ôY
+N¬àBàŸ]õ›XŸJ»\Nàô\úõ‹àã^àÿ]Y⁄[ú›[òŸ[Ÿà\úõ‹à»ÿ]Y⁄õY\‹ÿYŸHà∏.&x.,¯.`8. ∏.bx.,àõ‹ôXÿ\›8.a8.(x.b8.*∏.,¯.`8.(¯.a¯."àJN¬àHö[ò[H¬àŸ]õ‹ôXÿ\›[\‹ù[ô ò[ŸJN¬àBàBÇà\ﬁ[ò»ù[ò›[€àÿYô\XŸ[Y[ù 
+H¬àŸ]ô\XŸ[Y[ùÿY[ô ùYJN¬àûH¬à€€ú›ô\‹€úŸHH]ÿZ]ô]⁄
+ãÿ\K‹ô\XŸ[Y[ù»ã»ÿX⁄NàõõÀ\›‹ôHàJN¬à€€ú›]HH]ÿZ]ô\‹€úŸKöú€€ä
+H\»ô\XŸ[Y[ù^[ÿY	à»\úõ‹èŒà›ö[ô»N¬àYà
+\ô\‹€úŸKõ⁄ Hõ›»ô]»\úõ‹ä]Kô\úõ‹à∏.`∏.*¯.)x.%8.`¯.&∏. ∏.+x.`8.&∏.-8. x.!¯.,∏.&x.%¯.%8.`x.%¯.&x.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àŸ]ô\XŸ[Y[ù
+»ô\]Y\›Œà]Kúô\]Y\›»◊K\‹›Y\Œà]Kö\‹›Y\»◊HJN¬àŸ]ô\XŸ[Y[ùŸ[X›YY
+
+›\úô[ù
+HOà¬àYà
+›\úô[ù	âà
+]Kúô\]Y\›»◊JKú€€YJ
+][JHOà›ö[ô ][KöY
+HOOH›\úô[ù	âàV»ò€€\]Yãòÿ[òŸ[YóKö[ò€Y\ ][Kú›]\ JJHô]\õà›\úô[ù¬à€€ú›ö\ú›‹[àH
+]Kúô\]Y\›»◊JKôö[ô
+
+][JHOà][Kú›]\»OOHú[ô[ô»à][Kú›]\»OOHú\ùX[äN¬àô]\õàö\ú›‹[à»›ö[ô ö\ú›‹[ãöY
+Hààé¬àJN¬àHÿ]⁄
+ÿ]Y⁄
+H¬àŸ]õ›XŸJ»\Nàô\úõ‹àã^àÿ]Y⁄[ú›[òŸ[Ÿà\úõ‹à»ÿ]Y⁄õY\‹ÿYŸHà∏.`∏.*¯.)x.%8.`¯.&∏. ∏.+x.`8.&∏.-8. x.!¯.,∏.&x.%¯.%8.`x.%¯.&x.a8.(x.b8.*∏.,¯.`8.(¯.a¯."àJN¬àHö[ò[H¬àŸ]ô\XŸ[Y[ùÿY[ô ò[ŸJN¬àBàBÇà\ŸQYôôX›
+
+
+HOà¬àYà
+Z\—YQ]T\õZ\‹⁄[€äHô]\õé¬à€€ú›[Y\àH⁄[ô›ÀúŸ][Y[›]
+
+
+HOàõ⁄YÿYYJ
+K
+N¬àô]\õà
+
+HOà⁄[ô›Àò€X\ï[Y[›]
+[Y\äN¬àK⁄\—YQ]T\õZ\‹⁄[€óJN»À»\€[ùY\ÿXõK[[ôHôXX›Z€⁄‹ÀŸ^]\›]ôKY\¬Çà\ŸQYôôX›
+
+
+HOà¬àYà
+YŸHOOHõ›ô\ôYHàX[›ŸYYŸ\Àö\ õ›ô\ôYHäJHô]\õé¬à€€ú›ôYúô\⁄H
+
+HOà»Yà
+ÿ›[Y[ùùö\⁄Xö[]T›]HOOHùö\⁄XõHäHõ⁄YÿYYJ
+N»N¬à€€ú›[Y\àH⁄[ô›ÀúŸ][ù\ùò[
+ôYúô\⁄ÃÃ
+N¬àÿ›[Y[ùòY]ô[ù\›[ô\äùö\⁄Xö[]X⁄[ôŸHãôYúô\⁄
+N¬àô]\õà
+
+HOà»⁄[ô›Àò€X\í[ù\ùò[
+[Y\äN»ÿ›[Y[ùúô[[›ôQ]ô[ù\›[ô\äùö\⁄Xö[]X⁄[ôŸHãôYúô\⁄
+N»N¬àK‹YŸK[›ŸYYŸ\◊JN»À»\€[ùY\ÿXõK[[ôHôXX›Z€⁄‹ÀŸ^]\›]ôKY\¬Çà\ŸQYôôX›
+
+
+HOà¬àYà
+V»ú›ÿ⁄»ãõX[ùX[\›ÿ⁄»ãú›ÿ⁄ÀX€›[ùãú\ù»ãùY‹»ãò\úò[ôŸHãúô\XŸ[Y[ùãô\‹]⁄ãúô\‹ù»ãö\›‹ûHóKö[ò€Y\ YŸJJHô]\õé¬à€€ú›[Y\àH⁄[ô›ÀúŸ][Y[›]
+
+
+HOàõ⁄YÿY›ÿ⁄ 
+K
+N¬àô]\õà
+
+HOà⁄[ô›Àò€X\ï[Y[›]
+[Y\äN¬àK‹YŸWJN¬Çà\ŸQYôôX›
+
+
+HOà¬àYà
+YŸHOOHôõ‹ôXÿ\›äHô]\õé¬à€€ú›[Y\àH⁄[ô›ÀúŸ][Y[›]
+
+
+HOàõ⁄YÿYõ‹ôXÿ\›
+
+K
+N¬àô]\õà
+
+HOà⁄[ô›Àò€X\ï[Y[›]
+[Y\äN¬àK‹YŸWJN¬Çà\ŸQYôôX›
+
+
+HOà¬àYà
+YŸHOOHúô\XŸ[Y[ùäHô]\õé¬à€€ú›[Y\àH⁄[ô›ÀúŸ][Y[›]
+
+
+HOàõ⁄YÿYô\XŸ[Y[ù 
+K
+N¬àô]\õà
+
+HOà⁄[ô›Àò€X\ï[Y[›]
+[Y\äN¬àK‹YŸWJN¬Çà\ŸQYôôX›
+
+
+HOà¬àYà
+YŸHOOHö\›‹ûHàX[›ŸYYŸ\Àö\ ö\›‹ûHäJHô]\õé¬à€€ú›[Y\àH⁄[ô›ÀúŸ][Y[›]
+
+
+HOàõ⁄YÿY]Y]Ÿ‹ 
+K
+N¬àô]\õà
+
+HOà⁄[ô›Àò€X\ï[Y[›]
+[Y\äN¬àK‹YŸK[›ŸYYŸ\◊JN»À»\€[ùY\ÿXõK[[ôHôXX›Z€⁄‹ÀŸ^]\›]ôKY\¬Çà\ŸQYôôX›
+
+
+HOà¬àYà
+YŸHOOHù\Ÿ\ú»à\Ÿ\ãúõ€HOOHòYZ[ààX[›ŸYYŸ\Àö\ ù\Ÿ\ú»äJHô]\õé¬à€€ú›[Y\àH⁄[ô›ÀúŸ][Y[›]
+
+
+HOàõ⁄YÿY\Ÿ\ú 
+K
+N¬àô]\õà
+
+HOà⁄[ô›Àò€X\ï[Y[›]
+[Y\äN¬àK‹YŸK\Ÿ\ãúõ€K[›ŸYYŸ\◊JN»À»\€[ùY\ÿXõK[[ôHôXX›Z€⁄‹ÀŸ^]\›]ôKY\¬Çà\ŸQYôôX›
+
+
+HOà¬à€€ú›[Y\àH⁄[ô›ÀúŸ][Y[›]
+
+
+HOà¬à€€ú››‹ôYH⁄[ô›Àõÿÿ[›‹òYŸKôŸ]][Jö⁄]YYK\Ÿ][ô‹»äN¬àYà
+›‹ôY
+H¬àûH¬à€€ú›\úŸYHî””ãú\úŸJ›‹ôY
+H\»\ùX[\[ŸàŸ][ô‹œé¬àŸ]Ÿ][ô‹ 
+›\úô[ù
+HOà
+»ããò›\úô[ùããú\úŸY€›[ôà\úŸYú€›[ôOOHò[ŸHJJN¬àHÿ]⁄» à\ŸHYò][»
+ã»BàBàK
+N¬àô]\õà
+
+HOà⁄[ô›Àò€X\ï[Y[›]
+[Y\äN¬àK◊JN¬Çà\ﬁ[ò»ù[ò›[€àÿY\Ÿ\ú 
+H¬àYà
+\Ÿ\ãúõ€HOOHòYZ[ààX[›ŸYYŸ\Àö\ ù\Ÿ\ú»äJHô]\õé¬àŸ]\Ÿ\ú”ÿY[ô ùYJN¬àûH¬à€€ú›ô\‹€úŸHH]ÿZ]ô]⁄
+ãÿ\K›\Ÿ\ú»ã»ÿX⁄NàõõÀ\›‹ôHàJN¬à€€ú›]HH]ÿZ]ô\‹€úŸKöú€€ä
+H\»»\Ÿ\úœŒàﬁ\›[U\Ÿ\ñ◊N»\úõ‹èŒà›ö[ô»N¬àYà
+\ô\‹€úŸKõ⁄ Hõ›»ô]»\úõ‹ä]Kô\úõ‹à∏.`∏.*¯.)x.%8.'8..x.bx.`¯."∏.bx.!¯.,∏.&x.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àŸ]ﬁ\›[U\Ÿ\ú ]Kù\Ÿ\ú»◊JN¬àHÿ]⁄
+ÿ]Y⁄
+H¬àŸ]õ›XŸJ»\Nàô\úõ‹àã^àÿ]Y⁄[ú›[òŸ[Ÿà\úõ‹à»ÿ]Y⁄õY\‹ÿYŸHà∏.`∏.*¯.)x.%8.'8..x.bx.`¯."∏.bx.!¯.,∏.&x.a8.(x.b8.*∏.,¯.`8.(¯.a¯."àJN¬àHö[ò[H¬àŸ]\Ÿ\ú”ÿY[ô ò[ŸJN¬àBàBÇà\ﬁ[ò»ù[ò›[€àÿY\ù[XYŸ\ 
+H¬àYà
+X[›ŸYYŸ\Àö\ ú\ù»äH	âàX[›ŸYYŸ\Àö\ úŸ][ô‹»äJHô]\õé¬àŸ]\ù[XYŸ\”ÿY[ô ùYJN¬àûH¬à€€ú›€X\›\îô\ÀX›X[ô\◊HH]ÿZ]õ€Z\ŸKò[
+¬àô]⁄
+ãÿ\K‹\ùZ[XYŸ\»ã»ÿX⁄NàõõÀ\›‹ôHàJKàô]⁄
+ãÿ\K‹\ùZ[XYŸ\œ‹€›XX›X[ã»ÿX⁄NàõõÀ\›‹ôHàJKàJN¬à€€ú›]HH]ÿZ]X\›\îô\Àöú€€ä
+H\»»[XYŸ\œŒà\ù[XYŸSX\[ô÷◊N»\úõ‹èŒà›ö[ô»N¬àYà
+[X\›\îô\Àõ⁄ Hõ›»ô]»\úõ‹ä]Kô\úõ‹à∏.`∏.*¯.)x.%8.(¯.,∏.(∏. x.,∏.(¯.(¯..x.&¯.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àŸ]\ù[XYŸ\ ]Kö[XYŸ\»◊JN¬à€€ú›X›X[]HH]ÿZ]X›X[ô\Àöú€€ä
+H\»»[XYŸ\œŒà\ù[XYŸSX\[ô÷◊N»\úõ‹èŒà›ö[ô»N¬àYà
+X›X[ô\Àõ⁄ HŸ]\ùX›X[[XYŸ\ X›X[]Kö[XYŸ\»◊JN¬àHÿ]⁄
+ÿ]Y⁄
+H¬àŸ]õ›XŸJ»\Nàô\úõ‹àã^àÿ]Y⁄[ú›[òŸ[Ÿà\úõ‹à»ÿ]Y⁄õY\‹ÿYŸHà∏.`∏.*¯.)x.%8.(¯.,∏.(∏. x.,∏.(¯.(¯..x.&¯.a8.(x.b8.*∏.,¯.`8.(¯.a¯."àJN¬àHö[ò[H¬àŸ]\ù[XYŸ\”ÿY[ô ò[ŸJN¬àBàBÇà\ﬁ[ò»ù[ò›[€à\ÿY\ù[XYŸJ]ô[ùàõ‹õQ]ô[ù
+H¬à]ô[ùúô]ô[ùYò][
+
+N¬àYà
+\\ù[XYŸP€ŸKùö[J
+H\\ù[XYŸQö[JHô]\õé¬àŸ]\ù[XYŸTÿ]ö[ô ùYJN¬àŸ]õ›XŸJù[
+N¬àûH¬à€€ú›õ‹õHHô]»õ‹õQ]J
+N¬àõ‹õKúŸ]
+õX]\öX[€ŸHã\ù[XYŸP€ŸKùö[J
+Kù’\\êÿ\ŸJ
+JN¬àõ‹õKúŸ]
+ö[XYŸHã\ù[XYŸQö[JN¬à€€ú›ô\‹€úŸHH]ÿZ]ô]⁄
+ãÿ\K‹\ùZ[XYŸ\»ã»Y]Ÿàî‘’ãõŸNàõ‹õHJN¬à€€ú›]HH]ÿZ]ô\‹€úŸKöú€€ä
+H\»»\úõ‹èŒà›ö[ô»N¬àYà
+\ô\‹€úŸKõ⁄ Hõ›»ô]»\úõ‹ä]Kô\úõ‹à∏.+x.,x.&¯.`∏.*¯.)x.%8.(¯..x.&¯.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àŸ]õ›XŸJ»\Nàú›XÿŸ\‹»ã^à8.&∏.,x.&x.%¯.-∏. x.(¯..x.&»	‹\ù[XYŸP€ŸKùö[J
+Kù’\\êÿ\ŸJ
+_H8.`x.)x.bx.)»8.(¯..x.&¯."8.,8.`x.*∏.%8.!¯.%¯.,x.&x.%¯.-x.`8.(x.-¯.b8.+x.*∏.`x. x.&XJN¬àŸ]\ù[XYŸP€ŸJàäN¬àŸ]\ù[XYŸQö[Jù[
+N¬à]ÿZ]ÿY\ù[XYŸ\ 
+N¬àHÿ]⁄
+ÿ]Y⁄
+H¬àŸ]õ›XŸJ»\Nàô\úõ‹àã^àÿ]Y⁄[ú›[òŸ[Ÿà\úõ‹à»ÿ]Y⁄õY\‹ÿYŸHà∏.+x.,x.&¯.`∏.*¯.)x.%8.(¯..x.&¯.a8.(x.b8.*∏.,¯.`8.(¯.a¯."àJN¬àHö[ò[H¬àŸ]\ù[XYŸTÿ]ö[ô ò[ŸJN¬àBàBÇà äÇà
+à8.`x.&¯.)x.!¯."∏.-¯.b8.+x.a8.'¯.)x.c8.`8.&¯.a¯.&HX]\öX[€ŸBà
+Çà
+à8.%x.,x.%8.&x.,∏.(x.*∏. x..8.)x.+x.+x. H8.%x.,x.%8.`8.)x. ∏.*∏.,¯.`8.&x.,∏.`x.&∏.&àà
+JHà8.%¯.-x.b⁄[ô›‹»8.`8.%x.-8.(x.`¯.*¯.bx.`8.)¯.)x.,∏."∏.-¯.b8.+x."¯.bx.,¬à
+à8.`x.)x.bx.)¯.`x.&¯.)x.!¯.`8.&¯.a¯.&x.%x.,x.)¯.'∏.-8.(x.'∏.c8.`¯.*¯.#x.b8.`¯.*¯.bx.%x.(¯.!¯. x.,x.&∏.%¯.-x.b8.(¯.,8.&∏.&∏.`8. x.a¯.&à\ùõÀÇà
+ã¬àù[ò›[€àX]\öX[€ŸQúõ€Qö[Sò[YJò[YNà›ö[ô H¬àô]\õàò[YBàúô\XŸJ◊ñ◊ãóJ…ÀàäBàúô\XŸJ◊ ó
+
+◊
+W âÀàäBàùö[J
+Bàù’\\êÿ\ŸJ
+N¬àBÇà äÇà
+à8.+x.,x.&¯.`∏.*¯.)x.%8.(¯..x.&»X\›\à8.`x.)x.,8.(¯..x.&¯."∏.-8.bx.&x.!¯.,∏.&x.`¯.&x. x.)x.b8.+x.!¯.*¯.)x.,∏.(∏.a8.'¯.)x.c8.`¯.&x.(¯.+x.&∏.`8.%8.-x.(∏.)¬à
+à8.`∏.%8.(∏.`¯."∏.bx."∏.-¯.b8.+x.a8.'¯.)x.c
+8.a8.(x.b8.(¯.)¯.(x.&x.,∏.(x.*∏. x..8.)JH8.`8.&¯.a¯.&HX]\öX[€ŸBà
+ã¬à\ﬁ[ò»ù[ò›[€à\ÿY\ù[XYŸ\–ù[ ]ô[ùàõ‹õQ]ô[ù
+H¬à]ô[ùúô]ô[ùYò][
+
+N¬à€€ú›\ÿY»H¬àããòù[”X\›\í[XYŸQö[\ÀõX\
+
+ö[JHOà
+»ö[K€›àõX\›\àà\»€€ú›Xô[àìX\›\ààJJKàããòù[–X›X[[XYŸQö[\ÀõX\
+
+ö[JHOà
+»ö[K€›àòX›X[à\»€€ú›Xô[à∏.(¯..x.&¯.`¯.&x. x.)x.b8.+x.!»àJJKàN¬àYà
+]\ÿYÀõ[ô›
+Hô]\õé¬àŸ]ù[“[XYŸTù[õö[ô ùYJN¬àŸ]õ›XŸJù[
+N¬àŸ]ù[“[XYŸQòZ[Y
+◊JN¬àŸ]ù[“[XYŸTõŸ‹ô\‹ »€ôNà›[à\ÿYÀõ[ô›JN¬Çà€€ú›òZ[Yà\úò^O»ò[YNà›ö[ôŒ»ôX\€€éà›ö[ô»OàH◊N¬à]ÿ]ôYH¬Çàõ‹à
+€€ú›⁄[ô^\ÿYHŸà\ÿYÀô[ùöY\ 
+JH¬à€€ú›X]\öX[€ŸHHX]\öX[€ŸQúõ€Qö[Sò[YJ\ÿYôö[Kõò[YJN¬àûH¬àYà
+[X]\öX[€ŸJHõ›»ô]»\úõ‹ä∏."∏.-¯.b8.+x.a8.'¯.)x.c8.)¯.b8.,∏.!»8.%x.,x.bx.!¯."∏.-¯.b8.+x.a8.'¯.)x.c8.`¯.*¯.bx.%x.(¯.!¯. x.,x.&à\ùõÀàäN¬àYà
+\›ÿ⁄Àú\ùÀú€€YJ
+\ù
+HOà\ùõX]\öX[€ŸHOOHX]\öX[€ŸJJH¬àõ›»ô]»\úõ‹ä8.a8.(x.b8.'∏.&à\ù	€X]\öX[€Ÿ_H8.`¯.&x.%¯.,8.`8.&∏.-x.(∏.&X
+N¬àBà€€ú›õ‹õHHô]»õ‹õQ]J
+N¬àõ‹õKúŸ]
+õX]\öX[€ŸHãX]\öX[€ŸJN¬àõ‹õKúŸ]
+ú€›ã\ÿYú€›
+N¬àõ‹õKúŸ]
+ö[XYŸHã\ÿYôö[JN¬à=˜›ı∂âûÀk∫wµÁn&x.%8.-8.)¯."8.,x.%8.*∏.b8.!»èû‹›[[X\ûKõ›ô\üOÿèè‹èèH€\‹”ò[YOHú\úHàœ∏.*∏.b8.!¯.`x.)x.bx.)¯.(¯.)¯.(HèûŸõ]
+›[[X\ûKúŸ[ù
+_Oÿèè‹èŸ]èèŸ]èè–ÿ\ôÇàÿ\ô€\‹”ò[YOHúô\‹ùÀX⁄\ùXÿ\ôà]OH∏.*∏.b8.!¯.+x.+x. x.%x.,∏.(HêP»»[ôHèè]à€\‹”ò[YOHòò\ãX⁄\ùô\‹ùÀYòXÀX⁄\ùèûŸòX‘›]Àõ[ô›»òX‘›]Àú€XŸJ KõX\
+
+][JHOà]àŸ^O^⁄][KôòX›Oèèû⁄][KôòX›Oÿèè‹[èèH›[O^ﬁ»⁄Yà	”X]õX^
+][Kö][\»»X^òX»
+àL
+_IX_Hœè‹‹[èè›õ€ôœû⁄][Kö][\ﬂO‹›õ€ôœèŸ]èäHà[\H]OH∏.(∏.,x.!¯.a8.(x.b8.(x.-x. ∏.bx.+x.(x..x.)Hà^H∏.)x.+x.!¯.&¯.(¯.,x.&∏."∏.b8.)¯.!¯.)¯.,x.&x.%¯.-x.b8.*¯.(¯.-¯.+x.`∏.(¯.!¯.!¯.,∏.&HàœüOŸ]èè–ÿ\ôÇàÿ\ô€\‹”ò[YOHúô\‹ùÀX⁄\ùXÿ\ôô\‹ùÀ]ô[ôXÿ\ôà]OH∏.`x.&x.)¯.`∏.&x.bx.(x. x.,∏.(¯.*∏.b8.!¯.!¯.,∏.&HàX›[€è^œ]à€\‹”ò[YOHúô\‹ùÀY^‹ù]€€»èèù]€à€\‹”ò[YOHô^‹ùXù]€à^Ÿ[à€ê€X⁄œ^ 
+HOàõ⁄Y^‹ùô\‹ù^Ÿ[
+
+_Oè‹[è∏•©è‹‹[èèèë^Ÿ[ÿèè€X[ãûﬁ‹€X[èÿù]€èèù]€à€\‹”ò[YOHô^‹ùXù]€ààà€ê€X⁄œ^Ÿ^‹ùô\‹ùüOè‹[è∏•©‹‹[èèèîèÿèè€X[∏.'∏.-8.(x.'∏.c»8.&∏.,x.&x.%¯.-∏. O‹€X[èÿù]€èèù]€à€\‹”ò[YOHô^‹ùXù]€à‹›àà€ê€X⁄œ^Ÿ^‹ùô\‹ù‹›üOè‹[è∏¢hO‹‹[èèèê‘’èÿèè€X[ãò‹›è‹€X[èÿù]€èèŸ]èüOÇà‹ôXŸ[ù^\Àõ[ô›»è]à€\‹”ò[YOHúô\‹ùÀ]ô[ôX⁄\ùèû‹ôXŸ[ù^\ÀõX\
+
+õ› HOà]àŸ^O^‹õ›Àô]_Oè‹[èèH€\‹”ò[YOHú[õôYà›[O^ﬁ»ZY⁄à	”X]õX^
+Kõ›Àö][\»»X^Z[H
+àL
+_IX_HœèH€\‹”ò[YOHôö[ö\⁄Yà›[O^ﬁ»ZY⁄à	”X]õX^
+õ›Àò€€\]Y»Hàõ›Àò€€\]Y»X^Z[H
+àL
+_IX_Hœè‹‹[èè€X[ûŸõ‹õX]]Jõ›Àô]JKú€XŸJJ_O‹€X[èŸ]èä_OŸ]èè]à€\‹”ò[YOHúô\‹ùÀX⁄\ù[YŸ[ôèè‹[èèH€\‹”ò[YOHú[õôYàœ∏.%x.,∏.(x.`x.'8.&O‹‹[èè‹[èèH€\‹”ò[YOHôö[ö\⁄Yàœ∏.*∏.b8.!¯.`x.)x.bx.)œ‹‹[èèŸ]èèœàà[\H]OH∏.(∏.,x.!¯.a8.(x.b8.(x.-x. ∏.bx.+x.(x..x.)Hà^H∏.`8.)x.-¯.+x. x."∏.b8.)¯.!¯.)¯.,x.&x.%¯.-x.b8.`8.'∏.-¯.b8.+x.`x.*∏.%8.!¯.`x.&x.)¯.`∏.&x.bx.(HàœüBà–ÿ\ôÇàŸ]èÇà]à€\‹”ò[YOHúô\‹ùÀ]Xõ\ÀY‹öYèÇàÿ\ô€\‹”ò[YOHúô\‹ùÀ]XõKXÿ\ôà]OH∏.*∏.(¯..8.&¯. x.,∏.(¯.*∏.b8.!¯.+x.+x. x.%x.,∏.(x.)¯.,x.&HàX›[€è^œ‹[à€\‹”ò[YOHúô\‹ùÀX›\úô[ùYö[\àè∏•‚HŸö[\ë]H»õ‹õX]]Jö[\ë]JHà∏.%8..x.%¯.,x.bx.!¯.*¯.(x.%üO‹‹[èüOûŸZ[T›]Àõ[ô›»]à€\‹”ò[YOHùXõK]‹ò\[ÿö[K]XõK]‹ò\èèXõH€\‹”ò[YOHõ[ÿö[KXÿ\ô]XõHèèXYèèè∏.)¯.,x.&x.%¯.-x.b›è€\‹”ò[YOHõù[Hè∏.`x.'8.&x.%¯.,x.bx.!¯.*¯.(x.%›è€\‹”ò[YOHõù[Hè∏.*∏.b8.!¯.`x.)x.bx.)œ›è€\‹”ò[YOHõù[Hè∏.!8.!¯.`8.*¯.)x.-¯.+O›è€\‹”ò[YOHõù[Hè∏.`8. x.-8.&x.!8.-8.)œ›è›èè›XYèõŸOûŸZ[T›]Àú€XŸJ
+KõX\
+
+õ› HOààŸ^O^‹õ›Àô]_Oè]K[Xô[H∏.)¯.,x.&x.%¯.-x.bèèèûŸõ‹õX]]Jõ›Àô]J_Oÿèè›è]K[Xô[H∏.`x.'8.&x.%¯.,x.bx.!¯.*¯.(x.%à€\‹”ò[YOHõù[Hèû‹õ›Àö][\ﬂO›è]K[Xô[H∏.*∏.b8.!¯.`x.)x.bx.)»à€\‹”ò[YOHõù[HŸ[ùèû‹õ›Àò€€\]YO›è]K[Xô[H∏.!8.!¯.`8.*¯.)x.-¯.+Hà€\‹”ò[YOHõù[Hÿ\õö[ô»èû‹õ›Àú\ùX[
+»õ›Àú[ô[ôﬂO›è]K[Xô[H∏.`8. x.-8.&x.!8.-8.)»à€\‹”ò[YOHõù[H[ôŸ\àèû‹õ›Àõ›ô\üO›è›èä_O›õŸOè›XõOèŸ]èàà[\H]OH∏.(∏.,x.!¯.a8.(x.b8.(x.-x. ∏.bx.+x.(x..x.)Hà^H∏.`¯.&x."∏.b8.)¯.!¯.)¯.,x.&x.%¯.-x.b8.%¯.-x.b8.`8.)x.-¯.+x. HàœüO–ÿ\ôÇàÿ\ô€\‹”ò[YOHúô\‹ùÀ]XõKXÿ\ôà]OH∏.(¯.,∏.(∏. x.,∏.(¯.%¯.-x.b8.(∏.,x.!¯.a8.(x.b8.!8.(¯.&à
+8.*∏..x.!¯.*∏..8.%
+HàX›[€è^œ‹[à€\‹”ò[YOHúô\‹ùÀX›\úô[ùYö[\àè∏•‚HŸö[\ëòX›OOHêSà»∏.%8..x.%¯.,x.bx.!¯.*¯.(x.%ààö[\ëòX›O‹‹[èüOèYUXõHõ›‹œ^Ÿö[\ôYôö[\ä
+YJHOà»ú[ô[ô»ãú\ùX[ãõ›ô\àóKö[ò€Y\ ›]SŸäYJJJKú€‹ù
+
+KäHOà
+ãúô\T]HHãúÿÿ[õôY]JHH
+Kúô\T]HHKúÿÿ[õôY]JJ_H[Z]^Õ_Hœè–ÿ\ôÇàŸ]èÇàõ€›\à€\‹”ò[YOHúŸ][ô‹ÀYõ€›\àèè‹[è∞™Håçà€€ùõ€›ÿ⁄»“Uà[öY⁄»ô\Ÿ\ùôYè‹‹[èè‹[èïô\ú⁄[€àãååÀå	õòú‹…õòú‹»	õòú‹…õòú‹–ò[ô⁄€⁄ÀZ[[ô	õòú‹…õòú‹»<'·Ó|'·ÎO‹‹[èèŸõ€›\èÇàŸ]èé¬àBÇàù[ò›[€àô[ô\í\›‹ûJ
+H¬à€€ú›X›]ö]Y\Œà\úò^O»Yà›ö[ôŒ»‹ôX]Y]à›ö[ôŒ»X›[€éà›ö[ôŒ»]Z[à›ö[ôŒ»X›‹éà›ö[ôŒ»€ôNà›ö[ôŒ»⁄[ôà›ö[ô»OàH◊N¬à^[ÿYö[\‹ùÀôõ‹ëXX⁄
+
+][JHOàX›]ö]Y\Àú\⁄
+¬àYàö[\‹ùHà
+»][KöY‹ôX]Y]à][Kò‹ôX]Y]X›[€éà∏.&x.,¯.`8. ∏.bx.,∏.`x.'8.&x.*∏.b8.!¯.!¯.,∏.&Hãà]Z[à][Kôö[Sò[YH
+»à0≠»à
+»õ]
+][Kúõ›–€›[ù
+H
+»à8.(¯.,∏.(∏. x.,∏.(»ãX›‹éà][Kö[\‹ùYûSò[YH∏†%ã€ôNàú\úHã⁄[ôàö[\‹ùãàJJN¬à›ÿ⁄ÀùY‹Àôõ‹ëXX⁄
+
+][JHOà¬àX›]ö]Y\Àú\⁄
+¬àYàùYÀHà
+»][KöY‹ôX]Y]à][Kò‹ôX]Y]X›[€éà∏.+x.+x. x.`x.)x.,8.'∏.-8.(x.'∏.cY»ãà]Z[à][KùY“Y
+»à0≠»à
+»][KõX]\öX[€ŸH
+»à0≠»õÿàà
+»][Köõÿìõ»
+»à0≠»à
+»õ]
+][Kú]JH
+»à8."∏.-8.bx.&HãàX›‹éà][Kúö[ùYûSò[YH∏†%ã€ôNàòõYHã⁄[ôàùY»ãàJN¬àYà
+][KúôXŸZ]ôY]
+HX›]ö]Y\Àú\⁄
+¬àYàúôXŸZ]ôKHà
+»][KöY‹ôX]Y]à][KúôXŸZ]ôY]X›[€éà∏.(¯.,x.&∏.!¯.,∏.&x.`8. ∏.bx.,à›ÿ⁄»ãà]Z[à][KùY“Y
+»à0≠»à
+»][KõX]\öX[€ŸH
+»à0≠»à
+»õ]
+][Kú]JH
+»à8."∏.-8.bx.&HãàX›‹éà][KúôXŸZ]ôYûSò[YH∏†%ã€ôNàô‹ôY[àã⁄[ôàúôXŸZ]ôHãàJN¬àJN¬à›ÿ⁄ÀúX⁄‹Àôõ‹ëXX⁄
+
+][JHOàX›]ö]Y\Àú\⁄
+¬àYàúX⁄ÀHà
+»][KöY‹ôX]Y]à][KúX⁄ŸY]X›[€éà∏."8.,x.%8.!¯.,∏.&Hãà]Z[à][Kú›ÿ⁄’Y–€ŸH
+»à0≠»à
+»][KõX]\öX[€ŸH
+»à0≠»õÿàà
+»][Köõÿìõ»
+»à0≠»à
+»õ]
+][KúX⁄ŸY]JH
+»à8."∏.-8.bx.&HãàX›‹éà][KúX⁄ŸYûSò[YH∏†%ã€ôNàõ‹ò[ôŸHã⁄[ôàò\úò[ôŸHãàJJN¬à^[ÿYúÿÿ[úÀôõ‹ëXX⁄
+
+][JHOàX›]ö]Y\Àú\⁄
+¬àYàô\‹]⁄Hà
+»][KöY‹ôX]Y]à][Kò‹ôX]Y]X›[€éà∏.%x.(¯.)¯."8.`x.)x.,8. ∏.,∏.(∏.+x.+x. Hãà]Z[à][KùY“Y
+»à0≠»à
+»][KõX]\öX[€ŸH
+»à0≠»à
+»õ]
+][Kú]JH
+»àà
+»][Kù[ö]àX›‹éà][Kúÿÿ[õôYûSò[YH∏†%ã€ôNàúôYã⁄[ôàô\‹]⁄ãàJJN¬à€€ú›]Y]⁄[ôH
+X›[€éà›ö[ô HOà¬àYà
+›ÿ\õö[ôÀÀù\›
+X›[€äJHô]\õàùÿ\õö[ô»é¬àYà
+Ÿ[]_ô[[›ô_€X\üÿ[òŸ[Àù\›
+X›[€äJHô]\õàô[]Hé¬àYà
+‹\õZ\‹⁄[€üõ€_\Ÿ\óÿXÿŸ\‹ÀÀù\›
+X›[€äJHô]\õàú\õZ\‹⁄[€àé¬àYà
+⁄[\‹ùÀù\›
+X›[€äJHô]\õàö[\‹ùé¬àYà
+€Ÿ⁄[üŸ€›][ãÀù\›
+X›[€äJHô]\õàúŸX›\ö]Hé¬àYà
+ÿ‹ôX]_Yö[ùôXŸZ]ô_›YŸ_\‹]⁄\‹›YKÀù\›
+X›[€äJHô]\õàò‹ôX]Hé¬àô]\õàù\]Hé¬àN¬à€€ú›]Y]€ôHH
+⁄[ôà›ö[ô HOà⁄[ôOOHùÿ\õö[ô»à»õ‹ò[ôŸHàà⁄[ôOOHô[]Hà»úôYàà⁄[ôOOHú\õZ\‹⁄[€àà»ú\úHàà⁄[ôOOHö[\‹ùà»òõYHàà⁄[ôOOHúŸX›\ö]Hà»õ‹ò[ôŸHàà⁄[ôOOHò‹ôX]Hà»ô‹ôY[àààòõYHé¬à€€ú›]Y]X›]ö]Y\»H]Y]Ÿ‹ÀõX\
+
+][JHOà¬à€€ú›⁄[ôH]Y]⁄[ô
+][KòX›[€íŸ^JN¬à€€ú›Y[ù]HH][Kô[ù]RY»0≠»	⁄][Kô[ù]RYXààé¬àô]\õà¬àYà]Y]I⁄][KöYX‹ôX]Y]à][Kò‹ôX]Y]X›[€éà][KòX›[€ìXô[à]Z[à	⁄][Kõ[Ÿ[SXô[I⁄Y[ù]_H0≠»	⁄][Kú›[[X\û_XàX›‹éà][KòX›‹ìò[YH»	⁄][KòX›‹ìò[Y_I⁄][KòX›‹ê€ŸH»
+	⁄][KòX›‹ê€Ÿ_JXààüXà∏.(¯.,8.&∏.&àãà€ôNà]Y]€ôJ⁄[ô
+K⁄[ôàN¬àJN¬àYà
+]Y]X›]ö]Y\Àõ[ô›
+H¬à€€ú›€\›]Y]H]Y]X›]ö]Y\ÀúôYXŸJ
+€\›][JHOà][Kò‹ôX]Y]€\›»][Kò‹ôX]Y]à€\›]Y]X›]ö]Y\÷ÃKò‹ôX]Y]
+N¬à€€ú›YÿXﬁPX›]ö]Y\»HX›]ö]Y\Àôö[\ä
+][JHOà][Kò‹ôX]Y]€\›]Y]
+N¬àYÿXﬁPX›]ö]Y\Àôõ‹ëXX⁄
+
+][JHOà»Yà
+][Kö⁄[ôOOHö[\‹ùäH][Kö⁄[ôHò‹ôX]Hé»JN¬àX›]ö]Y\Àõ[ô›H¬àX›]ö]Y\Àú\⁄
+ããò]Y]X›]ö]Y\ÀããõYÿXﬁPX›]ö]Y\ N¬àH[ŸHX›]ö]Y\Àôõ‹ëXX⁄
+
+][JHOà»Yà
+][Kö⁄[ôOOHö[\‹ùäH][Kö⁄[ôHò‹ôX]Hé»JN¬àX›]ö]Y\Àú€‹ù
+
+KäHOà›ö[ô ãò‹ôX]Y]
+Kõÿÿ[P€€\\ôJ›ö[ô Kò‹ôX]Y]
+JJN¬à€€ú›\›‹ûSôYYHH\›‹ûT]Y\ûKùö[J
+Kù”›Ÿ\êÿ\ŸJ
+N¬à€€ú›X›]ö]Sÿÿ[]HH
+ò[YNà›ö[ô HOà¬à€€ú›]HH”ÿÿ[]Jò[YJN¬àYà
+Y]JHô]\õààé¬à€€ú›YX\àH]KôŸ]ù[YX\ä
+N¬à€€ú›[€ùH›ö[ô ]KôŸ][€ù
+
+H
+»JKúY›\ù
+ãåäN¬à€€ú›^HH›ö[ô ]KôŸ]]J
+JKúY›\ù
+ãåäN¬àô]\õà	ﬁYX\üKI€[€ùKIŸ^_X¬àN¬à€€ú›ö[\ôYX›]ö]Y\»HX›]ö]Y\Àôö[\ä
+][JHOÇà
+\›‹ûU\HOOHò[à][Kö⁄[ôOOH\›‹ûU\JBà	âà
+Z\›‹ûQ]HX›]ö]Sÿÿ[]J][Kò‹ôX]Y]
+HèH\›‹ûQ]JBà	âà
+Z\›‹ûQ]U»X›]ö]Sÿÿ[]J][Kò‹ôX]Y]
+HH\›‹ûQ]U Bà	âà
+Z\›‹ûSôYYH⁄][KòX›[€ã][Kô]Z[][KòX›‹ã][Kò‹ôX]Y]Kú€€YJ
+ò[YJHOà›ö[ô ò[YHàäKù”›Ÿ\êÿ\ŸJ
+Kö[ò€Y\ \›‹ûSôYYJJJBà
+N¬à€€ú›\›‹ûUXú»H¬à»Ÿ^Nàò[ãXô[à∏.%¯.,x.bx.!¯.*¯.(x.%ã€›[ùàX›]ö]Y\Àõ[ô›Kà»Ÿ^Nàùÿ\õö[ô»ãXô[à∏.`x."8.bx.!¯.`8.%x.-¯.+x.&Hã€›[ùàX›]ö]Y\Àôö[\ä
+][JHOà][Kö⁄[ôOOHùÿ\õö[ô»äKõ[ô›Kà»Ÿ^Nàò‹ôX]HãXô[à∏.`8.'∏.-8.b8.(H»8.%¯.,¯.(¯.,∏.(∏. x.,∏.(»ã€›[ùàX›]ö]Y\Àôö[\ä
+][JHOà][Kö⁄[ôOOHò‹ôX]HäKõ[ô›Kà»Ÿ^Nàö[\‹ùãXô[à∏.&x.,¯.`8. ∏.bx.,∏.a8.'¯.)x.cã€›[ùàX›]ö]Y\Àôö[\ä
+][JHOà][Kö⁄[ôOOHö[\‹ùäKõ[ô›Kà»Ÿ^Nàù\]HãXô[à∏.`x. x.bx.a8. ∏. ∏.bx.+x.(x..x.)Hã€›[ùàX›]ö]Y\Àôö[\ä
+][JHOà][Kö⁄[ôOOHù\]HäKõ[ô›Kà»Ÿ^Nàô[]HãXô[à∏.)x.&∏. ∏.bx.+x.(x..x.)Hã€›[ùàX›]ö]Y\Àôö[\ä
+][JHOà][Kö⁄[ôOOHô[]HäKõ[ô›Kà»Ÿ^Nàú\õZ\‹⁄[€àãXô[à∏.*∏.-8.%¯.&8.-8.c8.'8..x.bx.`¯."∏.bHã€›[ùàX›]ö]Y\Àôö[\ä
+][JHOà][Kö⁄[ôOOHú\õZ\‹⁄[€àäKõ[ô›Kà»Ÿ^NàúŸX›\ö]HãXô[à∏.`8. ∏.bx.,∏.*∏..x.b8.(¯.,8.&∏.&à»Sàã€›[ùàX›]ö]Y\Àôö[\ä
+][JHOà][Kö⁄[ôOOHúŸX›\ö]HäKõ[ô›KàN¬à€€ú›⁄›€êX›]ö]Y\»Hö[\ôYX›]ö]Y\Àú€XŸJçL
+N¬à\ﬁ[ò»ù[ò›[€à^‹ù\›‹ûQ^Ÿ[
+
+H¬àûH¬à€€ú›ﬁH]ÿZ][\‹ù
+ûﬁäN¬à€€ú›õ›‹»H¬à»∏.)¯.,x.&x.`x.)x.,8.`8.)¯.)x.,àã∏.&¯.(¯.,8.`8.(8.%»ã∏.(¯.,∏.(∏.)x.,8.`8.+x.-x.(∏.%ã∏.'8..x.bx.%8.,¯.`8.&x.-8.&x. x.,∏.(»ã∏.*∏.%∏.,∏.&x.,óKàããôö[\ôYX›]ö]Y\ÀõX\
+
+][JHOàŸõ‹õX]]U[YJ][Kò‹ôX]Y]
+K][KòX›[€ã][Kô]Z[][KòX›‹ã∏.&∏.,x.&x.%¯.-∏. x.`x.)x.bx.)»óJKàN¬à€€ú›⁄Y]Hﬁù][Àò[ÿW›◊‹⁄Y]
+õ›‹ N¬à⁄Y]»àX€€»óHHÃåãçÃçMóKõX\
+
+ÿ⁄
+HOà
+»ÿ⁄JJN¬à€€ú›€‹öÿõ€⁄»Hﬁù][Àòõ€⁄◊€ô] 
+N¬àﬁù][Àòõ€⁄◊ÿ\[ô‹⁄Y]
+€‹öÿõ€⁄À⁄Y]∏.&¯.(¯.,8.)¯.,x.%x.-8. x.,∏.(¯.%8.,¯.`8.&x.-8.&x. x.,∏.(»äN¬àﬁù‹ö]Qö[J€‹öÿõ€⁄À“UZ\›‹ûKI€ô]»]J
+Kù“T”‘›ö[ô 
+Kú€XŸJL
+_Kûﬁ
+N¬àõ⁄YôX€‹ô€Y[ù]Y]
+ô^‹ù⁄\›‹ûHã8.*∏.b8.!¯.+x.+x. x.&¯.(¯.,8.)¯.,x.%x.-^Ÿ[	Ÿö[\ôYX›]ö]Y\Àõ[ô›H8.(¯.,∏.(∏. x.,∏.(ÿ»][P€›[ùàö[\ôYX›]ö]Y\Àõ[ô›\›‹ûU\K\›‹ûQ]K\›‹ûQ]U»JN¬àŸ]õ›XŸJ»\Nàú›XÿŸ\‹»ã^à8.*∏.b8.!¯.+x.+x. x.&¯.(¯.,8.)¯.,x.%x.-8.`x.)x.bx.)»	Ÿõ]
+ö[\ôYX›]ö]Y\Àõ[ô›
+_H8.(¯.,∏.(∏. x.,∏.(ÿJN¬àHÿ]⁄
+ÿ]Y⁄
+H¬àŸ]õ›XŸJ»\Nàô\úõ‹àã^àÿ]Y⁄[ú›[òŸ[Ÿà\úõ‹à»ÿ]Y⁄õY\‹ÿYŸHà∏.*∏.b8.!¯.+x.+x. x.&¯.(¯.,8.)¯.,x.%x.-8.a8.(x.b8.*∏.,¯.`8.(¯.a¯."àJN¬àBàBà€€ú››[[X\ûPÿ\ô»H¬à»€ôNàú\úHãX€€éà∏•„àãXô[à∏.&¯.(¯.,8.)¯.,x.%x.-8.%¯.,x.bx.!¯.*¯.(x.%ãò[YNàX›]ö]Y\Àõ[ô››Yôö^à∏.(¯.,∏.(∏. x.,∏.(»ã\ùà∏•©àKà»€ôNàòõYHãX€€éà∏°È»ãXô[à∏.&x.,¯.`8. ∏.bx.,∏.a8.'¯.)x.cãò[YNàX›]ö]Y\Àôö[\ä
+][JHOà][Kö⁄[ôOOHö[\‹ùäKõ[ô››Yôö^à∏.!8.(¯.,x.bx.!»ã\ùà∏•©HàKà»€ôNàô‹ôY[àãX€€éàä»ãXô[à∏.`8.'∏.-8.b8.(H»8.%¯.,¯.(¯.,∏.(∏. x.,∏.(»ãò[YNàX›]ö]Y\Àôö[\ä
+][JHOà][Kö⁄[ôOOHò‹ôX]HäKõ[ô››Yôö^à∏.(¯.,∏.(∏. x.,∏.(»ã\ùà∏•®HàKà»€ôNàõ‹ò[ôŸHãX€€éà∏ß#àãXô[à∏.`x. x.bx.a8. à»8.*∏.-8.%¯.&8.-8.cãò[YNàX›]ö]Y\Àôö[\ä
+][JHOà][Kö⁄[ôOOHù\]Hà][Kö⁄[ôOOHú\õZ\‹⁄[€àäKõ[ô››Yôö^à∏.(¯.,∏.(∏. x.,∏.(»ã\ùà∏•®»àKà»€ôNàúôYãX€€éà∞Â»ãXô[à∏.)x.&∏. ∏.bx.+x.(x..x.)Hãò[YNàX›]ö]Y\Àôö[\ä
+][JHOà][Kö⁄[ôOOHô[]HäKõ[ô››Yôö^à∏.(¯.,∏.(∏. x.,∏.(»ã\ùà∏•¨àKàN¬àô]\õà]à€\‹”ò[YOHö\›‹ûK\YŸK\ôY\⁄Y€àèÇà]à€\‹”ò[YOHö\›‹ûK\›[[X\ûKY‹öYYŸK\›[[X\ûHèû‹›[[X\ûPÿ\ôÀõX\
+
+][JHOà\ùX€H€\‹”ò[YO^ÿ\›‹ûK\›[[X\ûKXÿ\ô	⁄][Kù€ô_XHŸ^O^⁄][KõXô[Oè‹[èû⁄][KöX€€üO‹‹[èè]èè€X[û⁄][KõXô[O‹€X[èèûŸõ]
+][Kùò[YJ_Oÿèè[Oû⁄][Kú›Yôö^OŸ[OèŸ]èèOû⁄][Kò\ùO⁄Oèÿ\ùX€Oä_OŸ]èÇàŸX›[€à€\‹”ò[YOHö\›‹ûK[ŸÀXÿ\ôèÇàXY\èè]èè‹[è∏•©‹‹[èè]èèœ∏.&¯.(¯.,8.)¯.,x.%x.-8. x.,∏.(¯.%8.,¯.`8.&x.-8.&x. x.,∏.(œ⁄œè∏.&∏.,x.&x.%¯.-∏. x. x.,∏.(¯.`8.'∏.-8.b8.(H8.`x. x.bx.a8. à8.)x.&à8.&x.,¯.`8. ∏.bx.,∏.a8.'¯.)x.c8.`8.&¯.)x.-x.b8.(∏.&x.*∏.-8.%¯.&8.-8.c8.`x.)x.,8. x.-8."8. x.(¯.(¯.(x.*∏.,¯.!8.,x.#x."8.,∏. x.%¯..8. x.*¯.&x.bx.,è‹èŸ]èèŸ]èè]èèù]€à€\‹”ò[YOHòù]€àŸX€€ô\ûHà\ÿXõY^ÿ]Y]Ÿ‹”ÿY[ôﬂH€ê€X⁄œ^ 
+HOàõ⁄Yõ€Z\ŸKò[
+€ÿYYJ
+KÿY›ÿ⁄ 
+KÿY]Y]Ÿ‹ 
+WJ_O∏°Æ»ÿ]Y]Ÿ‹”ÿY[ô»»∏. x.,¯.)x.,x.!¯.`∏.*¯.)x.%àà∏.(¯.-x.`8.'¯.(¯."àüOÿù]€èèù]€à€\‹”ò[YOHòù]€à\›‹ûKY^Ÿ[Xù]€àà€ê€X⁄œ^ 
+HOàõ⁄Y^‹ù\›‹ûQ^Ÿ[
+
+_O∏•©à8.*∏.b8.!¯.+x.+x. H^Ÿ[ÿù]€èèŸ]èè⁄XY\èÇà]à€\‹”ò[YOHò]Y]Z\›‹ûKX€€ùõ€»\›‹ûK\ôY\⁄Y€ãX€€ùõ€»èÇà]à€\‹”ò[YOHò]Y]Z\›‹ûK]Xú»èû⁄\›‹ûUXúÀõX\
+
+XäHOàù]€à\OHòù]€ààŸ^O^›XãöŸ^_H€\‹”ò[YO^⁄\›‹ûU\HOOHXãöŸ^H»òX›]ôHàààüH€ê€X⁄œ^ 
+HOàŸ]\›‹ûU\JXãöŸ^J_Oè‹[èû›XãõXô[O‹‹[èèèûŸõ]
+Xãò€›[ù
+_Oÿèèÿù]€èä_OŸ]èÇà]à€\‹”ò[YOHö\›‹ûKYö[\ã[[ôHèÇà]à€\‹”ò[YOHò]Y]Z\›‹ûK\ŸX\ò⁄èè‹[è∏£%O‹‹[èè[ú]ò[YO^⁄\›‹ûT]Y\û_H€ê⁄[ôŸO^ ]ô[ù
+HOàŸ]\›‹ûT]Y\ûJ]ô[ùù\ôŸ]ùò[YJ_HXŸZ€\èH∏.!8.bx.&x.*¯.,∏."∏.-¯.b8.+x.'8..x.bx.%¯.,¯.(¯.,∏.(∏. x.,∏.(ÀY»Q\ùõÀãõÿà8.*¯.(¯.-¯.+x."∏.-¯.b8.+x.a8.'¯.)x.cããààœû⁄\›‹ûT]Y\ûH	âàù]€à\OHòù]€àà€ê€X⁄œ^ 
+HOàŸ]\›‹ûT]Y\ûJàä_O∞Âœÿù]€èüOŸ]èÇà]à€\‹”ò[YOHö\›‹ûKY]K\ò[ôŸHèèè∏.)¯.,x.&x.%¯.-x.b8.%¯.,¯.(¯.,∏.(∏. x.,∏.(œÿèèXô[è‹[è∏•©è‹‹[èè[ú]\öXK[Xô[H∏.)¯.,x.&x.%¯.-x.b8.`8.(¯.-8.b8.(x.%x.bx.&Hà\OHô]Hàò[YO^⁄\›‹ûQ]_H€ê⁄[ôŸO^ ]ô[ù
+HOàŸ]\›‹ûQ]J]ô[ùù\ôŸ]ùò[YJ_HœèO∏†$œ⁄Oè[ú]\öXK[Xô[H∏.)¯.,x.&x.%¯.-x.b8.*∏.-8.bx.&x.*∏..8.%à\OHô]Hàò[YO^⁄\›‹ûQ]UﬂH€ê⁄[ôŸO^ ]ô[ù
+HOàŸ]\›‹ûQ]U ]ô[ùù\ôŸ]ùò[YJ_Hœû \›‹ûQ]H\›‹ûQ]U H	âàù]€à\OHòù]€àà€ê€X⁄œ^ 
+HOà»Ÿ]\›‹ûQ]JàäN»Ÿ]\›‹ûQ]U àäN»_H\öXK[Xô[H∏.)x.bx.,∏.!¯."∏.b8.)¯.!¯.)¯.,x.&x.%¯.-x.bè∞Âœÿù]€èüO€Xô[èŸ]èÇàŸ]èÇàŸ]èÇà‹⁄›€êX›]ö]Y\Àõ[ô›»]à€\‹”ò[YOHùXõK]‹ò\[ÿö[K]XõK]‹ò\\›‹ûK]XõK]‹ò\èèXõH€\‹”ò[YOHõ[ÿö[KXÿ\ô]XõH\›‹ûK[[Ÿ\õã]XõHèèXYèèè∏.)¯.,x.&x.%¯.-x.b»8.`8.)¯.)x.,è›è∏.&¯.(¯.,8.`8.(8.%œ›è∏.(¯.,∏.(∏.)x.,8.`8.+x.-x.(∏.%›è∏.'8..x.bx.%8.,¯.`8.&x.-8.&x. x.,∏.(œ›è∏.*∏.%∏.,∏.&x.,›è›èè›XYèõŸOû‹⁄›€êX›]ö]Y\ÀõX\
+
+][JHOààŸ^O^⁄][KöYOè]K[Xô[H∏.)¯.,x.&x.%¯.-x.b»8.`8.)¯.)x.,àèèèûŸõ‹õX]]U[YJ][Kò‹ôX]Y]
+_Oÿèè›è]K[Xô[H∏.&¯.(¯.,8.`8.(8.%»èèèû⁄][KòX›[€üOÿèè›è]K[Xô[H∏.(¯.,∏.(∏.)x.,8.`8.+x.-x.(∏.%èû⁄][Kô]Z[O›è]K[Xô[H∏.'8..x.bx.%8.,¯.`8.&x.-8.&x. x.,∏.(»èèèû⁄][KòX›‹üOÿèè›è]K[Xô[H∏.*∏.%∏.,∏.&x.,èè[H€\‹”ò[YO^»ú›]\»€€\]Y]Y]Hà
+»][Kù€ô_O∏.&∏.,x.&x.%¯.-∏. x.`x.)x.bx.)œŸ[Oè›è›èä_O›õŸOè›XõOèŸ]èàà]à€\‹”ò[YOHö\›‹ûKY[\Hèè‹[è∏•·œ‹‹[èèèû \›‹ûT]Y\ûH\›‹ûQ]H\›‹ûQ]U H»∏.a8.(x.b8.'∏.&∏.(¯.,∏.(∏. x.,∏.(¯.%¯.-x.b8.!8.bx.&x.*¯.,ààà∏.(∏.,x.!¯.a8.(x.b8.(x.-x.&¯.(¯.,8.)¯.,x.%x.-8.`¯.&x. ∏.$¯.,8.&x.-x.bHüOÿèè€X[û \›‹ûT]Y\ûH\›‹ûQ]H\›‹ûQ]U H»∏.)x.+x.!¯.`8.&¯.)x.-x.b8.(∏.&x.!8.,¯.!8.bx.&x.*¯.,∏.*¯.(¯.-¯.+x."∏.b8.)¯.!¯.)¯.,x.&x.%¯.-x.bàà∏.`8.)x.-¯.+x. x.`8.(x.&x..x.%8.bx.,∏.&x.&∏.&x.*¯.(¯.-¯.+x.&¯.(¯.,x.&∏."∏.b8.)¯.!¯.)¯.,x.&x.%¯.-x.b8.`8.'∏.-¯.b8.+x.%8..x. ∏.bx.+x.(x..x.)HüO‹€X[èŸ]èüBàõ€›\èè‹[è∏.`x.*∏.%8.!»Ÿõ]
+X]õZ[äö[\ôYX›]ö]Y\Àõ[ô›çL
+J_H8."8.,∏. HŸõ]
+ö[\ôYX›]ö]Y\Àõ[ô›
+_H8.(¯.,∏.(∏. x.,∏.(œ‹‹[èèŸõ€›\èÇà‹ŸX›[€èÇàõ€›\à€\‹”ò[YOHúŸ][ô‹ÀYõ€›\àèè‹[è∞™Håçà€€ùõ€›ÿ⁄»“Uà[öY⁄»ô\Ÿ\ùôYè‹‹[èè‹[èïô\ú⁄[€àãååÀå	õòú‹…õòú‹»	õòú‹…õòú‹–ò[ô⁄€⁄ÀZ[[ô	õòú‹…õòú‹»<'·Ó|'·ÎO‹‹[èèŸõ€›\èÇàŸ]èé¬àBÇàù[ò›[€àô[ô\îŸ][ô‹ 
+H¬àÀ»8.%x.,x.)¯.`x.&¯.(¯.&8.(¯.(¯.(x.%8.,à8.a8.(x.b8.`¯."∏.b\ŸSY[[»8.`8.'∏.(¯.,∏.,ô[ô\îŸ][ô‹ 
+H8.`8.&¯.a¯.&x.'¯.,x.!¯. x.c8."∏.,x.&x.%¯.-x.b8.%∏..x. x.`8.(¯.-x.(∏. BàÀ»8.`x.&∏.&∏.(x.-x.`8.!¯.-¯.b8.+x.&x.a8. à8.a8.(x.b8.`¯."∏.b8.!8.+x.(x.`∏.'∏.`8.&x.&x.%x.c8. x.,∏.(¯.`8.(¯.-x.(∏. H€⁄»8.`¯.&x.&x.-x.bx."8.,8.'8.-8.%8. x.#à€⁄‹¬à€€ú›ŸŸ€HH
+»Ÿ^Sò[YK]K^à\ÿ‹ö\[€ãX€€àNà»Ÿ^Sò[YNàŸ^[Ÿà\[ŸàŸ][ô‹Œ»]Nà›ö[ôŒ»^à›ö[ôŒ»X€€éà›ö[ô»JHOàXô[€\‹”ò[YOHúŸ][ôÀ\õ›»èè‹[à€\‹”ò[YOHúŸ][ôÀ\õ›ÀZX€€àèû⁄X€€üO‹‹[èè]èèèû›]_Oÿèè€X[ûŸ\ÿ‹ö\[€üO‹€X[èŸ]èè[ú]\OHò⁄X⁄ÿõﬁà⁄X⁄ŸY^‹Ÿ][ô‹÷⁄Ÿ^Sò[YW_H€ê⁄[ôŸO^ JHOàŸ]Ÿ][ô‹ 
+›\úô[ù
+HOà»€€ú›ô^^Àããò›\úô[ù⁄Ÿ^Sò[YWNôKù\ôŸ]ò⁄X⁄ŸYN»YäŸ^Sò[YOOOI‹€›[ô	 ^›⁄[ô›Àõÿÿ[›‹òYŸKúŸ]][J	⁄⁄]YYK\Ÿ][ô‹…Àî””ãú›ö[ô⁄YûJô^
+JN⁄YäKù\ôŸ]ò⁄X⁄ŸY
+]⁄[ô›ÀúŸ][Y[›]
+
+
+OOú‹XZ’ZP[\ù
+	‹›XÿŸ\‹…À	‹Ÿ][ô‹…À	¯.`8.&¯.-8.%8.`8.*∏.-x.(∏.!¯.'∏..x.%8.`x.)x.bx.)…ÀùYJK
+NﬂHô]\õàô^»J_HœèHœè€Xô[é¬àô]\õà]à€\‹”ò[YOHúŸ][ô‹À\YŸK\ôY\⁄Y€àèÇàŸX›[€à€\‹”ò[YOHúŸ][ô‹ÀXõÿ⁄»Ÿ][ô‹À\ﬁ\›[KXõÿ⁄»èÇàXY\èè‹[è∏•©‹‹[èèœ∏. ∏.bx.+x.(x..x.)x.(¯.,8.&∏.&è⁄œè⁄XY\èÇà]à€\‹”ò[YOHúﬁ\›[KXÿ\ôèÇà]à€\‹”ò[YOHúﬁ\›[K[Ÿ€»èí⁄U€X[ê””ïì”’–“»“U‹€X[èŸ]èÇàè]èè∏."∏.-¯.b8.+x.(¯.,8.&∏.&èŸèê€€ùõ€›ÿ⁄»“UŸèŸ]èè]èè∏.`8.)¯.+x.(¯.c8."∏.,x.&OŸèùåãååÀåŸèŸ]èè]èè∏.`8. ∏.%x.`8.)¯.)x.,èŸèä”U
+ÃŒå
+Hò[ô⁄€⁄ÀZ[[ôŸèŸ]èè]èè∏.%¯.-x.b8.%x.,x.bx.!œŸè∏•„»ò[ô⁄€⁄ÀZ[[ôŸèŸ]èè]èè∏.'8..x.bx.%8..x.`x.)x.(¯.,8.&∏.&èŸè∏¶g»›\Ÿ\ãô\‹^Sò[Y_OŸèŸ]èèŸÇà]à€\‹”ò[YOHúﬁ\›[K\›]»YŸK\›[[X\ûHèè€\‹”ò[YOHòõYHèè‹[è∏•©‹‹[èèèûŸõ]
+^[ÿYôY\Àõ[ô›
+_Oÿèè›õ€ôœëYH8.%¯.,x.bx.!¯.*¯.(x.%‹›õ€ôœè€X[∏.(¯.,∏.(∏. x.,∏.(œ‹€X[è‹è€\‹”ò[YOHú\úHèè‹[è∏•·œ‹‹[èèèûŸõ]
+\ù[XYŸ\Àõ[ô›
+_Oÿèè›õ€ôœ∏.(¯..x.&¯."∏.-8.bx.&x.!¯.,∏.&O‹›õ€ôœè€X[∏.(¯.,∏.(∏. x.,∏.(œ‹€X[è‹èŸ]èÇàŸ]èÇà‹ŸX›[€èÇÇà]à€\‹”ò[YOHúŸ][ô‹ÀY‹öYŸ][ô‹ÀYôX]\ôKY‹öYèÇàŸX›[€à€\‹”ò[YOHúŸ][ô‹ÀXõÿ⁄»Ÿ][ô‹À[‹[€ãXÿ\ôX[èÇàXY\èè‹[è∏•©‹‹[èèœ∏.%x.,x.bx.!¯.!8.b8.,∏. x.,∏.(¯.%x.,x.%8.(∏.+x.%⁄œèO∏•¨8•¨x•¨x•¨x•¨⁄Oè⁄XY\èÇà]èèŸŸ€HŸ^Sò[YOHú\ùX[àX€€èH∏•·àà]OH∏.+x.&x..8.#x.,∏.%x.`¯.*¯.bx.%x.,x.%8.(∏.+x.%8.%x.,∏.(x."∏.b8.+x.!»à^HïY»8.%¯.-x.b8.(∏.,x.!¯.a8.(x.b8.*∏.,∏.(x.,∏.(¯.%∏.%x.,x.%8.(∏.+x.%8.`¯.&x.(¯.+x.&àYH8.a8.%8.bHàœèŸŸ€HŸ^Sò[YOHò€€ôö\õHàX€€èH∏ßÏ»à]OH∏.(∏.-¯.&x.(∏.,x.&x. x.b8.+x.&x.%x.,x.%8.(∏.+x.%8.%¯..8. x.!8.(¯.,x.bx.!»à^H∏.`x.*∏.%8.!¯. ∏.bx.+x.!8.)¯.,∏.(x.`8.%x.-¯.+x.&x.`x.)x.,8.`¯.*¯.bx.%x.(¯.)¯."8.*∏.+x.&∏. x.b8.+x.&x.&∏.,x.&x.%¯.-∏. HàœèŸ]èÇà‹ŸX›[€èÇàŸX›[€à€\‹”ò[YOHúŸ][ô‹ÀXõÿ⁄»Ÿ][ô‹À[‹[€ãXÿ\ôö[€]èÇàXY\èè‹[è∏•®œ‹‹[èèœ∏.%x.,x.bx.!¯.!8.b8.,∏. x.,∏.(¯.*∏.`x. x.&O⁄œèO∏•©x•©x•©O⁄Oè⁄XY\èÇà]èèŸŸ€HŸ^Sò[YOHò]]—õÿ›\»àX€€èH∏•©Hà]OH∏.`∏.'¯. x.,x.*∏."∏.b8.+x.!¯.*∏.`x. x.&x.+x.,x.%x.`∏.&x.(x.,x.%x.-à^H∏.`8.*¯.(x.,∏.,8.*∏.,¯.*¯.(¯.,x.&∏.`¯."∏.bx.!¯.,∏.&x.(¯.b8.)¯.(x. x.,x.&∏.`8.!8.(¯.-¯.b8.+x.!¯.(∏.-8.!»Y»àœèŸŸ€HŸ^Sò[YOHú€›[ôàX€€èHº'Â"àà]OH∏.`8.*∏.-x.(∏.!¯.'∏..x.%8.`x."8.bx.!¯.`8.%x.-¯.+x.&x.(8.,∏.*x.,∏.a8.%¯.(àà^H∏.'∏..x.%8.'8.)x.*∏.,¯.`8.(¯.a¯."8.`x.)x.,8.+x.b8.,∏.&x.*∏.,∏.`8.*¯.%x..8.`8.(x.-¯.b8.+HY»8.'8.-8.%8.*¯.(¯.-¯.+x."8.,¯.&x.)¯.&x.a8.(x.b8.'∏.+HàœèŸ]èÇà‹ŸX›[€èÇàŸ]èÇÇàŸX›[€à€\‹”ò[YOHúŸ][ô‹ÀXõÿ⁄»Ÿ][ô‹ÀY\‹^KXõÿ⁄»èÇàXY\èè‹[è∏•®œ‹‹[èèœ∏.(¯..x.&¯.`x.&∏.&∏. x.,∏.(¯.`x.*∏.%8.!¯.'8.)O⁄œè]èî⁄[\HŸ][ôœúàœèèë‹ôX]\àõŸX›]ö]OÿèèŸ]èè⁄XY\èÇà]à€\‹”ò[YOHúŸ][ô‹ÀY\‹^KYõ‹õHèÇàXô[è‹[èèO∏•„œ⁄Oà8.(8.,∏.*x.,è‹‹[èèŸ[X›è‹[€è∏.(8.,∏.*x.,∏.a8.%¯.(è€‹[€èè‹Ÿ[X›è€Xô[ÇàXô[è‹[èèO∏•Ìœ⁄Oà8.`8. ∏.%x.`8.)¯.)x.,è‹‹[èèŸ[X›è‹[€èä”U
+ÃŒå
+Hò[ô⁄€⁄ÀZ[[ô€‹[€èè‹Ÿ[X›è€Xô[ÇàXô[è‹[èèO∏•©è⁄Oà8.(¯..x.&¯.`x.&∏.&∏.)¯.,x.&x.%¯.-x.b‹‹[èèŸ[X›è‹[€èë”SK÷VVVO€‹[€èè‹Ÿ[X›è€Xô[ÇàXô[è‹[èèO∏•·œ⁄Oà8.*¯.&x.b8.)¯.(∏.`8.(¯.-8.b8.(x.%x.bx.&O‹‹[èèŸ[X›è‹[€è∏."∏.-8.bx.&H
+ O€‹[€èè‹Ÿ[X›è€Xô[ÇàŸ]èÇà]à€\‹”ò[YOHúÿ]ôK\õ›»èèù]€à€\‹”ò[YOHòù]€àö[X\ûHŸ][ô‹À\ÿ]ôKXù]€àà€ê€X⁄œ^‹ÿ]ôTŸ][ô‹ﬂO∏•®»8.&∏.,x.&x.%¯.-∏. x. x.,∏.(¯.%x.,x.bx.!¯.!8.b8.,èÿù]€èèŸ]èÇà‹ŸX›[€èÇÇà›\Ÿ\ãúõ€HOOHòYZ[àà	âàŸX›[€à€\‹”ò[YOHúŸ][ô‹ÀY[ôŸ\ã\›ö\èè‹[è∏•·è‹‹[èè]èèè∏.)x.bx.,∏.!¯. ∏.bx.+x.(x..x.)x.%¯.%8.)x.+x.!œÿèè∏.)x.&àY»›ÿ⁄»8.`x.)x.,8.&¯.(¯.,8.)¯.,x.%x.-8. x.,∏.(¯.`8. ∏.bx.,ã¯.+x.+x. x.%¯.-x.b8.%¯.%8.)x.+x.!»8.`∏.%8.(∏.a8.(x.b8. x.(¯.,8.%¯.&∏. ∏.bx.+x.(x..x.)H\ù8.(¯..x.&¯."∏.-8.bx.&x.!¯.,∏.&H8.`x.'8.&HYH8.`x.)x.,8.'8..x.bx.`¯."∏.bx.!¯.,∏.&x."8.(¯.-8.!œ‹èŸ]èèù]€à€\‹”ò[YOHòù]€à[ôŸ\àà\ÿXõY^ÿ€X\ö[ô’\››ÿ⁄»›ÿ⁄ÀùY‹Àõ[ô›OOHH€ê€X⁄œ^ 
+HOàõ⁄Y€X\ï\››ÿ⁄ 
+_Oûÿ€X\ö[ô’\››ÿ⁄»»∏. x.,¯.)x.,x.!¯.)x.bx.,∏.!¯. ∏.bx.+x.(x..x.)x†)ààà8•©»8.)x.bx.,∏.!»›ÿ⁄»8.%¯.%8.)x.+x.!»	Ÿõ]
+›ÿ⁄ÀùY‹Àõ[ô›
+_HYÿOÿù]€èè‹ŸX›[€èüBàõ€›\à€\‹”ò[YOHúŸ][ô‹ÀYõ€›\àèè‹[è∞™Håçà€€ùõ€›ÿ⁄»“Uà[öY⁄»ô\Ÿ\ùôYè‹‹[èè‹[èïô\ú⁄[€àãååÀå	õòú‹…õòú‹»	õòú‹…õòú‹–ò[ô⁄€⁄ÀZ[[ô	õòú‹…õòú‹»<'·Ó|'·ÎO‹‹[èèŸõ€›\èÇàŸ]èé¬àBÇàù[ò›[€àô[ô\ï\Ÿ\ú 
+H¬à€€ú›X›]ôHHﬁ\›[U\Ÿ\úÀôö[\ä
+][JHOà][KòX›]ôJKõ[ô›¬à€€ú›õŸX›[€ï\Ÿ\ú»Hﬁ\›[U\Ÿ\úÀôö[\ä
+][JHOà][Kúõ€HOOHúõŸX›[€àäKõ[ô›¬à€€ú››ÿ⁄’\Ÿ\ú»Hﬁ\›[U\Ÿ\úÀôö[\ä
+][JHOà][Kúõ€HOOHú›ÿ⁄»äKõ[ô›¬à€€ú›X’\Ÿ\ú»Hﬁ\›[U\Ÿ\úÀôö[\ä
+][JHOà][Kúõ€HOOHúX»äKõ[ô›¬à€€ú›[]ô\ûU\Ÿ\ú»Hﬁ\›[U\Ÿ\úÀôö[\ä
+][JHOà][Kúõ€HOOHô[]ô\ûHäKõ[ô›¬à€€ú›ôYYHH\Ÿ\îŸX\ò⁄ùö[J
+Kù”›Ÿ\êÿ\ŸJ
+N¬à€€ú›ö\⁄XõU\Ÿ\ú»Hﬁ\›[U\Ÿ\úÀôö[\ä
+][JHOà[ôYYH⁄][Kô[\ﬁYYP€ŸK][Kô\‹^Sò[YK][Kô[XZ[][Kúõ€Kì”W”PëS÷⁄][Kúõ€WKããä][Kú\õZ\‹⁄[€ú»◊JWKöõ⁄[äàäKù”›Ÿ\êÿ\ŸJ
+Kö[ò€Y\ ôYYJJN¬à\ﬁ[ò»ù[ò›[€à^‹ù\Ÿ\ú—^Ÿ[
+
+H¬àûH¬à€€ú›ﬁH]ÿZ][\‹ù
+ûﬁäN¬à€€ú›õ›‹»H¬à»∏.(¯.*¯.,x.*∏.'∏.&x.,x. x.!¯.,∏.&Hã∏."∏.-¯.b8.+x.'8..x.bx.`¯."∏.bx.!¯.,∏.&Hã∏.+x.-x.`8.(x.)Hã∏.&∏.%¯.&∏.,∏.%»ã∏.*∏.-8.%¯.&8.-8.c8.*¯.&x.bx.,àã∏.*∏.%∏.,∏.&x.,óKàããùö\⁄XõU\Ÿ\úÀõX\
+
+][JHOà⁄][Kô[\ﬁYYP€ŸK][Kô\‹^Sò[YK][Kô[XZ[àãì”W”PëS÷⁄][Kúõ€WH][Kúõ€K
+][Kúõ€HOOHòYZ[àà»êUãõX\
+
+ò]äHOàò]ãõXô[
+Hà
+][Kú\õZ\‹⁄[€ú»◊JKõX\
+
+Ÿ^JHOàêUãôö[ô
+
+ò]äHOàò]ãöŸ^HOOHŸ^JOÀõXô[’–“◊–P–—T‘◊”PëS÷⁄Ÿ^WHŸ^JJKöõ⁄[äãäK][KòX›]ôH»∏.`¯."∏.bx.!¯.,∏.&x.&¯. x.%x.-àà∏.(¯.,8.!¯.,x.&àóJKàN¬à€€ú›⁄Y]Hﬁù][Àò[ÿW›◊‹⁄Y]
+õ›‹ N¬à⁄Y]»àX€€»óHHÃMãçãÃNÃMWKõX\
+
+ÿ⁄
+HOà
+»ÿ⁄JJN¬à€€ú›€‹öÿõ€⁄»Hﬁù][Àòõ€⁄◊€ô] 
+N¬àﬁù][Àòõ€⁄◊ÿ\[ô‹⁄Y]
+€‹öÿõ€⁄À⁄Y]∏.'8..x.bx.`¯."∏.bx.!¯.,∏.&HäN¬àﬁù‹ö]Qö[J€‹öÿõ€⁄À“U]\Ÿ\úÀI€ô]»]J
+Kù“T”‘›ö[ô 
+Kú€XŸJL
+_Kûﬁ
+N¬àŸ]õ›XŸJ»\Nàú›XÿŸ\‹»ã^à8.*∏.b8.!¯.+x.+x. x. ∏.bx.+x.(x..x.)x.'8..x.bx.`¯."∏.bx.!¯.,∏.&x.`x.)x.bx.)»	Ÿõ]
+ö\⁄XõU\Ÿ\úÀõ[ô›
+_H8.(¯.,∏.(∏. x.,∏.(ÿJN¬àHÿ]⁄
+ÿ]Y⁄
+H¬àŸ]õ›XŸJ»\Nàô\úõ‹àã^àÿ]Y⁄[ú›[òŸ[Ÿà\úõ‹à»ÿ]Y⁄õY\‹ÿYŸHà∏.*∏.b8.!¯.+x.+x. x. ∏.bx.+x.(x..x.)x.'8..x.bx.`¯."∏.bx.!¯.,∏.&x.a8.(x.b8.*∏.,¯.`8.(¯.a¯."àJN¬àBàBà€€ú››]»H¬à»€ôNàòõYHãX€€éà∏¶g»ãXô[à∏.'8..x.bx.`¯."∏.bx.!¯.,∏.&x.%¯.,x.bx.!¯.*¯.(x.%ãò[YNàﬁ\›[U\Ÿ\úÀõ[ô›\ùà∏¶g»àKà»€ôNàô‹ôY[àãX€€éà∏ß$»ãXô[à∏.`¯."∏.bx.!¯.,∏.&x.&¯. x.%x.-ãò[YNàX›]ôK\ùà∏•©HàKà»€ôNàú\úHãX€€éà∏•©ãXô[àîõŸX›[€àãò[YNàõŸX›[€ï\Ÿ\úÀ\ùà∏•©ààKà»€ôNàõ‹ò[ôŸHãX€€éà∏•·»ãXô[àî›ÿ⁄»ãò[YNà›ÿ⁄’\Ÿ\úÀ\ùà∏•®HàKà»€ôNàú[ö»ãX€€éà∏•‚ãXô[àîP»ãò[YNàX’\Ÿ\úÀ\ùà∏•·ààKà»€ôNàùX[ãX€€éà∏•®»ãXô[àë[]ô\ûHãò[YNà[]ô\ûU\Ÿ\úÀ\ùà∏•¨àKàN¬àô]\õà]à€\‹”ò[YOHù\Ÿ\úÀ\YŸK\ôY\⁄Y€àèÇàŸX›[€à€\‹”ò[YOHù\Ÿ\úÀ[›ô\ùöY]ÀXÿ\ôèÇàXY\èè]èè‹[è∏•©O‹‹[èè]èèœ∏.(8.,∏.'∏.(¯.)¯.(x.'8..x.bx.`¯."∏.bx.!¯.,∏.&O⁄œè∏."8.,¯.&x.)¯.&x.'8..x.bx.`¯."∏.bx.!¯.,∏.&x.`¯.&x.`x.%x.b8.)x.,8.*¯.&x.b8.)¯.(∏.!¯.,∏.&O‹èŸ]èèŸ]èè]à€\‹”ò[YOHù\Ÿ\úÀ[›ô\ùöY]ÀXX›[€ú»èè€X[∏•©à8.+x.,x.&¯.`8.%8.%x.)x.b8.,∏.*∏..8.%úàœû€ô]»[ùë]U[YQõ‹õX]
+ùUã»]T›[NàõYY][Hã[YT›[Nàú⁄‹ùàJKôõ‹õX]
+ô]»]J
+J_O‹€X[èù]€à€\‹”ò[YOHòù]€àö[X\ûHà€ê€X⁄œ^ 
+HOà»Ÿ]\Ÿ\ëõ‹õJ»ããëSTW’T—Tã\õZ\‹⁄[€úŒàÀããëSTW’T—Tãú\õZ\‹⁄[€ú◊HJN»Ÿ]\Ÿ\ëY]‹ì‹[äùYJN»_OªÔ"»8.`8.'∏.-8.b8.(x.'8..x.bx.`¯."∏.bx.!¯.,∏.&Oÿù]€èèŸ]èè⁄XY\èÇà]à€\‹”ò[YOHù\Ÿ\úÀ\›]Y‹öYYŸK\›[[X\ûHèû‹›]ÀõX\
+
+][JHOà\ùX€H€\‹”ò[YO^ÿ\Ÿ\úÀ\›]	⁄][Kù€ô_XHŸ^O^⁄][KõXô[Oè‹[èû⁄][KöX€€üO‹‹[èè]èè€X[û⁄][KõXô[O‹€X[èèûŸõ]
+][Kùò[YJ_Oÿèè[O∏.!8.&OŸ[OèŸ]èèOû⁄][Kò\ùO⁄Oèÿ\ùX€Oä_OŸ]èÇà‹ŸX›[€èÇÇàŸX›[€à€\‹”ò[YOHù\Ÿ\úÀ[\›Xÿ\ôèÇàXY\èè]èè‹[è∏¶gœ‹‹[èè]èèœ∏.'8..x.bx.`¯."∏.bx.!¯.,∏.&x.(¯.,8.&∏.&è⁄œè∏."8.,x.%8. x.,∏.(¯.&∏.,x.#x."∏.-x.'8..x.bx.`¯."∏.bx.!¯.,∏.&H8. x.,¯.*¯.&x.%8.*∏.-8.%¯.&8.-8.c8.`x.)x.,8.*∏.%∏.,∏.&x.,8. x.,∏.(¯.`¯."∏.bx.!¯.,∏.&O‹èŸ]èèŸ]èè]à€\‹”ò[YOHù\Ÿ\úÀ[\›]€€»èèXô[è‹[è∏£%O‹‹[èè[ú]ò[YO^›\Ÿ\îŸX\ò⁄H€ê⁄[ôŸO^ ]ô[ù
+HOàŸ]\Ÿ\îŸX\ò⁄
+]ô[ùù\ôŸ]ùò[YJ_HXŸZ€\èH∏.!8.bx.&x.*¯.,∏."∏.-¯.b8.+K8.(¯.*¯.,x.*ã8.+x.-x.`8.(x.)H8.*¯.(¯.-¯.+x.&∏.%¯.&∏.,∏.%Àããààœè€Xô[èù]€à€\‹”ò[YOHòù]€àŸX€€ô\ûHà€ê€X⁄œ^ 
+HOàõ⁄YÿY\Ÿ\ú 
+_O∏°Æ»8.(¯.-x.`8.'¯.(¯."èÿù]€èèù]€à€\‹”ò[YOHòù]€à\Ÿ\úÀY^Ÿ[Xù]€àà€ê€X⁄œ^ 
+HOàõ⁄Y^‹ù\Ÿ\ú—^Ÿ[
+
+_O∏•©à8.*∏.b8.!¯.+x.+x. H^Ÿ[ÿù]€èèŸ]èè⁄XY\èÇà›\Ÿ\ú”ÿY[ô»»]à€\‹”ò[YOHõÿY[ôÀ\›]Hèè‹[àœè∏. x.,¯.)x.,x.!¯.`∏.*¯.)x.%8.'8..x.bx.`¯."∏.bx.!¯.,∏.&x†)è‹èŸ]èààö\⁄XõU\Ÿ\úÀõ[ô›»]à€\‹”ò[YOHùXõK]‹ò\[ÿö[K]XõK]‹ò\\Ÿ\úÀ]XõK]‹ò\èÇàXõH€\‹”ò[YOHõ[ÿö[KXÿ\ô]XõH\Ÿ\úÀ[[Ÿ\õã]XõHèèXYèèè∏.(¯.*¯.,x.*à»8.'8..x.bx.`¯."∏.bx.!¯.,∏.&O›è∏."∏.-¯.b8.+x†$¯.&x.,∏.(x.*∏. x..8.)H»8.+x.-x.`8.(x.)O›è∏.&∏.%¯.&∏.,∏.%œ›è∏.*∏.-8.%¯.&8.-8.c8.*¯.&x.bx.,è›è∏.*∏.%∏.,∏.&x.,›è∏."8.,x.%8. x.,∏.(œ›è›èè›XYÇàõŸOû›ö\⁄XõU\Ÿ\úÀõX\
+
+][JHOààŸ^O^⁄][KöYOÇà]K[Xô[H∏.(¯.*¯.,x.*à»8.'8..x.bx.`¯."∏.bx.!¯.,∏.&Hèè]à€\‹”ò[YOHù\Ÿ\ãXŸ[èè‹[èû⁄][Kô\‹^Sò[YKú€XŸJJKù’\\êÿ\ŸJ
+_O‹‹[èè]èèèû⁄][Kô\‹^Sò[Y_Oÿèè€X[û⁄][Kô[\ﬁYYP€Ÿ_O‹€X[èŸ]èèŸ]èè›Çà]K[Xô[H∏."∏.-¯.b8.+x†$¯.&x.,∏.(x.*∏. x..8.)H»8.+x.-x.`8.(x.)Hèèèû⁄][Kô\‹^Sò[Y_Oÿèè€X[û⁄][Kô[XZ[∏†%üO‹€X[è›Çà]K[Xô[H∏.&∏.%¯.&∏.,∏.%»èè‹[à€\‹”ò[YO^ÿõ€K\[õ€KI⁄][Kúõ€_XOû‘ì”W”PëS÷⁄][Kúõ€WH][Kúõ€_O‹‹[èè›Çà]K[Xô[H∏.*∏.-8.%¯.&8.-8.c8.*¯.&x.bx.,àèè]à€\‹”ò[YOHú\õZ\‹⁄[€ã\›[[X\ûHèû ][Kúõ€HOOHòYZ[àà»êUãõX\
+
+ò]äHOàò]ãöŸ^JHà][Kú\õZ\‹⁄[€ú»◊JKõX\
+
+Ÿ^JHOà‹[àŸ^O^⁄Ÿ^_Oû”êUãôö[ô
+
+ò]äHOàò]ãöŸ^HOOHŸ^JOÀõXô[’–“◊–P–—T‘◊”PëS÷⁄Ÿ^WHŸ^_O‹‹[èä_OŸ]èè›Çà]K[Xô[H∏.*∏.%∏.,∏.&x.,èè‹[à€\‹”ò[YO^ÿ›]\»	⁄][KòX›]ôH»ò€€\]Yààõ›ô\àüXOû⁄][KòX›]ôH»∏.`¯."∏.bx.!¯.,∏.&x.&¯. x.%x.-àà∏.(¯.,8.!¯.,x.&àüO‹‹[èè›Çà]K[Xô[H∏."8.,x.%8. x.,∏.(»èû⁄][Kúõ€HOOHòYZ[àà»‹[à€\‹”ò[YOHõ]]Yè∏.&∏.,x.#x."∏.-x.*¯.)x.,x. O‹‹[èàà]à€\‹”ò[YOHù\Ÿ\ãXX›[€ú»èèù]€à€\‹”ò[YOHù[ûKXù]€àà€ê€X⁄œ^ 
+HOàY]\Ÿ\ä][J_O∏ß#à8.`x. x.bx.a8. èÿù]€èèù]€à€\‹”ò[YOHù[ûKXù]€àà€ê€X⁄œ^ 
+HOàY]\Ÿ\ä][J_O∏¶Ø»8.*∏.-8.%¯.&8.-8.c»Sèÿù]€èèù]€à€\‹”ò[YO^ÿ[ûKXù]€à	⁄][KòX›]ôH»ô[ôŸ\ã[›][ôHàààüXH€ê€X⁄œ^ 
+HOàõ⁄YŸŸ€U\Ÿ\ä][J_Oû⁄][KòX›]ôH»∏•©»8.(¯.,8.!¯.,x.&ààà∏ß$»8.`8.&¯.-8.%8.`¯."∏.bHüOÿù]€èèŸ]èüO›Çà›èä_O›õŸOÇà›XõOÇàŸ]èàà[\H]OH∏.a8.(x.b8.'∏.&∏.'8..x.bx.`¯."∏.bx.!¯.,∏.&Hà^H∏.)x.+x.!¯.`8.&¯.)x.-x.b8.(∏.&x.!8.,¯.!8.bx.&x.*¯.,à8.*¯.(¯.-¯.+x. x.%8.`8.'∏.-8.b8.(x.'8..x.bx.`¯."∏.bx.!¯.,∏.&x.`¯.*¯.(x.bàœüBàõ€›\èè‹[è∏.`x.*∏.%8.!»Ÿõ]
+ö\⁄XõU\Ÿ\úÀõ[ô›
+_H8."8.,∏. HŸõ]
+ﬁ\›[U\Ÿ\úÀõ[ô›
+_H8.(¯.,∏.(∏. x.,∏.(œ‹‹[èèŸõ€›\èÇà‹ŸX›[€èÇÇà]à€\‹”ò[YOHù\Ÿ\úÀ\ŸX›\ö]KY‹öYèÇàŸX›[€èèXY\èè‹[è∏•·œ‹‹[èè]èèœ∏.*∏.-8.%¯.&8.-8.c8.(¯.,∏.(∏.&∏..8.!8.!8.)O⁄œè∏. x.,¯.*¯.&x.%8.*∏.-8.%¯.&8.-8.c8. x.,∏.(¯.`8. ∏.bx.,∏.%∏.-∏.!¯. ∏.+x.!¯.`x.%x.b8.)x.,8.'8..x.bx.`¯."∏.bx.!¯.,∏.&O‹èŸ]èè⁄XY\èè]èè‹[è∏¶¶O‹‹[èèèèêYZ[à8. x.,¯.*¯.&x.%8.*∏.-8.%¯.&8.-8.c8.%¯..8. x.*¯.&x.bx.,èÿèè€X[∏.&∏.%¯.&∏.,∏.%¯.`¯."∏.bx.(¯.,8.&∏..8.%¯.-x.(x.!¯.,∏.&H8.*∏.b8.)¯.&x.*∏.-8.%¯.&8.-8.c8.*¯.&x.bx.,∏.`x.%x.b8.)x.,8.*¯.&x.bx.,∏.%x.bx.+x.!¯.`8.)x.-¯.+x. x.`¯.*¯.bx.'8..x.bx.`¯."∏.bx.`x.%x.b8.)x.,8.!8.&x.+x.(∏.b8.,∏.!¯.&x.bx.+x.(àH8.*¯.&x.bx.,è‹€X[è‹èŸ]èè‹ŸX›[€èÇàŸX›[€èèXY\èè‹[è∏•®œ‹‹[èè]èèœ∏.!8.)¯.,∏.(x.&¯.)x.+x.%8.(8.,x.(è⁄œè∏.%x.,x.bx.!¯.!8.b8.,∏.!8.)¯.,∏.(x.&¯.)x.+x.%8.(8.,x.(∏. ∏.+x.!¯.'8..x.bx.`¯."∏.bx.!¯.,∏.&x.`x.)x.,8. x.,∏.(¯.`8. ∏.bx.,∏.%∏.-∏.!¯.(¯.,8.&∏.&è‹èŸ]èè⁄XY\èè]èè‹[è∏•·è‹‹[èèèè∏.&¯.bx.+x.!¯. x.,x.&x.%¯.,x.bx.!¯.`8.(x.&x..x.`x.)x.,TOÿèè€X[∏.*¯.&x.bx.,∏.%¯.-x.b8.a8.(x.b8.a8.%8.bx.(¯.,x.&∏.*∏.-8.%¯.&8.-8.c8."8.,8.a8.(x.b8.`x.*∏.%8.!¯.`¯.&x.`8.(x.&x..H8.`x.)x.,8.(¯.,8.&∏.&∏."8.,8.&¯.#¯.-8.`8.*∏.&8. x.,∏.(¯.`8.&¯.-8.%8.*¯.(¯.-¯.+x.`8.(¯.-x.(∏. x.`¯."∏.bx.!¯.,∏.&x.`∏.%8.(∏.%x.(¯.!œ‹€X[è‹èŸ]èè‹ŸX›[€èÇàŸ]èÇàõ€›\à€\‹”ò[YOHúŸ][ô‹ÀYõ€›\àèè‹[è∞™Håçà€€ùõ€›ÿ⁄»“Uà[öY⁄»ô\Ÿ\ùôYè‹‹[èè‹[èïô\ú⁄[€àãååÀå	õòú‹…õòú‹»	õòú‹…õòú‹–ò[ô⁄€⁄ÀZ[[ô	õòú‹…õòú‹»<'·Ó|'·ÎO‹‹[èèŸõ€›\èÇàŸ]èé¬àBÇà€€ú›YŸP€€ù[ùàôX€‹ôYŸRŸ^K
+
+HOàôXX›õŸOàH»ú›ÿ⁄ÀX[éà
+
+HOà›ÿ⁄–[YŸHÿ[ë]Z[œ^›\Ÿ\ãúõ€HOOHòYZ[àà\Ÿ\ãú\õZ\‹⁄[€úÀö[ò€Y\ ú›ÿ⁄ÀX[Y]Z[»ä_Hÿ[ë^‹ù^›\Ÿ\ãúõ€HOOHòYZ[àà\Ÿ\ãú\õZ\‹⁄[€úÀö[ò€Y\ ú›ÿ⁄ÀX[Y^‹ùä_Hœã›ô\ôYNàô[ô\ì›ô\ôYU€‹öÀ\⁄õÿ\ôàô[ô\ë\⁄õÿ\ô›ÿ⁄Œàô[ô\î›ÿ⁄ÀõX[ùX[\›ÿ⁄»éàô[ô\ìX[ùX[›ÿ⁄Àú›ÿ⁄ÀX€›[ùéàô[ô\î›ÿ⁄–€›[ùõ‹ôXÿ\›àô[ô\ëõ‹ôXÿ\›\ùŒàô[ô\î\ùÀY‹Œàô[ô\ïY‹À[éàô[ô\î[ã\úò[ôŸNà
+
+HOàô[ô\îÿÿ[äò\úò[ôŸHäKô\XŸ[Y[ùàô[ô\îô\XŸ[Y[ùô\öYûNàô[ô\ïô\öYûK\‹]⁄à
+
+HOàô[ô\îÿÿ[äô\‹]⁄äK^‹ùŒàô[ô\ë^‹ùÀô\‹ùŒàô[ô\îô\‹ùÀ\›‹ûNàô[ô\í\›‹ûKŸ][ô‹Œàô[ô\îŸ][ô‹À\Ÿ\úŒàô[ô\ï\Ÿ\ú»N¬à€€ú›X›]ôSò]àH
+YŸHOOHõ›ô\ôYHà»»Ÿ^Nàõ›ô\ôYHãXô[à∏.!¯.,∏.&x.%x.-8.%8.)x.&à»8.!8.bx.,∏.!¯.*∏.b8.!»ãX€€éààHàHàêUãôö[ô
+
+][JHOà][KöŸ^HOOHYŸJJHêUãôö[ô
+
+][JHOà][KöŸ^HOOHö\ú›[›ŸYYŸJHêUñÃN¬ÇàYà
+[€ö]‹ì[ŸJHô]\õàXZ[à€\‹”ò[YOHõ›ô\ôYK[[€ö]‹ã\⁄[èÇàŸ\úõ‹à	âà]à€\‹”ò[YOHõõ›XŸH\úõ‹àèûŸ\úõ‹üOŸ]èüBà‹ô[ô\ì›ô\ôYU€‹ö 
+_Bà‹\ò][€ïÿ\õö[ô‘‹\õ⁄XŸQ[òXõY^‹Ÿ][ô‹Àú€›[ôKœÇà€XZ[èé¬Çàô]\õà]à€í[ùò[Yÿ\\ôO^ ]ô[ù
+HOà»]ô[ùúô]ô[ùYò][
+
+N»€€ú›öY[Y]ô[ùù\ôŸ]\»S[ú][[Y[ù»€€ú›Xô[YöY[ò€‹Ÿ\›
+õXô[äOÀú]Y\ûTŸ[X›‹äú‹[àäOÀù^€€ù[ùöY[ôŸ]]öXù]Jò\öXK[Xô[äH∏. ∏.bx.+x.(x..x.)Hé»ô\‹ù‹\ò][€ïÿ\õö[ô ‹YŸKY\‹ÿYŸNò	€Xô[Nà	ŸöY[ùò[Y][€ìY\‹ÿYŸH∏. x.(¯..8.$¯.,∏.%x.(¯.)¯."8.*∏.+x.&∏. ∏.bx.+x.(x..x.)HüXJN»_H€\‹”ò[YO^ÿ€€ùõ€\⁄[	‹YŸHOOHú›ÿ⁄ÀX[à»›ÿ⁄À\ôYô\ô[òŸK\⁄[	‹›ÿ⁄”Y[ùP€€\ŸY»ú›ÿ⁄À\⁄YXò\ãX€€\ŸYàààüXààüXOÇà\⁄YH€\‹”ò[YO^ÿ€€ùõ€\⁄YXò\à	€Y[ùS‹[à»õ‹[ààààüXOÇàù]€à€\‹”ò[YOHú⁄YXò\ãX€‹ŸHà€ê€X⁄œ^ 
+HOàŸ]Y[ùS‹[äò[ŸJ_O∞Âœÿù]€èÇà]à€\‹”ò[YOHö⁄][Ÿ€»èû‹YŸHOOHú›ÿ⁄ÀX[à»›ô\ùöY]”Ÿ€Àœààèí⁄UÿèüO‹[èê””ïì”’–“»“U‹‹[èèŸ]èÇàò]èû”êUãôö[\ä
+][JHOà[›ŸYYŸ\Àö\ ][KöŸ^JJKõX\
+
+][JHOàù]€àŸ^O^⁄][KöŸ^_H€\‹”ò[YO^‹YŸHOOH][KöŸ^H»òX›]ôHàààüH€ê€X⁄œ^ 
+HOà€ ][KöŸ^J_Oè‹[èû‹YŸHOOHú›ÿ⁄ÀX[à»›ô\ùöY]“X€€àò[YO^”’ëTïíQU◊”êUó“P””î÷⁄][KöŸ^W_Kœàà][KöX€€üO‹‹[èû⁄][KõXô[Oÿù]€èä_O€ò]èÇà‹YŸHOOHú›ÿ⁄ÀX[à	âà›ô\ùöY]—òX›‹ûKœüBà]à€\‹”ò[YOHú⁄YXò\ãXõ›€Hèûÿ[›ŸYYŸ\Àö\ úŸ][ô‹»äH	âà]à€\‹”ò[YOHö[Xõﬁèèè∏.%x.bx.+x.!¯. x.,∏.(¯.!8.)¯.,∏.(x."∏.b8.)¯.(∏.`8.*¯.)x.-¯.+Oœÿèèù]€à€ê€X⁄œ^ 
+HOà€ úŸ][ô‹»ä_O∏•‚H8.!8..x.b8.(x.-¯.+x.`x.)x.,8.%x.,x.bx.!¯.!8.b8.,èÿù]€èèŸ]èüOH€\‹”ò[YOHõ[ÿö[K[Ÿ€›]àôYè^‹⁄Y€ì›]]H€ê€X⁄œ^‹⁄Y€ì›]Oè‹[è∏°™è‹‹[èèè∏.+x.+x. x."8.,∏. x.(¯.,8.&∏.&èÿèèÿOè]à€\‹”ò[YOHõZ[öKXúò[ôèèèí⁄Uÿèè‹[èê€€ùõ€›ÿ⁄»“Uúàœ∞™Håçà0≠»åãååÀå‹‹[èèŸ]èèŸ]èÇàÿ\⁄YOÇà€Y[ùS‹[à	âàù]€à€\‹”ò[YOHõY[ùKXòX⁄Ÿõ‹à\öXK[Xô[H∏.&¯.-8.%8.`8.(x.&x..Hà€ê€X⁄œ^ 
+HOàŸ]Y[ùS‹[äò[ŸJ_HœüBàXZ[à€\‹”ò[YOHò€€ùõ€[XZ[àèÇàXY\à€\‹”ò[YO^ÿ€€ùõ€]‹ò\àŸ][ô‹À]‹ò\à	‹YŸHOOHúŸ][ô‹»àYŸHOOHù\Ÿ\ú»àYŸHOOHö\›‹ûHàYŸHOOHúô\‹ù»àYŸHOOHô^‹ù»à»úŸ][ô‹ÀXò[õô\ã]‹ò\ààààüH	‹YŸHOOHù\Ÿ\ú»à»ù\Ÿ\úÀXò[õô\ã]‹ò\ààààüH	‹YŸHOOHö\›‹ûHà»ö\›‹ûKXò[õô\ã]‹ò\ààààüH	‹YŸHOOHúô\‹ù»à»úô\‹ùÀXò[õô\ã]‹ò\ààààüH	‹YŸHOOHô^‹ù»à»ô^‹ùÀXò[õô\ã]‹ò\ààààüXOÇàù]€à€\‹”ò[YOHõY[ùKXù]€àà\öXK[Xô[H∏.`8.&¯.-8.%¯.&¯.-8.%8.`8.(x.&x..Hà€ê€X⁄œ^ 
+HOàYŸHOOHú›ÿ⁄ÀX[à	âà⁄[ô›Àö[õô\ï⁄YàÃå»Ÿ]›ÿ⁄”Y[ùP€€\ŸY
+ò[YOOà]ò[YJHàŸ]Y[ùS‹[äùYJ_Oû‹YŸHOOHú›ÿ⁄ÀX[à»›ô\ùöY]“X€€àò[YOHõY[ùHãœàà∏¶,üOÿù]€èÇà‹YŸHOOHú›ÿ⁄ÀX[à»]à€\‹”ò[YOHú›ÿ⁄À\ôYô\ô[òŸK]‹\ŸX\ò⁄èè›ô\ùöY]“X€€àò[YOHúŸX\ò⁄ãœè[ú]\OHúŸX\ò⁄à\öXK[Xô[H∏.!8.bx.&x.*¯.,à›ÿ⁄»8."8.,∏. x.`x.%∏.&∏.%8.bx.,∏.&x.&∏.&HàXŸZ€\èH∏.!8.bx.&x.*¯.,à\ùõÀà»8."∏.-¯.b8.+x."∏.-8.bx.&x.!¯.,∏.&H»8.)x..x. x.!8.bx.,à»õÿà»ÿÿ][€àããààò[YO^‹›ÿ⁄”›ô\ùöY]‘ŸX\ò⁄H€ê⁄[ôŸO^ ]ô[ù
+HOà‹Ÿ]›ÿ⁄”›ô\ùöY]‘ŸX\ò⁄
+]ô[ùù\ôŸ]ùò[YJN›⁄[ô›Àô\‹]⁄]ô[ù
+ô]»›\›€Q]ô[ù
+ú›ÿ⁄À[›ô\ùöY]À\ŸX\ò⁄ãŸ]Z[ô]ô[ùù\ôŸ]ùò[Y_JJNﬂ_Kœèÿôê›õ
+»œ⁄ÿôèŸ]èààYŸHOOHúŸ][ô‹»à»]à€\‹”ò[YOHù‹ò\ã\Ÿ][ô‹ÀXò[õô\àèÇà]à€\‹”ò[YOHúŸ][ô‹ÀZ\õÀ]]Hèè‹[è∏¶¶O‹‹[èè]èèè∏.%x.,x.bx.!¯.!8.b8.,è⁄èè∏.*¯.&x.bx.,∏.*¯.)x.,x. Hè∏†.èÿèà8.%x.,x.bx.!¯.!8.b8.,è‹èŸ]èèŸ]èÇà]à€\‹”ò[YOHúŸ][ô‹ÀZ\õÀX€‹Hèèè∏.%x.,x.bx.!¯.!8.b8.,∏.(¯.,8.&∏.&∏.`¯.*¯.bx.%¯.,¯.!¯.,∏.&x.a8.%8.bx.`8.%x.a¯.(x.&¯.(¯.,8.*∏.-8.%¯.&8.-8.(8.,∏.'èÿèè‹[è∏.`8.'∏.-¯.b8.+x. x.,∏.(¯.*∏.b8.!¯.(x.+x.&∏.%¯.-x.b8.%x.(¯.!¯.`8.)¯.)x.,è‹‹[èè]èè[Oº'Ê†8.`8.(¯.a¯.)¯. ∏.-∏.bx.&OŸ[Oè[O∏•„à8.`x.(x.b8.&x.(∏.,œŸ[Oè[O∏•·à8.`8."∏.-¯.b8.+x.%∏.-¯.+x.a8.%8.bOŸ[OèŸ]èèŸ]èÇà]à€\‹”ò[YOHúŸ][ô‹ÀZ\õÀX\ùèè›õ€ôœê€€ùõ€Ÿ^O‹›õ€ôœè›õ€ôœë[]ô\à€[‹úõ›œ‹›õ€ôœèŸ]èÇàŸ]èààYŸHOOHù\Ÿ\ú»à»]à€\‹”ò[YOHù‹ò\ã\Ÿ][ô‹ÀXò[õô\à‹ò\ã]\Ÿ\úÀXò[õô\àèÇà]à€\‹”ò[YOHù\Ÿ\úÀZ\õÀ]]Hèè‹[è∏¶gœ‹‹[èè]èèè∏.'8..x.bx.`¯."∏.bx.!¯.,∏.&O⁄èè∏.*¯.&x.bx.,∏.*¯.)x.,x. Hè∏†.èÿèà8.'8..x.bx.`¯."∏.bx.!¯.,∏.&O‹èŸ]èèŸ]èÇà]à€\‹”ò[YOHù\Ÿ\úÀZ\õÀX€‹Hèèèî[‹Hö]ôOÿèè‹[èêô]\à‹\ò][€úœ‹‹[èèŸ]èÇà]à€\‹”ò[YOHù\Ÿ\úÀZ\õÀX\ùèè›õ€ôœ∏†'8.%¯.-x.(x.%¯.-x.b8.%8.-Oúàœ∏.*∏.(¯.bx.,∏.!¯.!¯.,∏.&x.%¯.-x.b8.%8.-x. ∏.-∏.bx.&x.a8.%8.bx.`8.*∏.(x.+x†'O‹›õ€ôœèŸ]èÇàŸ]èààYŸHOOHö\›‹ûHà»]à€\‹”ò[YOHù‹ò\ã\Ÿ][ô‹ÀXò[õô\à‹ò\ãZ\›‹ûKXò[õô\àèÇà]à€\‹”ò[YOHö\›‹ûKZ\õÀ]]Hèè‹[è∏•Ìœ‹‹[èè]èèè∏.&¯.(¯.,8.)¯.,x.%x.-⁄èè∏.*¯.&x.bx.,∏.*¯.)x.,x. Hè∏†.èÿèà8.&¯.(¯.,8.)¯.,x.%x.-‹èŸ]èèŸ]èÇà]à€\‹”ò[YOHö\›‹ûKZ\õÀX€‹Hèèè∏.%x.(¯.)¯."8.*∏.+x.&∏.%¯..8. x. x.,∏.(¯.`8.!8.)x.-¯.b8.+x.&x.a8.*¯.)œÿèè‹[è∏.(∏.bx.+x.&x.*¯.)x.,x.!¯.a8.%8.bx.+x.(∏.b8.,∏.!¯."∏.,x.%8.`8."8.&O‹‹[èèŸ]èÇà]à€\‹”ò[YOHö\›‹ûKZ\õÀX\ùèè›õ€ôœïòX⁄»Ÿ^O‹›õ€ôœè›õ€ôœë[]ô\à€[‹úõ›œ‹›õ€ôœèŸ]èÇàŸ]èààYŸHOOHúô\‹ù»à»]à€\‹”ò[YOHù‹ò\ã\Ÿ][ô‹ÀXò[õô\à‹ò\ã\ô\‹ùÀXò[õô\àèÇà]à€\‹”ò[YOHúô\‹ùÀZ\õÀ]]Hèè‹[è∏•©O‹‹[èè]èèè∏.(¯.,∏.(∏.!¯.,∏.&O⁄èè∏.*¯.&x.bx.,∏.*¯.)x.,x. Hè∏†.èÿèà8.(¯.,∏.(∏.!¯.,∏.&O‹èŸ]èèŸ]èÇà]à€\‹”ò[YOHúô\‹ùÀZ\õÀX€‹Hèèè∏. ∏.bx.+x.(x..x.)x."∏.,x.%8.`8."8.&Oÿèè‹[è∏."∏.b8.)¯.(∏.`¯.*¯.bx. x.,∏.(¯.%x.,x.%8.*∏.-8.&x.`¯."8.`x.(x.b8.&x.(∏.,¯. ∏.-∏.bx.&O‹‹[èèŸ]èÇà]à€\‹”ò[YOHúô\‹ùÀZ\õÀX\ùèè›õ€ôœë]HŸ^O‹›õ€ôœè›õ€ôœêô]\à€[‹úõ›œ‹›õ€ôœèŸ]èÇàŸ]èààYŸHOOHô^‹ù»à»]à€\‹”ò[YOHù‹ò\ã\Ÿ][ô‹ÀXò[õô\à‹ò\ãY^‹ùÀXò[õô\àèÇà]à€\‹”ò[YOHô^‹ùÀZ\õÀ]]Hèè‹[è∏•¨‹‹[èè]èèè∏.(¯.,∏.(∏. x.,∏.(¯.*∏.b8.!¯.+x.+x. O⁄èè∏.*¯.&x.bx.,∏.*¯.)x.,x. Hè∏†.èÿèà8.(¯.,∏.(∏. x.,∏.(¯.*∏.b8.!¯.+x.+x. O‹èŸ]èèŸ]èÇà]à€\‹”ò[YOHô^‹ùÀZ\õÀX€‹Hèèè∏.!8.)¯.&∏.!8..8.(x. x.,∏.(¯.*∏.b8.!¯.+x.+x. Oÿèè‹[è∏.`¯.*¯.bx.%∏..x. x.%x.bx.+x.!»8.%x.(¯.!¯.`8.)¯.)x.,à8.`x.)x.,8.%x.(¯.)¯."8.*∏.+x.&∏.a8.%8.bO‹‹[èèŸ]èÇà]à€\‹”ò[YOHô^‹ùÀZ\õÀX\ùèè›õ€ôœë[]ô\àöY⁄‹›õ€ôœè›õ€ôœì[›ôHõ‹ùÿ\ô‹›õ€ôœèŸ]èÇàŸ]èàà]èèOûÿX›]ôSò]ãõXô[O⁄Oè∏.*¯.&x.bx.,∏.*¯.)x.,x. H‹[è∏†.è‹‹[èà‘Q—W‘’PïUV‹YŸW_O‹èŸ]èüBà]à€\‹”ò[YOHù‹]\Ÿ\àèèù]€à\OHòù]€àà€\‹”ò[YO^ÿõ›YöXÿ][€à›ô\ôYK\€›[ô\⁄‹ù›]	€›ô\ôYT€›[ô[òXõY»ô[òXõYàààüXH€ê€X⁄œ^ 
+HOàõ⁄YŸŸ€S›ô\ôYT€›[ô
+
+_H\öXK[Xô[^€›ô\ôYT€›[ô[òXõY»∏.&¯.-8.%8.`8.*∏.-x.(∏.!¯.`x."8.bx.!¯.`8.%x.-¯.+x.&x.!¯.,∏.&x.`8. x.-8.&HYHàà∏.`8.&¯.-8.%8.`8.*∏.-x.(∏.!¯.`x."8.bx.!¯.`8.%x.-¯.+x.&x.!¯.,∏.&x.`8. x.-8.&HYHüH\öXK\ô\‹ŸY^€›ô\ôYT€›[ô[òXõYOû€›ô\ôYT€›[ô[òXõY»º'Â%ààº'Â%HüOÿù]€èèù]€à€\‹”ò[YOHõõ›YöXÿ][€àà€ê€X⁄œ^‹⁄›”›ô\ôYT[üH\ÿXõY^»[›ô\ôYQY\Àõ[ô›X[›ŸYYŸ\Àö\ ú[àä_H\öXK[Xô[^ÿ8.!¯.,∏.&x.`8. x.-8.&x.%8.-8.)¯."8.,x.%8.*∏.b8.!»	€›ô\ôYQY\Àõ[ô›H8.(¯.,∏.(∏. x.,∏.(ÿO∏¶iœOûŸõ]
+›ô\ôYQY\Àõ[ô›
+_O⁄Oèÿù]€èè‹[à€\‹”ò[YOHù\Ÿ\ãX]ò]\àèû›\Ÿ\ãô\‹^Sò[YKú€XŸJJKù’\\êÿ\ŸJ
+_O‹‹[èè]èèèû›\Ÿ\ãô\‹^Sò[Y_Oÿèè€X[û‘ì”W”PëS÷›\Ÿ\ãúõ€WH\Ÿ\ãúõ€_O‹€X[èŸ]èèHôYè^‹⁄Y€ì›]]H€ê€X⁄œ^‹⁄Y€ì›]O∏.+x.+x. x."8.,∏. x.(¯.,8.&∏.&èÿOèŸ]èÇà⁄XY\èÇà]à€\‹”ò[YOHò€€ùõ€X€€ù[ùèÇàõ⁄XŸP[\ù€€ùõ€[òXõY^‹Ÿ][ô‹Àú€›[ôH€ë[òXõY⁄[ôŸO^ÿ⁄[ôŸUõ⁄XŸQ[òXõYKœÇà—QUPìW‘Q—W“—VTÀö[ò€Y\ YŸH\»Y]XõTYŸRŸ^JH	âàXÿ[ëY]YŸJYŸH\»Y]XõTYŸRŸ^JH	âà]à€\‹”ò[YOHúôXY[€õK\\õZ\‹⁄[€ãXò[õô\àèè‹[è∏•‚O‹‹[èè]èèè∏.*∏.-8.%¯.&8.-8.c8.%8..x. ∏.bx.+x.(x..x.)x.`8.%¯.b8.,∏.&x.,x.bx.&Oÿèà8†%8.&∏.,x.#x."∏.-x.&x.-x.bx.!8.bx.&x.*¯.,∏.`x.)x.,8.%x.(¯.)¯."8.*∏.+x.&∏. ∏.bx.+x.(x..x.)x.a8.%8.bH8.`x.%x.b8.a8.(x.b8.*∏.,∏.(x.,∏.(¯.%∏.`8.'∏.-8.b8.(x.*¯.(¯.-¯.+x.`x. x.bx.a8. ∏.(¯.,∏.(∏. x.,∏.(¯.`¯.&x.*¯.&x.bx.,∏.&x.-x.bOŸ]èèŸ]èüBà€õ›XŸH	âà]à€\‹”ò[YO^ÿÿ\›	€õ›XŸKù\_H]]ÀY\€Z\‹ÿOè‹[èû€õ›XŸKù\HOOHú›XÿŸ\‹»à»∏ß$»àààHüO‹‹[èèû€õ›XŸKù^O‹èù]€à€ê€X⁄œ^ 
+HOàŸ]õ›XŸJù[
+_O∞Âœÿù]€èèŸ]èüBàŸ\úõ‹à	âà]à€\‹”ò[YOHùÿ\›\úõ‹àèè‹[èàO‹‹[èèûŸ\úõ‹üO‹èù]€à€ê€X⁄œ^ 
+HOàõ⁄YÿYYJ
+_O∏.)x.+x.!¯.`¯.*¯.(x.bÿù]€èèŸ]èüBà€ÿY[ô»	âàYŸHOOHõ›ô\ôYHà»]à€\‹”ò[YOHõÿY[ôÀ\›]Hèè‹[àœè∏. x.,¯.)x.,x.!¯.`∏.*¯.)x.%8. ∏.bx.+x.(x..x.)HYx†)è‹èŸ]èààYŸP€€ù[ù‹YŸWJ
+_BàŸ]èÇà€XZ[èÇàò]à€\‹”ò[YOHõ[ÿö[KXõ›€K[ò]àà\öXK[Xô[H∏.`8.(x.&x..x.(x.-¯.+x.%∏.-¯.+HèÇà”êUãôö[\ä
+][JHOà[›ŸYYŸ\Àö\ ][KöŸ^JJKú€XŸJ
+KõX\
+
+][JHOàù]€àŸ^O^⁄][KöŸ^_H€\‹”ò[YO^‹YŸHOOH][KöŸ^H»òX›]ôHàààüH€ê€X⁄œ^ 
+HOà€ ][KöŸ^J_Oè‹[èû⁄][KöX€€üO‹‹[èè€X[û⁄][KõXô[úô\XŸJ∏.`x.'8.&x.*∏.b8.!¯.!¯.,∏.&H
+YJHã∏.`x.'8.&x.!¯.,∏.&HäKúô\XŸJ∏.%x.(¯.)¯."8.`x.)x.,8. ∏.,∏.(∏.+x.+x. Hã∏. ∏.,∏.(∏.+x.+x. Hä_O‹€X[èÿù]€èä_Bàù]€à€ê€X⁄œ^ 
+HOàŸ]Y[ùS‹[äùYJ_Oè‹[è∏¶,‹‹[èè€X[∏.`8.(x.&x..O‹€X[èÿù]€èÇàH€\‹”ò[YOHòõ›€K[Ÿ€›]àôYè^‹⁄Y€ì›]]H€ê€X⁄œ^‹⁄Y€ì›]Oè‹[è∏°™è‹‹[èè€X[∏.+x.+x. x.(¯.,8.&∏.&è‹€X[èÿOÇà€ò]èÇàÿ\úò[ôŸUÿ\õö[ô»	âà]à€\‹”ò[YOHõ[Ÿ[XòX⁄Ÿõ‹àõ€OHò[\ùX[Ÿ»à\öXK[[Ÿ[HùùYHà\öXK[Xô[YûOHò\úò[ôŸK]ÿ\õö[ôÀ]]Hà\öXKY\ÿ‹öXôYûOHò\úò[ôŸK]ÿ\õö[ôÀ[Y\‹ÿYŸHèèŸX›[€à€\‹”ò[YOHò\úò[ôŸK]ÿ\õö[ôÀ[[Ÿ[à€íŸ^Q›€è^ ]ô[ù
+HOà»Yà
+]ô[ùöŸ^HOOHïXàäH]ô[ùúô]ô[ùYò][
+
+N»_OÇàXY\èè‹[èàO‹‹[èè»YHò\úò[ôŸK]ÿ\õö[ôÀ]]Hè∏.`x."8.bx.!¯.`8.%x.-¯.+x.&x."8.,x.%8.!¯.,∏.&O⁄œè⁄XY\èÇàYHò\úò[ôŸK]ÿ\õö[ôÀ[Y\‹ÿYŸHèûÿ\úò[ôŸUÿ\õö[ôÀõY\‹ÿYŸ_O‹Çàè]èè∏.)¯.,x.&x.%¯.-x.b8.*∏.b8.!¯.!¯.,∏.&OŸèûŸõ‹õX]]J\úò[ôŸUÿ\õö[ôÀô]JH∏.(∏.,x.!¯.a8.(x.b8.`8.)x.-¯.+x. HüOŸèŸ]èè]èè∏.(¯.+x.&∏.*∏.b8.!¯.!¯.,∏.&OŸèûÿ\úò[ôŸUÿ\õö[ôÀù[YH∏.%¯..8. x.(¯.+x.&àüOŸèŸ]èè]èèëêPœŸèûÿ\úò[ôŸUÿ\õö[ôÀôòX›∏.%¯..8. HêP»üOŸèŸ]èèŸÇà€X[∏.(¯.,8.&∏.&∏.!8.!¯.)¯.,x.&x.%¯.-x.b8.(¯.+x.&à8.`x.)x.,êP»8.%¯.-x.b8.`8.)x.-¯.+x. x.a8.)¯.bH8.*∏.,∏.(x.,∏.(¯.%∏.`8.&¯.)x.-x.b8.(∏.&x.%x.,x.)¯.`8.)x.-¯.+x. x. x.b8.+x.&x.*∏.`x. x.&x.%x.b8.+x.a8.%8.bO‹€X[Çàù]€à\OHòù]€àà€\‹”ò[YOHòù]€àö[X\ûHù[à]]—õÿ›\»€ê€X⁄œ^ 
+HOà»Ÿ]\úò[ôŸUÿ\õö[ô ù[
+N»⁄[ô›ÀúŸ][Y[›]
+
+
+HOàY“[ú]ò›\úô[ùÀôõÿ›\ 
+K
+N»_O∏.(¯.,x.&∏.%¯.(¯.,∏.&èÿù]€èÇà‹ŸX›[€èèŸ]èüBà‹ô\XŸ[Y[ùô]öY]»	âà]à€\‹”ò[YOHõ[Ÿ[XòX⁄Ÿõ‹ô\XŸ[Y[ùX€€ôö\õKXòX⁄Ÿõ‹àõ€OHôX[Ÿ»à\öXK[[Ÿ[HùùYHà\öXK[Xô[YûOHúô\XŸ[Y[ùX€€ôö\õK]]Hèè]à€\‹”ò[YOHúô\XŸ[Y[ùX€€ôö\õK[[Ÿ[èÇàXY\èè]èè‹[è∏°Æè‹‹[èè]èè€X[∏.%x.(¯.)¯."8.'∏.&à“U›ÿ⁄»Yœ‹€X[è»YHúô\XŸ[Y[ùX€€ôö\õK]]Hè∏.%x.(¯.)¯."8.*∏.+x.&∏. x.b8.+x.&x.`8.&∏.-8. x.!¯.,∏.&x.%¯.%8.`x.%¯.&O⁄œèŸ]èèŸ]èèù]€à\OHòù]€àà€ê€X⁄œ^ 
+HOà»Ÿ]ô\XŸ[Y[ùô]öY] ù[
+N»Ÿ]ô\XŸ[Y[ùY àäN»Ÿ]ô\XŸ[Y[ù]JàäN»_H\öXK[Xô[H∏.&¯.-8.%è∞Âœÿù]€èè⁄XY\èÇà]à€\‹”ò[YOHúô\XŸ[Y[ùX€€ôö\õKX€€ù[ùèÇàŸX›[€à€\‹”ò[YOHúô\XŸ[Y[ùX€€ôö\õK\›»\‹]⁄X€€ôö\õKZ[XYŸ\»èè\ù[XYŸTZ\àX]\öX[€ŸO^‹ô\XŸ[Y[ùô]öY]Àúô\]Y\›õX]\öX[€Ÿ_HX\›\ïô\ú⁄[€è^‹\ù[XYŸ\Àôö[ô
+
+][JHOà][KõX]\öX[€ŸHOOHô\XŸ[Y[ùô]öY]Àúô\]Y\›õX]\öX[€ŸJOÀù\]Y]HX›X[ô\ú⁄[€è^‹\ùX›X[[XYŸ\Àôö[ô
+
+][JHOà][KõX]\öX[€ŸHOOHô\XŸ[Y[ùô]öY]Àúô\]Y\›õX]\öX[€ŸJOÀù\]Y]Hœè‹ŸX›[€èÇàŸX›[€à€\‹”ò[YOHúô\XŸ[Y[ùX€€ôö\õKZ[ôõ»èÇà]à€\‹”ò[YOHô\‹]⁄X€€ôö\õK\\ùèè€X[îTï»PUTíPS‹€X[èèû‹ô\XŸ[Y[ùô]öY]Àúô\]Y\›õX]\öX[€Ÿ_Oÿèèû‹ô\XŸ[Y[ùô]öY]Àúô\]Y\›ú\ùò[YHô\XŸ[Y[ùô]öY]ÀùYÀú\ùò[YH∏.a8.(x.b8.(¯.,8.&∏..8."∏.-¯.b8.+x."∏.-8.bx.&x.!¯.,∏.&HüO‹èŸ]èÇà]à€\‹”ò[YOHúô\XŸ[Y[ùX€€ôö\õKY]Z[»èè]èè€X[∏.`¯.&∏. ∏.+HPœ‹€X[èèû‹ô\XŸ[Y[ùô]öY]Àúô\]Y\›úô\]Y\›õﬂOÿèèŸ]èè]èè€X[∏.)x..x. x.!8.bx.,à»⁄]O‹€X[èèû‹ô\XŸ[Y[ùô]öY]Àúô\]Y\›ò›\›€Y\à∏†%üOÿèèŸ]èè]èè€X[í“U›ÿ⁄»Yœ‹€X[èèû‹ô\XŸ[Y[ùô]öY]ÀùYÀùY“YOÿèèŸ]èè]èè€X[íõÿà»ÿÿ][€è‹€X[èèû‹ô\XŸ[Y[ùô]öY]ÀùYÀöõÿìõ»∏†%üH»‹ô\XŸ[Y[ùô]öY]ÀùYÀõÿÿ][€à∏†%üOÿèèŸ]èèŸ]èÇà]à€\‹”ò[YOHúô\XŸ[Y[ù\]KX€€\\ôHèè]èè€X[îP»8. ∏.+x.`8.&∏.-8. O‹€X[èèûŸõ]
+ô\XŸ[Y[ùô]öY]Àúô\]Y\›úô\]Y\›Y]J_Oÿèè[O∏."∏.-8.bx.&OŸ[OèŸ]èè]èè€X[∏.`8.&∏.-8. x.`x.)x.bx.)œ‹€X[èèûŸõ]
+ô\XŸ[Y[ùô]öY]Àúô\]Y\›ö\‹›YY]J_Oÿèè[O∏."∏.-8.bx.&OŸ[OèŸ]èèXô[è€X[∏.`8.&∏.-8. x.!8.(¯.,x.bx.!¯.&x.-x.bO‹€X[è[ú]\OHõù[Xô\àà[ú][ŸOHõù[Y\öX»àZ[è^Ã_HX^^”X]õZ[äô\XŸ[Y[ùô]öY]Àúô\]Y\›úô[XZ[ö[ô‘]Kô\XŸ[Y[ùô]öY]ÀùYÀò]òZ[XõT]J_Hò[YO^‹ô\XŸ[Y[ù]_H€ê⁄[ôŸO^ ]ô[ù
+HOàŸ]ô\XŸ[Y[ù]J]ô[ùù\ôŸ]ùò[YKúô\XŸJ÷◊åNWKŸÀàäJ_Hœè[O∏.`x. x.bx.a8. ∏."8.,¯.&x.)¯.&x.a8.%8.bOŸ[Oè€Xô[è]èè€X[∏.!8.!¯.`8.*¯.)x.-¯.+x.*¯.)x.,x.!¯.`8.&∏.-8. O‹€X[èèûŸõ]
+X]õX^
+ô\XŸ[Y[ùô]öY]Àúô\]Y\›úô[XZ[ö[ô‘]HHù[Xô\äô\XŸ[Y[ù]H
+K
+J_Oÿèè[O∏."∏.-8.bx.&OŸ[OèŸ]èèŸ]èÇà€\‹”ò[YOHúô\XŸ[Y[ù\›ÿ⁄À[õ›Hèî›ÿ⁄»Y»8.&x.-x.bx.'∏.(¯.bx.+x.(x.`¯."∏.bHŸõ]
+ô\XŸ[Y[ùô]öY]ÀùYÀò]òZ[XõT]J_H8."∏.-8.bx.&H0≠»8.(¯.,8.&∏.&∏."8.,8.%x.,x.%›ÿ⁄»8.`8.(x.-¯.b8.+x.(∏.-¯.&x.(∏.,x.&O‹Çà‹ŸX›[€èÇàŸ]èÇàõ€›\èèù]€à\OHòù]€àà€\‹”ò[YOHòù]€àŸX€€ô\ûHà€ê€X⁄œ^ 
+HOà»Ÿ]ô\XŸ[Y[ùô]öY] ù[
+N»Ÿ]ô\XŸ[Y[ùY àäN»Ÿ]ô\XŸ[Y[ù]JàäN»_O∏.(∏. x.`8.)x.-8. H»8.*∏.`x. x.&x.`¯.*¯.(x.bÿù]€èèù]€à\OHòù]€àà€\‹”ò[YOHòù]€à€€ôö\õK\ô\XŸ[Y[ùXù]€àà\ÿXõY^‹ô\XŸ[Y[ùÿ]ö[ô»Sù[Xô\äô\XŸ[Y[ù]JHù[Xô\äô\XŸ[Y[ù]JHàô\XŸ[Y[ùô]öY]Àúô\]Y\›úô[XZ[ö[ô‘]Hù[Xô\äô\XŸ[Y[ù]JHàô\XŸ[Y[ùô]öY]ÀùYÀò]òZ[XõT]_H€ê€X⁄œ^ 
+HOàõ⁄Y€€ôö\õTô\XŸ[Y[ù\‹›YJ
+_Oû‹ô\XŸ[Y[ùÿ]ö[ô»»∏. x.,¯.)x.,x.!¯.`8.&∏.-8. x.!¯.,∏.&x†)ààà∏ß$»8.(∏.-¯.&x.(∏.,x.&x.`8.&∏.-8. x.`x.)x.,8.%x.,x.%8.(∏.+x.%üOÿù]€èèŸõ€›\èÇàŸ]èèŸ]èüBà‹›ÿ⁄–€›[ùô]öY]»	âà›ÿ⁄–€›[ù€€ôö\õS‹[à	âà]à€\‹”ò[YOHõ[Ÿ[XòX⁄Ÿõ‹›ÿ⁄ÀX€›[ùXòX⁄Ÿõ‹àõ€OHôX[Ÿ»à\öXK[[Ÿ[HùùYHà\öXK[Xô[YûOHú›ÿ⁄ÀX€›[ù]]Hèè]à€\‹”ò[YOHú›ÿ⁄ÀX€›[ù[[Ÿ[èÇàXY\èè]èè‹[è∏¢bœ‹‹[èè]èè€X[∏.%x.(¯.)¯."8.&x.,x.&à›ÿ⁄»8.*∏.-8.bx.&x.`8.%8.-¯.+x.&x.%¯.-x.)x.,Yœ‹€X[è»YHú›ÿ⁄ÀX€›[ù]]Hè∏.(∏.-¯.&x.(∏.,x.&x. x.,∏.(¯.&¯.(¯.,x.&∏.(∏.+x.%Yœ⁄œèŸ]èèŸ]èèù]€à\OHòù]€àà€ê€X⁄œ^ 
+HOàŸ]›ÿ⁄–€›[ù€€ôö\õS‹[äò[ŸJ_H\öXK[Xô[H∏.&¯.-8.%è∞Âœÿù]€èè⁄XY\èÇà]à€\‹”ò[YOHú›ÿ⁄ÀX€›[ùX€€ù[ùèÇàŸX›[€èè€X[í“U’–“»Qœ‹€X[èû‹›ÿ⁄–€›[ùô]öY]ÀùY“YO⁄èû‹›ÿ⁄–€›[ùô]öY]ÀõX]\öX[€Ÿ_H0≠»‹›ÿ⁄–€›[ùô]öY]Àú\ùò[Y_H0≠»õÿà‹›ÿ⁄–€›[ùô]öY]ÀöõÿìõﬂO‹è‹ŸX›[€èÇà]à€\‹”ò[YOHú›ÿ⁄ÀX€›[ùX€€\\ôHèÇà\ùX€Oè€X[∏.!8.)¯.(¯.+x.(∏..x.b8.`¯.&x.'∏.-¯.bx.&x.%¯.-x.b›ÿ⁄œ‹€X[èèûŸõ]
+›ÿ⁄–€›[ùô]öY]Àú›ÿ⁄–\ôXTﬁ\›[T]J_Oÿèè[O∏."∏.-8.bx.&OŸ[Oèÿ\ùX€Oè‹[è∏°§è‹‹[èÇà\ùX€Oè€X[∏.&x.,x.&∏.a8.%8.bx.`¯.&x.'∏.-¯.bx.&x.%¯.-x.b›ÿ⁄œ‹€X[èèûŸõ]
+›ÿ⁄–€›[ùô]öY]Àú›ÿ⁄–\ôXP€›[ùY]J_Oÿèè[O∏."∏.-8.bx.&OŸ[Oèÿ\ùX€OÇà\ùX€H€\‹”ò[YO^‹›ÿ⁄–€›[ùô]öY]ÀôYôô\ô[òŸH»õôYÿ]]ôHàà›ÿ⁄–€›[ùô]öY]ÀôYôô\ô[òŸHà»ú‹⁄]]ôHààô\]X[üOè€X[∏.'8.)x.%x.b8.,∏.!»›ÿ⁄œ‹€X[èèû‹›ÿ⁄–€›[ùô]öY]ÀôYôô\ô[òŸHà»ä»àààü^Ÿõ]
+›ÿ⁄–€›[ùô]öY]ÀôYôô\ô[òŸJ_Oÿèè[O∏."∏.-8.bx.&OŸ[Oèÿ\ùX€OÇàŸ]èÇà]à€\‹”ò[YOHú›ÿ⁄ÀX€›[ù\ÿYô]Hèèè∏.(∏.+x.%8.(¯.)¯.(x.`¯.*¯.(x.b8. ∏.+x.!»Y»HŸõ]
+›ÿ⁄–€›[ùô]öY]Àú›ÿ⁄–\ôXP€›[ùY]J_H8.`¯.&H›ÿ⁄»
+»Ÿõ]
+›ÿ⁄–€›[ùô]öY]Àúô\Ÿ\ùôY]J_H8."8.,x.%8.!¯.,∏.&K¯."8.+x.!»HŸõ]
+›ÿ⁄–€›[ùô]öY]Àõô]’›[]J_H8."∏.-8.bx.&Oÿèè‹[è∏.(∏.+x.%›ÿ⁄»8.(¯.)¯.(x.%¯..8. HY»Ÿõ]
+›ÿ⁄–€›[ùô]öY]ÀõX]\öX[›[]J_H8°§àŸõ]
+›ÿ⁄–€›[ùô]öY]ÀõX]\öX[›[Yù\ä_H8."∏.-8.bx.&O‹‹[èèŸ]èÇà€\‹”ò[YOHú›ÿ⁄ÀX€›[ù\ôX\€€àèèè∏.*∏.,∏.`8.*¯.%x..èÿèà‹›ÿ⁄–€›[ùõ‹õKúôX\€€üO‹ÇàŸ]èÇàõ€›\èèù]€à\OHòù]€àà€\‹”ò[YOHòù]€àŸX€€ô\ûHà€ê€X⁄œ^ 
+HOàŸ]›ÿ⁄–€›[ù€€ôö\õS‹[äò[ŸJ_O∏. x.)x.,x.&∏.a8.&¯.`x. x.bx.a8. èÿù]€èèù]€à\OHòù]€àà€\‹”ò[YOHòù]€à€€ôö\õK\›ÿ⁄ÀX€›[ùXù]€àà\ÿXõY^‹›ÿ⁄”X[òYŸ[Y[ùÿ]ö[ô»\›ÿ⁄–€›[ùõ‹õKúôX\€€ãùö[J
+_H€ê€X⁄œ^ 
+HOàõ⁄Y€€ôö\õT›ÿ⁄–€›[ùYù\›Y[ù
+
+_Oû‹›ÿ⁄”X[òYŸ[Y[ùÿ]ö[ô»»∏. x.,¯.)x.,x.!¯.&∏.,x.&x.%¯.-∏. x†)ààà∏ß$»8.(∏.-¯.&x.(∏.,x.&x.&¯.(¯.,x.&∏.(∏.+x.%Y»8.`x.)x.,›ÿ⁄»üOÿù]€èèŸõ€›\èÇàŸ]èèŸ]èüBà‹›ÿ⁄‘ôXŸZ]ôTô]öY]»	âà]à€\‹”ò[YOHõ[Ÿ[XòX⁄Ÿõ‹\‹]⁄X€€ôö\õKXòX⁄Ÿõ‹›ÿ⁄À\ôXŸZ]ôKX€€ôö\õKXòX⁄Ÿõ‹àõ€OHôX[Ÿ»à\öXK[[Ÿ[HùùYHà\öXK[Xô[YûOHú›ÿ⁄À\ôXŸZ]ôKX€€ôö\õK]]Hèè]à€\‹”ò[YOHô\‹]⁄X€€ôö\õK[[Ÿ[›ÿ⁄À\ôXŸZ]ôKX€€ôö\õK[[Ÿ[èÇàXY\èè]èè‹[è∏ß$œ‹‹[èè]èè€X[∏.%x.(¯.)¯."8.'∏.&à“U›ÿ⁄»Y»H8.`¯.&è‹€X[è»YHú›ÿ⁄À\ôXŸZ]ôKX€€ôö\õK]]Hè∏.%x.(¯.)¯."8.*∏.+x.&∏. x.b8.+x.&x.(¯.,x.&∏.`8. ∏.bx.,à›ÿ⁄œ⁄œèŸ]èèŸ]èèù]€à\OHòù]€àà€ê€X⁄œ^ 
+HOà»Ÿ]›ÿ⁄‘ôXŸZ]ôTô]öY] ù[
+N»Ÿ]›ÿ⁄‘ôXŸZ]ôT]JàäN»Ÿ]›ÿ⁄‘ôXŸZ]ôTõŸX›[€ë]JàäN»Ÿ]›ÿ⁄‘ÿÿ[äàäN»_H\öXK[Xô[H∏.&¯.-8.%è∞Âœÿù]€èè⁄XY\èÇà]à€\‹”ò[YOHô\‹]⁄X€€ôö\õKX€€ù[ùèÇàŸX›[€à€\‹”ò[YOHô\‹]⁄X€€ôö\õKZ[XYŸ\»èè\ù[XYŸTZ\àX]\öX[€ŸO^‹›ÿ⁄‘ôXŸZ]ôTô]öY]ÀùYÀõX]\öX[€Ÿ_HX\›\ïô\ú⁄[€è^‹\ù[XYŸ\Àôö[ô
+
+][JHOà][KõX]\öX[€ŸHOOH›ÿ⁄‘ôXŸZ]ôTô]öY]ÀùYÀõX]\öX[€ŸJOÀù\]Y]HX›X[ô\ú⁄[€è^‹\ùX›X[[XYŸ\Àôö[ô
+
+][JHOà][KõX]\öX[€ŸHOOH›ÿ⁄‘ôXŸZ]ôTô]öY]ÀùYÀõX]\öX[€ŸJOÀù\]Y]Hœè‹ŸX›[€èÇàŸX›[€à€\‹”ò[YOHô\‹]⁄X€€ôö\õKZ[ôõ»èÇà]à€\‹”ò[YOHô\‹]⁄X€€ôö\õK\\ùèè€X[îTï»PUTíPS‹€X[èèû‹›ÿ⁄‘ôXŸZ]ôTô]öY]ÀùYÀõX]\öX[€Ÿ_Oÿèèû‹›ÿ⁄‘ôXŸZ]ôTô]öY]ÀùYÀú\ùò[YH›ÿ⁄‘ôXŸZ]ôTô]öY]ÀõX\›\ãú\ùò[YH∏.a8.(x.b8.(¯.,8.&∏..8."∏.-¯.b8.+x."∏.-8.bx.&x.!¯.,∏.&HüO‹èŸ]èÇà]à€\‹”ò[YOHô\‹]⁄X€€ôö\õKY]Z[»èè]èè€X[ïY»8.%¯.-x.b8.`¯."∏.bx.*∏.`x. x.&O‹€X[èèû‹›ÿ⁄‘ôXŸZ]ôTô]öY]ÀùYÀùY“YOÿèèŸ]èè]èè€X[íõÿè‹€X[èèû‹›ÿ⁄‘ôXŸZ]ôTô]öY]ÀùYÀöõÿìõ»∏†%üOÿèèŸ]èè]èè€X[∏.)x..x. x.!8.bx.,è‹€X[èèû‹›ÿ⁄‘ôXŸZ]ôTô]öY]ÀùYÀò›\›€Y\à∏†%üOÿèèŸ]èè]èè€X[∏."∏.,x.bx.&x."8.,x.%8.`8. x.a¯.&∏.%¯.-x.b8.*∏.`x. x.&O‹€X[èèû‹›ÿ⁄‘ôXŸZ]ôTô]öY]ÀúŸ[X›Yÿÿ][€üOÿèèŸ]èèŸ]èÇà]à€\‹”ò[YOHú›ÿ⁄À\ôXŸZ]ôK\]KXõﬁèÇà]èè€X[∏."8.,¯.&x.)¯.&x.%x.,∏.(HY»8.`¯.&∏.&x.-x.bO‹€X[èèûŸõ]
+›ÿ⁄‘ôXŸZ]ôTô]öY]ÀùYÀú]J_Oÿèè[O∏."∏.-8.bx.&OŸ[OèŸ]èÇàXô[è€X[∏."8.,¯.&x.)¯.&x.(¯.,x.&∏.`8. ∏.bx.,∏."8.(¯.-8.!œ‹€X[è[ú]\OHõù[Xô\àà[ú][ŸOHõù[Y\öX»àZ[è^ÃHX^^‹›ÿ⁄‘ôXŸZ]ôTô]öY]ÀùYÀú]_H›\^Ã_Hò[YO^‹›ÿ⁄‘ôXŸZ]ôT]_H€ê⁄[ôŸO^ ]ô[ù
+HOàŸ]›ÿ⁄‘ôXŸZ]ôT]J]ô[ùù\ôŸ]ùò[YKúô\XŸJ÷◊åNWKŸÀàäJ_Hœè[O∏.`x. x.bx.a8. ∏.a8.%8.bx.`8.(x.-¯.b8.+x.(x.-x.!¯.,∏.&x.`8.*∏.-x.(èŸ[Oè€Xô[Çà]à€\‹”ò[YO^”X]õX^
+ù[Xô\ä›ÿ⁄‘ôXŸZ]ôTô]öY]ÀùYÀú]JHHù[Xô\ä›ÿ⁄‘ôXŸZ]ôT]H
+K
+Hà»ö\À[ô»àààüOè€X[∏."8.,¯.&x.)¯.&Hëœ‹€X[èèûŸõ]
+X]õX^
+ù[Xô\ä›ÿ⁄‘ôXŸZ]ôTô]öY]ÀùYÀú]JHHù[Xô\ä›ÿ⁄‘ôXŸZ]ôT]H
+K
+J_Oÿèè[O∏."∏.-8.bx.&OŸ[OèŸ]èÇàXô[€\‹”ò[YOHúõŸX›[€ãY]Hèè€X[∏.)¯.,x.&x.%¯.-x.b8.'8.)x.-8.%O‹€X[è[ú]\OHô]Hàò[YO^‹›ÿ⁄‘ôXŸZ]ôTõŸX›[€ë]_H€ê⁄[ôŸO^ ]ô[ù
+HOàŸ]›ÿ⁄‘ôXŸZ]ôTõŸX›[€ë]J]ô[ùù\ôŸ]ùò[YJ_Hô\]Z\ôYœè[O∏.!8.b8.,∏.`8.(¯.-8.b8.(x.%x.bx.&x.!8.-¯.+x.)¯.,x.&x.%¯.-x.b8.*∏.`x. x.&x.(¯.,x.&∏.`8. ∏.bx.,à0≠»8.`x. x.bx.a8. ∏.a8.%8.bOŸ[Oè€Xô[ÇàŸ]èÇà”X]õX^
+ù[Xô\ä›ÿ⁄‘ôXŸZ]ôTô]öY]ÀùYÀú]JHHù[Xô\ä›ÿ⁄‘ôXŸZ]ôT]H
+K
+Hà	âà€\‹”ò[YOHú›ÿ⁄À\ôXŸZ]ôK[ôÀ[õ›HèàH8.(¯.,8.&∏.&∏."8.,8.`8.'∏.-8.b8.(x.`8. ∏.bx.,à›ÿ⁄»8.`8."x.'∏.,∏.,Ÿõ]
+ù[Xô\ä›ÿ⁄‘ôXŸZ]ôT]H
+J_H8."∏.-8.bx.&H8.`x.)x.,8.&∏.,x.&x.%¯.-∏. Hë»Ÿõ]
+X]õX^
+ù[Xô\ä›ÿ⁄‘ôXŸZ]ôTô]öY]ÀùYÀú]JHHù[Xô\ä›ÿ⁄‘ôXŸZ]ôT]H
+K
+J_H8."∏.-8.bx.&O‹üBà‹ŸX›[€èÇàŸ]èÇàõ€›\èèù]€à\OHòù]€àà€\‹”ò[YOHòù]€àŸX€€ô\ûHà€ê€X⁄œ^ 
+HOà»Ÿ]›ÿ⁄‘ôXŸZ]ôTô]öY] ù[
+N»Ÿ]›ÿ⁄‘ôXŸZ]ôT]JàäN»Ÿ]›ÿ⁄‘ôXŸZ]ôTõŸX›[€ë]JàäN»Ÿ]›ÿ⁄‘ÿÿ[äàäN»_O∏.(∏. x.`8.)x.-8. H»8.*∏.`x. x.&x.`¯.*¯.(x.bÿù]€èèù]€à\OHòù]€àà€\‹”ò[YOHòù]€à€€ôö\õKY\‹]⁄Xù]€à›ÿ⁄ÀX€€ôö\õK\ôXŸZ]ôKXù]€àà\ÿXõY^‹›ÿ⁄‘ÿ]ö[ô»›ÿ⁄‘ôXŸZ]ôT]HOOHàà\›ÿ⁄‘ôXŸZ]ôTõŸX›[€ë]Hù[Xô\ä›ÿ⁄‘ôXŸZ]ôT]JHù[Xô\ä›ÿ⁄‘ôXŸZ]ôT]JHàù[Xô\ä›ÿ⁄‘ôXŸZ]ôTô]öY]ÀùYÀú]J_H€ê€X⁄œ^ 
+HOàõ⁄Y€€ôö\õTôXŸZ]ôT›ÿ⁄’Y 
+_Oû‹›ÿ⁄‘ÿ]ö[ô»»∏. x.,¯.)x.,x.!¯.(¯.,x.&∏.`8. ∏.bx.,∏†)ààà∏ß$»8.(∏.-¯.&x.(∏.,x.&x.(¯.,x.&àY»8.`¯.&∏.&x.-x.bHüOÿù]€èèŸõ€›\èÇàŸ]èèŸ]èüBàÿ\úò[ôŸP€€ôö\õX][€à	âà]à€\‹”ò[YOHõ[Ÿ[XòX⁄Ÿõ‹\‹]⁄X€€ôö\õKXòX⁄Ÿõ‹àõ€OHôX[Ÿ»à\öXK[[Ÿ[HùùYHà\öXK[Xô[YûOHò\úò[ôŸKX€€ôö\õK]]Hà€íŸ^Q›€è^ ]ô[ù
+HOà»Yà
+]ô[ùöŸ^HOOHë\ÿÿ\Hà	âàX⁄X⁄⁄[ô’Y H»Ÿ]\úò[ôŸP€€ôö\õX][€äù[
+N»Y“[ú]ò›\úô[ùÀôõÿ›\ 
+N»HYà
+]ô[ùöŸ^HOOHïXàäH»€€ú›ù]€ú»H\úò^Kôúõ€J]ô[ùò›\úô[ù\ôŸ]ú]Y\ûTŸ[X›‹ê[S[[Y[ùäòù]€éõõ›
+ô\ÿXõY
+K[ú]õõ›
+ô\ÿXõY
+HäJN»€€ú›ö\ú›Hù]€ú÷ÃK\›Hù]€ú÷ÿù]€úÀõ[ô›HWN»Yà
+]ô[ùú⁄YùŸ^H	âàÿ›[Y[ùòX›]ôQ[[Y[ùOOHö\ú›
+H»]ô[ùúô]ô[ùYò][
+
+N»\›Àôõÿ›\ 
+N»H[ŸHYà
+Y]ô[ùú⁄YùŸ^H	âàÿ›[Y[ùòX›]ôQ[[Y[ùOOH\›
+H»]ô[ùúô]ô[ùYò][
+
+N»ö\ú›Àôõÿ›\ 
+N»HH_Oè]à€\‹”ò[YOHô\‹]⁄X€€ôö\õK[[Ÿ[èÇàXY\èè]èè‹[è∏ß$œ‹‹[èè]èè€X[∏.%x.(¯.)¯."8.'∏.&à“U›ÿ⁄»Yœ‹€X[è»YHò\úò[ôŸKX€€ôö\õK]]Hè∏.%x.(¯.)¯."8.*∏.+x.&∏.!¯.,∏.&x. x.b8.+x.&x."8.,x.%8.!¯.,∏.&O⁄œèŸ]èèŸ]èèù]€à\OHòù]€àà\ÿXõY^ÿ⁄X⁄⁄[ô’YﬂH€ê€X⁄œ^ 
+HOà»Ÿ]\úò[ôŸP€€ôö\õX][€äù[
+N»Y“[ú]ò›\úô[ùÀôõÿ›\ 
+N»_H\öXK[Xô[H∏.&¯.-8.%è∞Âœÿù]€èè⁄XY\èÇà]à€\‹”ò[YOHô\‹]⁄X€€ôö\õKX€€ù[ùèÇàŸX›[€à€\‹”ò[YOHô\‹]⁄X€€ôö\õKZ[XYŸ\»èè\ù[XYŸTZ\àX]\öX[€ŸO^ÿ\úò[ôŸP€€ôö\õX][€ãùYÀõX]\öX[€Ÿ_HX\›\ïô\ú⁄[€è^‹\ù[XYŸ\Àôö[ô
+][HOà][KõX]\öX[€ŸHOOH\úò[ôŸP€€ôö\õX][€ãùYÀõX]\öX[€ŸJOÀù\]Y]HX›X[ô\ú⁄[€è^‹\ùX›X[[XYŸ\Àôö[ô
+][HOà][KõX]\öX[€ŸHOOH\úò[ôŸP€€ôö\õX][€ãùYÀõX]\öX[€ŸJOÀù\]Y]Kœè‹ŸX›[€èÇàŸX›[€à€\‹”ò[YOHô\‹]⁄X€€ôö\õKZ[ôõ»èÇà]à€\‹”ò[YOHô\‹]⁄X€€ôö\õK\\ùèè€X[îTï»PUTíPS‹€X[èèûÿ\úò[ôŸP€€ôö\õX][€ãùYÀõX]\öX[€Ÿ_Oÿèèûÿ\úò[ôŸP€€ôö\õX][€ãôYKõX]\öX[\ÿ‹ö\[€à∏.a8.(x.b8.(¯.,8.&∏..8."∏.-¯.b8.+x."∏.-8.bx.&x.!¯.,∏.&HüO‹èŸ]èÇà]à€\‹”ò[YOHô\‹]⁄X€€ôö\õKY]Z[»èè]èè€X[í“U›ÿ⁄»Yœ‹€X[èèûÿ\úò[ôŸP€€ôö\õX][€ãùYÀùY“YOÿèèŸ]èè]èè€X[íõÿè‹€X[èèûÿ\úò[ôŸP€€ôö\õX][€ãùYÀöõÿìõﬂOÿèèŸ]èè]èè€X[∏.(¯.+x.&à»êPœ‹€X[èèûÿ\úò[ôŸP€€ôö\õX][€ãôYKô[]ô\ûU[Y_H»ÿ\úò[ôŸP€€ôö\õX][€ãôYKôòX›OÿèèŸ]èè]èè€X[∏.)¯.,x.&x.%¯.-x.b8.*∏.b8.!»»œ‹€X[èèûŸõ‹õX]]J\úò[ôŸP€€ôö\õX][€ãôYKô[]ô\ûQ]J_H»ÿ\úò[ôŸP€€ôö\õX][€ãôYKô”õﬂOÿèèŸ]èèŸ]èÇà]à€\‹”ò[YOHô\‹]⁄X€€ôö\õK\]Hèè]èè€X[ïY»8.'∏.(¯.bx.+x.(x."8.,x.%‹€X[èèûŸõ]
+\úò[ôŸP€€ôö\õX][€ãùY–]òZ[XõT]J_Oÿèè[O∏."∏.-8.bx.&OŸ[OèŸ]èè]èè€X[ëYH8.`8.*¯.)x.-¯.+x."8.,x.%‹€X[èèûŸõ]
+\úò[ôŸP€€ôö\õX][€ãôYS‹[î]J_Oÿèè[O∏."∏.-8.bx.&OŸ[OèŸ]èèXô[€\‹”ò[YOHò›\úô[ùà›[O^ﬁ‹Y[ôŒåMü_Oè€X[∏."8.,x.%8.!8.(¯.,x.bx.!¯.&x.-x.bH
+8.`x. x.bx.a8. ∏.a8.%8.bJO‹€X[è[ú]\öXK[Xô[H∏."8.,¯.&x.)¯.&x."8.,x.%8.!¯.,∏.&x.!8.(¯.,x.bx.!¯.&x.-x.bHà\OHõù[Xô\àà[ú][ŸOHõù[Y\öX»àZ[èHåHà›\HåHàX^^”X]õZ[ä\úò[ôŸP€€ôö\õX][€ãùY–]òZ[XõT]K\úò[ôŸP€€ôö\õX][€ãôYS‹[î]J_Hò[YO^ÿ\úò[ôŸP€€ôö\õT]_H\ÿXõY^ÿ⁄X⁄⁄[ô’YﬂH€ê⁄[ôŸO^Ÿ]ô[ùOúŸ]\úò[ôŸP€€ôö\õT]J]ô[ùù\ôŸ]ùò[YJ_H›[O^ﬁ›⁄YàåL	Hãõ€ù⁄^ôNåéõ€ùŸZY⁄çÃ^[Y€éàòŸ[ù\àü_Kœè[O∏."∏.-8.bx.&OŸ[Oè€Xô[è]èè€X[ëYH8.`8.*¯.)x.-¯.+x.*¯.)x.,x.!¯."8.,x.%‹€X[èèûŸõ]
+X]õX^
+\úò[ôŸP€€ôö\õX][€ãôYS‹[î]KJù[Xô\ä\úò[ôŸP€€ôö\õT]J_
+K
+J_Oÿèè[O∏."∏.-8.bx.&OŸ[OèŸ]èèŸ]èÇà€\‹”ò[YOHô\‹]⁄\›YŸY[õ›Hè∏.`x. x.bx."8.,¯.&x.)¯.&x."8.,x.%8.!8.(¯.,x.bx.!¯.&x.-x.bx.a8.%8.bHx†$ﬁŸõ]
+X]õZ[ä\úò[ôŸP€€ôö\õX][€ãùY–]òZ[XõT]K\úò[ôŸP€€ôö\õX][€ãôYS‹[î]JJ_H8."∏.-8.bx.&H0≠»›ÿ⁄»8.'∏.(¯.bx.+x.(x.`¯."∏.bx.*¯.)x.,x.!¯."8.,x.%Ÿõ]
+X]õX^
+\úò[ôŸP€€ôö\õX][€ãùY–]òZ[XõT]KJù[Xô\ä\úò[ôŸP€€ôö\õT]J_
+K
+J_H8."∏.-8.bx.&H0≠»8.!8.!¯.`8.*¯.)x.-¯.+x.(¯.)¯.(x.(∏.,x.!¯.`8.%¯.b8.,∏.`8.%8.-8.(O‹Çà»]ò[Y\úò[ôŸ[Y[ù]X[ù]J\úò[ôŸP€€ôö\õT]KX]õZ[ä\úò[ôŸP€€ôö\õX][€ãùY–]òZ[XõT]K\úò[ôŸP€€ôö\õX][€ãôYS‹[î]JJIâèõ€OHò[\ùè∏. x.(¯..8.$¯.,∏.(¯.,8.&∏..8."8.,¯.&x.)¯.&x.`8.%x.a¯.(Hx†$ﬁŸõ]
+X]õZ[ä\úò[ôŸP€€ôö\õX][€ãùY–]òZ[XõT]K\úò[ôŸP€€ôö\õX][€ãôYS‹[î]JJ_H8."∏.-8.bx.&x. x.b8.+x.&x.(∏.-¯.&x.(∏.,x.&O‹üBà‹ŸX›[€èÇàŸ]èÇàõ€›\èèù]€à\OHòù]€àà€\‹”ò[YOHòù]€àŸX€€ô\ûHà\ÿXõY^ÿ⁄X⁄⁄[ô’YﬂH€ê€X⁄œ^ 
+HOà»Ÿ]\úò[ôŸP€€ôö\õX][€äù[
+N»Y“[ú]ò›\úô[ùÀôõÿ›\ 
+N»_O∏.(∏. x.`8.)x.-8. H»8.*∏.`x. x.&x.`¯.*¯.(x.bÿù]€èèù]€àôYè^ÿ\úò[ôŸP€€ôö\õPù]€îôYüH\OHòù]€àà€\‹”ò[YOHòù]€à€€ôö\õKY\‹]⁄Xù]€àà\ÿXõY^ÿ⁄X⁄⁄[ô’Y»]ò[Y\úò[ôŸ[Y[ù]X[ù]J\úò[ôŸP€€ôö\õT]KX]õZ[ä\úò[ôŸP€€ôö\õX][€ãùY–]òZ[XõT]K\úò[ôŸP€€ôö\õX][€ãôYS‹[î]JJ_H€ê€X⁄œ^ 
+HOàõ⁄Y›YŸT›ÿ⁄’Y \úò[ôŸP€€ôö\õX][€ãúò]‘^[ÿYÀããò\úò[ôŸP€€ôö\õX][€ãX⁄ŸY]Nìù[Xô\ä\úò[ôŸP€€ôö\õT]J_J_Oûÿ⁄X⁄⁄[ô’Y»»∏. x.,¯.)x.,x.!¯."8.,x.%8.!¯.,∏.&x†)ààà∏ß$»8.(∏.-¯.&x.(∏.,x.&x."8.,x.%8.!¯.,∏.&HüOÿù]€èèŸõ€›\èÇàŸ]èèŸ]èüBàŸ\‹]⁄€€ôö\õX][€à	âà]à€\‹”ò[YOHõ[Ÿ[XòX⁄Ÿõ‹\‹]⁄X€€ôö\õKXòX⁄Ÿõ‹àõ€OHôX[Ÿ»à\öXK[[Ÿ[HùùYHà\öXK[Xô[YûOHô\‹]⁄X€€ôö\õK]]Hèè]à€\‹”ò[YOHô\‹]⁄X€€ôö\õK[[Ÿ[èÇàXY\èè]èè‹[è∏ß$œ‹‹[èè]èè€X[∏.%x.(¯.)¯."8.'∏.&àY»8.)x..x. x.!8.bx.,è‹€X[è»YHô\‹]⁄X€€ôö\õK]]Hè∏.%x.(¯.)¯."8.*∏.+x.&∏.!¯.,∏.&x. x.b8.+x.&x. ∏.,∏.(∏.+x.+x. O⁄œèŸ]èèŸ]èèù]€à\OHòù]€àà€ê€X⁄œ^ 
+HOàŸ]\‹]⁄€€ôö\õX][€äù[
+_H\öXK[Xô[H∏.&¯.-8.%è∞Âœÿù]€èè⁄XY\èÇà]à€\‹”ò[YOHô\‹]⁄X€€ôö\õKX€€ù[ùèÇàŸX›[€à€\‹”ò[YOHô\‹]⁄X€€ôö\õKZ[XYŸ\»èè\ù[XYŸTZ\àX]\öX[€ŸO^Ÿ\‹]⁄€€ôö\õX][€ãùYœÀõX]\öX[€ŸH\‹]⁄€€ôö\õX][€ãõX\›\èÀõX]\öX[€ŸHàüHX\›\ïô\ú⁄[€è^‹\ù[XYŸ\Àôö[ô
+
+][JHOà][KõX]\öX[€ŸHOOH
+\‹]⁄€€ôö\õX][€ãùYœÀõX]\öX[€ŸH\‹]⁄€€ôö\õX][€ãõX\›\èÀõX]\öX[€ŸJJOÀù\]Y]HX›X[ô\ú⁄[€è^‹\ùX›X[[XYŸ\Àôö[ô
+
+][JHOà][KõX]\öX[€ŸHOOH
+\‹]⁄€€ôö\õX][€ãùYœÀõX]\öX[€ŸH\‹]⁄€€ôö\õX][€ãõX\›\èÀõX]\öX[€ŸJJOÀù\]Y]Hœè‹ŸX›[€èÇàŸX›[€à€\‹”ò[YOHô\‹]⁄X€€ôö\õKZ[ôõ»èÇà]à€\‹”ò[YOHô\‹]⁄X€€ôö\õK\\ùèè€X[îTï»PUTíPS‹€X[èèûŸ\‹]⁄€€ôö\õX][€ãùYœÀõX]\öX[€ŸH\‹]⁄€€ôö\õX][€ãõX\›\èÀõX]\öX[€ŸH∏†%üOÿèèûŸ\‹]⁄€€ôö\õX][€ãõX\›\èÀú\ùò[YH\‹]⁄€€ôö\õX][€ãôYOÀõX]\öX[\ÿ‹ö\[€à∏.a8.(x.b8.(¯.,8.&∏..8."∏.-¯.b8.+x."∏.-8.bx.&x.!¯.,∏.&HüO‹èŸ]èÇà]à€\‹”ò[YOHô\‹]⁄X€€ôö\õKY]Z[»èè]èè€X[í“UYœ‹€X[èèûŸ\‹]⁄⁄]Ÿ[X›[€èÀú›ÿ⁄’Y–€ŸH∏†%üOÿèèŸ]èè]èè€X[ïY»8.)x..x. x.!8.bx.,è‹€X[èèûŸ\‹]⁄€€ôö\õX][€ãùYœÀùY“Y∏†%üOÿèèŸ]èè]èè€X[ëêP»»[ôO‹€X[èèûŸ\‹]⁄€€ôö\õX][€ãôYH»\‹]⁄€€ôö\õX][€ãôYKôòX›
+»à»à
+»
+\‹]⁄€€ôö\õX][€ãôYKõ[ôH∏†%äHà∏†%üOÿèèŸ]èè]èè€X[ë»»Ÿ\O‹€X[èèûŸ\‹]⁄€€ôö\õX][€ãôYH»\‹]⁄€€ôö\õX][€ãôYKô”õ»
+»à»à
+»\‹]⁄€€ôö\õX][€ãôYKúŸ\Hà∏†%üOÿèèŸ]èè]èè€X[∏. x.,¯.*¯.&x.%8.*∏.b8.!œ‹€X[èèûŸ\‹]⁄€€ôö\õX][€ãôYH»õ‹õX]]J\‹]⁄€€ôö\õX][€ãôYKô[]ô\ûQ]JH
+»àà
+»\‹]⁄€€ôö\õX][€ãôYKô[]ô\ûU[YHà∏†%üOÿèèŸ]èè]èè€X[íõÿà»8."8.,¯.&x.)¯.&H“U‹€X[èèûŸ\‹]⁄⁄]Ÿ[X›[€à»	Ÿ\‹]⁄⁄]Ÿ[X›[€ãöõÿìõ»∏†%üH»	Ÿõ]
+\‹]⁄⁄]Ÿ[X›[€ãùÿZ][ô‘]J_H8."∏.-8.bx.&Xà∏†%üOÿèèŸ]èèŸ]èÇà]à€\‹”ò[YOHô\‹]⁄X€€ôö\õK\]Hèè]èè€X[ëYH8.%¯.,x.bx.!¯.*¯.(x.%‹€X[èèûŸõ]
+\‹]⁄€€ôö\õX][€ãôYOÀúô\T]H
+_Oÿèè[O∏."∏.-8.bx.&OŸ[OèŸ]èè]èè€X[∏. ∏.,∏.(∏.+x.+x. x.`x.)x.bx.)œ‹€X[èèûŸõ]
+\‹]⁄€€ôö\õX][€ãôYOÀò[ôXYT]H
+_Oÿèè[O∏."∏.-8.bx.&OŸ[OèŸ]èè]à€\‹”ò[YOHò›\úô[ùèè€X[∏. ∏.,∏.(∏.!8.(¯.,x.bx.!¯.&x.-x.bO‹€X[èèûŸõ]
+\‹]⁄€€ôö\õX][€ãùYœÀú]H
+_Oÿèè[OûŸ\‹]⁄€€ôö\õX][€ãùYœÀù[ö]∏."∏.-8.bx.&HüOŸ[OèŸ]èè]èè€X[∏.!8.!¯.`8.*¯.)x.-¯.+x.*¯.)x.,x.!¯. ∏.,∏.(è‹€X[èèûŸõ]
+\‹]⁄€€ôö\õX][€ãôYOÀúô[XZ[ö[ô–Yù\à
+_Oÿèè[O∏."∏.-8.bx.&OŸ[OèŸ]èèŸ]èÇàŸ\‹]⁄€€ôö\õX][€ãú›YŸY]òZ[OOH[ôYö[ôY	âà€\‹”ò[YOHô\‹]⁄\›YŸY[õ›Hè∏.!¯.,∏.&x.%¯.-x.b8."8.,x.%8.(¯.+x. ∏.,∏.(∏.a8.)¯.bHŸõ]
+\‹]⁄€€ôö\õX][€ãú›YŸY]òZ[
+_H8."∏.-8.bx.&O‹üBà‹ŸX›[€èÇàŸ]èÇà \‹]⁄€€ôö\õX][€ãùô\ôX›OOHúôXYHà\‹]⁄€€ôö\õX][€ãùô\ôX›OOHúôXYW€õ⁄[Y»äH»õ€›\èèù]€à\OHòù]€àà€\‹”ò[YOHòù]€àŸX€€ô\ûHà€ê€X⁄œ^ 
+HOà»Ÿ]\‹]⁄€€ôö\õX][€äù[
+N»Ÿ]ò]’Y àäN»_O∏.(∏. x.`8.)x.-8. H»8.*∏.`x. x.&HY»8.)x..x. x.!8.bx.,∏.`¯.*¯.(x.bÿù]€èèù]€à\OHòù]€àà€\‹”ò[YOHòù]€à€€ôö\õKY\‹]⁄Xù]€àà\ÿXõY^ÿ⁄X⁄⁄[ô’YﬂH€ê€X⁄œ^ 
+HOàõ⁄Y€€ôö\õQ\‹]⁄
+
+_Oûÿ⁄X⁄⁄[ô’Y»»∏. x.,¯.)x.,x.!¯. ∏.,∏.(∏.+x.+x. x†)ààà∏ß$»8.(∏.-¯.&x.(∏.,x.&x. ∏.,∏.(∏.+x.+x. x.`x.)x.,8.%x.,x.%8.(∏.+x.%üOÿù]€èèŸõ€›\èààõ€›\à€\‹”ò[YOHô\‹]⁄X€€ôö\õKXõÿ⁄ŸYèè∏.a8.(x.b8.*∏.,∏.(x.,∏.(¯.%∏. ∏.,∏.(∏.+x.+x. x.a8.%8.bNàŸ\‹]⁄€€ôö\õX][€ãõY\‹ÿYŸH∏. ∏.bx.+x.(x..x.)x.a8.(x.b8.'∏.(¯.bx.+x.(x. ∏.,∏.(∏.+x.+x. HüO‹èù]€à\OHòù]€àà€\‹”ò[YOHòù]€àŸX€€ô\ûHà€ê€X⁄œ^ 
+HOà»Ÿ]\‹]⁄€€ôö\õX][€äù[
+N»Ÿ]ò]’Y àäN»⁄[ô›ÀúŸ][Y[›]
+
+
+HOàY“[ú]ò›\úô[ùÀôõÿ›\ 
+KL
+N»_O∏.`8. x.a¯.&à“UY»»8.*∏.`x. x.&x.)x..x. x.!8.bx.,∏.`¯.*¯.(x.bÿù]€èèù]€à\OHòù]€àà€\‹”ò[YOHòù]€àŸX€€ô\ûHà€ê€X⁄œ^ 
+HOà»Ÿ]\‹]⁄€€ôö\õX][€äù[
+N»Ÿ]\‹]⁄⁄]Ÿ[X›[€äù[
+N»Ÿ]ò]’Y àäN»⁄[ô›ÀúŸ][Y[›]
+
+
+HOàY“[ú]ò›\úô[ùÀôõÿ›\ 
+KL
+N»_O∏.)x.bx.,∏.!¯.%¯.,x.bx.!¯.!8..x.b»8.`8.(¯.-8.b8.(x.`¯.*¯.(x.bÿù]€èèŸõ€›\èüBàŸ]èèŸ]èüBà⁄õÿî]PYù\›Y[ù	âà]à€\‹”ò[YOHõ[Ÿ[XòX⁄Ÿõ‹õÿã\]KXYù\›XòX⁄Ÿõ‹àõ€OHôX[Ÿ»à\öXK[[Ÿ[HùùYHà\öXK[Xô[YûOHöõÿã\]KXYù\›]]HèèŸX›[€à€\‹”ò[YOHöõÿã\]KXYù\›[[Ÿ[èÇàXY\èè]èè‹[è∞¨O‹‹[èè]èè€X[∏. x.b8.+x.&x.&¯.-8.%8.(¯.,x.&∏.`8. ∏.bx.,àõÿè‹€X[è»YHöõÿã\]KXYù\›]]Hè∏.&¯.(¯.,x.&∏."8.,¯.&x.)¯.&x.'8.)x.-8.%x."8.(¯.-8.!œ⁄œèŸ]èèŸ]èèù]€à\OHòù]€àà\ÿXõY^⁄õÿî]Tÿ]ö[ôﬂH€ê€X⁄œ^ÿ€‹ŸRõÿî]X[ù]PYù\›Y[ùH\öXK[Xô[H∏.&¯.-8.%è∞Âœÿù]€èè⁄XY\èÇà]à€\‹”ò[YOHöõÿã\]KXYù\›X€€ù[ùèÇàŸX›[€à€\‹”ò[YOHöõÿã\]KXYù\›Zõÿàèè]èè€X[íì–è‹€X[èèû⁄õÿî]PYù\›Y[ùöõÿìõﬂOÿèèŸ]èè]èè€X[îTï‹€X[èèû⁄õÿî]PYù\›Y[ùõX]\öX[€Ÿ_Oÿèè‹[èû⁄õÿî]PYù\›Y[ùú\ùò[Y_O‹‹[èèŸ]èè‹ŸX›[€èÇà»Zõÿî]Tô]öY]»	âàZõÿî]PYù\›Y	âàõ‹õHYHöõÿã\]KXYù\›Yõ‹õHà€î›XõZ]^ ]ô[ù
+HOàõ⁄Yô]öY]“õÿî]X[ù]J]ô[ù
+_OÇà]à€\‹”ò[YOHöõÿã\]KX›\úô[ùèè€X[∏."8.,¯.&x.)¯.&HY»8.&¯.,x."8."8..8.&∏.,x.&O‹€X[èèûŸõ]
+õÿî]PYù\›Y[ùò›\úô[ù]J_Oÿèè[O∏."∏.-8.bx.&OŸ[OèŸ]èÇàXô[è‹[è∏."8.,¯.&x.)¯.&x.'8.)x.-8.%x."8.(¯.-8.!¯.%¯.,x.bx.!¯.*¯.(x.%
+è‹‹[èè[ú]\OHõù[Xô\ààZ[èHåà›\HåHà[ú][ŸOHõù[Y\öX»àò[YO^⁄õÿî]U\ôŸ]H€ê⁄[ôŸO^ ]ô[ù
+HOàŸ]õÿî]U\ôŸ]
+]ô[ùù\ôŸ]ùò[YJ_Hô\]Z\ôYœè€X[∏. x.(¯.+x. x.(∏.+x.%8.(¯.)¯.(x.%¯.-x.b8.'8.)x.-8.%x.a8.%8.bx."8.(¯.-8.!»8.a8.(x.b8.`¯."∏.b8."8.,¯.&x.)¯.&x.`¯.&àYœ‹€X[è€Xô[ÇàXô[è‹[è∏.*∏.,∏.`8.*¯.%x..
+è‹‹[èè^\ôXHò[YO^⁄õÿî]TôX\€€üH€ê⁄[ôŸO^ ]ô[ù
+HOàŸ]õÿî]TôX\€€ä]ô[ùù\ôŸ]ùò[YJ_HX^[ô›^ÃÃHXŸZ€\èH∏.`8."∏.b8.&H8.'8.)x.-8.%x.`8. x.-8.&x.`x.'8.&H»8.'8.)x.-8.%x.a8.(x.b8.!8.(¯.&∏.%x.,∏.(Hõÿààô\]Z\ôYœè€Xô[ÇàŸõ‹õOüBà⁄õÿî]Tô]öY]»	âàÇà]à€\‹”ò[YOHöõÿã\]KX€€\\ôHèè\ùX€Oè€X[ïY»8.&¯.,x."8."8..8.&∏.,x.&O‹€X[èèûŸõ]
+õÿî]Tô]öY]Àò›\úô[ù]J_Oÿèèÿ\ùX€Oè‹[è∏°§è‹‹[èè\ùX€Oè€X[∏.'8.)x.-8.%x."8.(¯.-8.!œ‹€X[èèûŸõ]
+õÿî]Tô]öY]Àù\ôŸ]]J_Oÿèèÿ\ùX€Oè\ùX€H€\‹”ò[YO^⁄õÿî]Tô]öY]ÀôYôô\ô[òŸHà»ú‹⁄]]ôHààõôYÿ]]ôHüOè€X[∏.'8.)x.%x.b8.,∏.!œ‹€X[èèû⁄õÿî]Tô]öY]ÀôYôô\ô[òŸHà»ä»àààü^Ÿõ]
+õÿî]Tô]öY]ÀôYôô\ô[òŸJ_Oÿèèÿ\ùX€OèŸ]èÇà]à€\‹”ò[YOHöõÿã\]K\ÿYô]Hèè‹[è∏.(∏.+x.%8.%¯.-x.b8.(¯.,x.&∏.`8. ∏.bx.,ã¯.&x.,¯.a8.&¯.`¯."∏.bx.!¯.,∏.&x.`x.)x.bx.)»èûŸõ]
+õÿî]Tô]öY]Àõÿ⁄ŸY]J_Oÿèà8."∏.-8.bx.&H8†%8.(¯.,8.&∏.&∏."8.,8.a8.(x.b8.`x. x.bx.a8. è‹‹[èè‹[è∏.(∏. x.`8.)x.-8. HY»8.`8.%8.-8.(HèûŸõ]
+õÿî]Tô]öY]Àòÿ[òŸ[YY‹Àõ[ô›
+_Oÿèà8.`¯.&à»8.*∏.(¯.bx.,∏.!»Y»8.`¯.*¯.(x.bèûŸõ]
+õÿî]Tô]öY]Àõô]’Y‘]\Àõ[ô›
+_Oÿèà8.`¯.&è‹‹[èû⁄õÿî]Tô]öY]ÀôYôô\ô[òŸHà	âàõÿî]Tô]öY]Àòÿ[òŸ[YY‹Àõ[ô›à	âà‹[è∏.(¯.,8.&∏.&∏.&x.,»Y»8.`8.*8.*x.%¯.-x.b8.(∏.,x.!¯.a8.(x.b8.(¯.,x.&∏.`8. ∏.bx.,∏.(x.,∏.(¯.)¯.(x. x.,x.&∏.(∏.+x.%8.`8.'∏.-8.b8.(H8.`x.)x.bx.)¯.`x.&∏.b8.!¯.`¯.*¯.(x.b8.%x.,∏.(HX⁄⁄[ô»]H8†%8. x.(¯..8.$¯.,∏.%¯.,¯.)x.,∏.(àY»8.`¯.&∏.`8. x.b8.,è‹‹[èüOŸ]èÇà⁄õÿî]Tô]öY]Àòÿ[òŸ[YY‹Àõ[ô›à	âàŸX›[€à€\‹”ò[YOHöõÿã\]K]YÀ[\›ÿ[òŸ[YèèèïY»8.%¯.-x.b8."8.,8.(∏. x.`8.)x.-8. Oÿèû⁄õÿî]Tô]öY]Àòÿ[òŸ[YY‹ÀõX\
+
+Y HOà‹[àŸ^O^›YÀöYOè€ŸOû›YÀùY“YOÿ€ŸOè[OûŸõ]
+YÀú]J_H8."∏.-8.bx.&OŸ[Oè‹‹[èä_O‹ŸX›[€èüBà⁄õÿî]Tô]öY]Àõô]’Y‘]\Àõ[ô›à	âàŸX›[€à€\‹”ò[YOHöõÿã\]K]YÀ[\›‹ôX]YèèèïY»8.`¯.*¯.(x.b8.%¯.-x.b8."8.,8.*∏.(¯.bx.,∏.!œÿèû⁄õÿî]Tô]öY]Àõô]’Y‘]\ÀõX\
+
+]K[ô^
+HOà‹[àŸ^O^⁄[ô^Oè€ŸO∏.`¯.&∏.`¯.*¯.(x.b⁄[ô^
+»_Oÿ€ŸOè[OûŸõ]
+]J_H8."∏.-8.bx.&OŸ[Oè‹‹[èä_O‹ŸX›[€èüBà€\‹”ò[YOHöõÿã\]K\ôX\€€àèèè∏.*∏.,∏.`8.*¯.%x..èÿèà⁄õÿî]TôX\€€üO‹Çà⁄õÿî]PYù\›Y	âà]à€\‹”ò[YOHöõÿã\]K\›XÿŸ\‹»èèè∏ß$»8.&¯.(¯.,x.&∏."8.,¯.&x.)¯.&x.'8.)x.-8.%x."8.(¯.-8.!¯.`8.(¯.-x.(∏.&∏.(¯.bx.+x.(èÿèè‹[èû⁄õÿî]P‹ôX]YY‹Àõ[ô›»8.*∏.(¯.bx.,∏.!»Y»8.`¯.*¯.(x.b	Ÿõ]
+õÿî]P‹ôX]YY‹Àõ[ô›
+_H8.`¯.&à8. x.(¯..8.$¯.,∏.'∏.-8.(x.'∏.c8.`x.)x.,8.&x.,¯.a8.&¯.`¯."∏.bx.`x.%¯.&Xà∏.a8.(x.b8.(x.-HY»8.`¯.*¯.(x.b8.%¯.-x.b8.%x.bx.+x.!¯.'∏.-8.(x.'∏.cüO‹‹[èèŸ]èüBàœüBàŸ]èÇàõ€›\èû»Zõÿî]Tô]öY]»	âàZõÿî]PYù\›Y»èù]€à\OHòù]€àà€\‹”ò[YOHòù]€àŸX€€ô\ûHà€ê€X⁄œ^ÿ€‹ŸRõÿî]X[ù]PYù\›Y[ùO∏.(∏. x.`8.)x.-8. Oÿù]€èèù]€à\OHú›XõZ]àõ‹õOHöõÿã\]KXYù\›Yõ‹õHà€\‹”ò[YOHòù]€àö[X\ûHà\ÿXõY^⁄õÿî]Tÿ]ö[ôﬂOû⁄õÿî]Tÿ]ö[ô»»∏. x.,¯.)x.,x.!¯.%x.(¯.)¯."8.*∏.+x.&∏†)ààà∏.%x.(¯.)¯."8.*∏.+x.&àY»8.%¯.-x.b8."8.,8.`8.&¯.)x.-x.b8.(∏.&HüOÿù]€èèœààõÿî]PYù\›Y»èù]€à\OHòù]€àà€\‹”ò[YOHòù]€àŸX€€ô\ûHà€ê€X⁄œ^ÿ€‹ŸRõÿî]X[ù]PYù\›Y[ùO∏.&¯.-8.%ÿù]€èû⁄õÿî]P‹ôX]YY‹Àõ[ô›à	âàèù]€à\OHòù]€àà€\‹”ò[YOHòù]€àŸX€€ô\ûHà€ê€X⁄œ^ 
+HOàõ⁄Yö[ù›ÿ⁄’Y‹ õÿî]P‹ôX]YY‹ÀòMä_O∏•©Mÿù]€èèù]€à\OHòù]€àà€\‹”ò[YOHòù]€àö[X\ûHà€ê€X⁄œ^ 
+HOàõ⁄Yö[ù›ÿ⁄’Y‹ õÿî]P‹ôX]YY‹ÀåLMHä_O∏•©îÿù]€èèœüOœààèù]€à\OHòù]€àà€\‹”ò[YOHòù]€àŸX€€ô\ûHà\ÿXõY^⁄õÿî]Tÿ]ö[ôﬂH€ê€X⁄œ^ 
+HOàŸ]õÿî]Tô]öY] ù[
+_O∏. x.)x.,x.&∏.a8.&¯.`x. x.bx.a8. èÿù]€èèù]€à\OHòù]€àà€\‹”ò[YOHòù]€àö[X\ûHà\ÿXõY^⁄õÿî]Tÿ]ö[ôﬂH€ê€X⁄œ^ 
+HOàõ⁄Y€€ôö\õRõÿî]X[ù]PYù\›Y[ù
+
+_Oû⁄õÿî]Tÿ]ö[ô»»∏. x.,¯.)x.,x.!¯.&∏.,x.&x.%¯.-∏. x†)ààà∏ß$»8.(∏.-¯.&x.(∏.,x.&x.&¯.(¯.,x.&∏."8.,¯.&x.)¯.&x.'8.)x.-8.%x."8.(¯.-8.!»üOÿù]€èèœüOŸõ€›\èÇà‹ŸX›[€èèŸ]èüBàÿÿ[Y\òS‹[à	âà]à€\‹”ò[YOHõ[Ÿ[XòX⁄Ÿõ‹èè]à€\‹”ò[YOHòÿ[Y\òK[[Ÿ[èèXY\èèœûÿÿ[Y\òT\ú‹ŸHOOHú›ÿ⁄»à»›ÿ⁄”ÿÿ][€à»8.*∏.`x. x.&H“UY»8.(¯.,x.&∏.`8. ∏.bx.,∏."∏.,x.bx.&H	‹›ÿ⁄”ÿÿ][€ãò€Ÿ_Xà∏.*∏.`x. x.&HTà8.*¯.&x.bx.,∏."∏.,x.bx.&x."8.,x.%8.`8. x.a¯.&àààÿ[Y\òT\ú‹ŸHOOHú›ÿ⁄ÀX€›[ùà»∏.*∏.`x. x.&HY»8.%x.(¯.)¯."8.&x.,x.&∏.*∏.-8.bx.&x.`8.%8.-¯.+x.&HààYŸHOOHô\‹]⁄à	âà\‹]⁄⁄]Ÿ[X›[€à»∏.*∏.`x. x.&HTàY»8.)x..x. x.!8.bx.,à
+8.`∏.*¯.(x.%8.)x.,8.`8.+x.-x.(∏.%
+Hàà∏.*∏.`x. x.&HY»8.%8.bx.)¯.(∏. x.)x.bx.+x.!»üO⁄œèù]€à€ê€X⁄œ^ 
+HOàŸ]ÿ[Y\òS‹[äò[ŸJ_O∞Âœÿù]€èè⁄XY\èè]à€\‹”ò[YO^ÿÿ[Y\òK]öY]»	‹YŸHOOHô\‹]⁄à	âà\‹]⁄⁄]Ÿ[X›[€à»ò›\›€Y\ã\\ãXÿ[Y\òHàààüXOèöY[»ôYè^›öY[‘ôYüH^\“[õ[ôH]]Yœè]à€\‹”ò[YOHòÿ[Y\òKYúò[YHàœèŸ]èû‹YŸHOOHô\‹]⁄à	âà\‹]⁄⁄]Ÿ[X›[€à»€\‹”ò[YOHòÿ[Y\òKX›\›€Y\ãZ[ùèèè∏.&x.,¯.`8."x.'∏.,∏.,8."∏.b8.+x.!»Tà8.`8. ∏.bx.,∏.`¯.&x. x.(¯.+x.&∏.*∏.-x.`8. ∏.-x.(∏.)œÿèè‹[è∏.a8.(x.b8.%x.bx.+x.!¯.`¯.*¯.bx.&¯.bx.,∏.(∏.%¯.,x.bx.!¯.`¯.&∏.+x.(∏..x.b8.`¯.&x.(8.,∏.'à0≠»8.%∏.-¯.+x.`¯.*¯.bx.&x.-8.b8.!¯.&¯.(¯.,8.(x.,∏.$»H8.)¯.-8.&x.,∏.%¯.-O‹‹[èè‹àà€\‹”ò[YOHòÿ[Y\òKYõ‹õX]Z[ùè∏.(¯.+x.!¯.(¯.,x.&àTà0≠»]HX]ö^0≠»€ŸHLé0≠»€ŸHŒO‹ü^ÿÿ[Y\òQ\úõ‹à	âà€\‹”ò[YOHòÿ[Y\òKY\úõ‹àèûÿÿ[Y\òQ\úõ‹üO‹üOù]€à€\‹”ò[YOHòù]€àŸX€€ô\ûHù[à€ê€X⁄œ^ 
+HOàŸ]ÿ[Y\òS‹[äò[ŸJ_O∏.&¯.-8.%8. x.)x.bx.+x.!œÿù]€èèŸ]èèŸ]èüBà‹‹]Y‘ô\]Y\›	âè‹]Y‘‹\Àããú‹]Y‘ô\]Y\›HYŸO^‹YŸ_H€ê€‹ŸO^ÿ€‹ŸT‹]YﬂKœüBà‹\ò][€ïÿ\õö[ô‘‹\õ⁄XŸQ[òXõY^‹Ÿ][ô‹Àú€›[ôKœÇà›\Ÿ\ëY]‹ì‹[à	âà]à€\‹”ò[YOHõ[Ÿ[XòX⁄Ÿõ‹èèõ‹õH€\‹”ò[YOHù\Ÿ\ã[[Ÿ[\õZ\‹⁄[€ã[[Ÿ[à€î›XõZ]^‹ÿ]ôU\Ÿ\üOÇàXY\èè]èèœû›\Ÿ\ëõ‹õKöY»∏.`x. x.bx.a8. ∏.'8..x.bx.`¯."∏.bx.!¯.,∏.&x.`x.)x.,8.*∏.-8.%¯.&8.-8.càà∏.`8.'∏.-8.b8.(x.'8..x.bx.`¯."∏.bx.!¯.,∏.&HüO⁄œè∏.`8.)x.-¯.+x. x.&∏.%¯.&∏.,∏.%¯.`x.)x.,8. x.,¯.*¯.&x.%8.*¯.&x.bx.,∏.%¯.-x.b8.`x.%x.b8.)x.,8.!8.&x.*∏.,∏.(x.,∏.(¯.%∏.`8.&¯.-8.%8.`¯."∏.bx.!¯.,∏.&x.a8.%8.bO‹èŸ]èèù]€à\OHòù]€àà€ê€X⁄œ^ 
+HOàŸ]\Ÿ\ëY]‹ì‹[äò[ŸJ_O∞Âœÿù]€èè⁄XY\èÇà]à€\‹”ò[YOHù\Ÿ\ãYõ‹õKY‹öYèÇàXô[è‹[è∏.(¯.*¯.,x.*∏.'∏.&x.,x. x.!¯.,∏.&H
+è‹‹[èè[ú]ò[YO^›\Ÿ\ëõ‹õKô[\ﬁYYP€Ÿ_H€ê⁄[ôŸO^ JHOàŸ]\Ÿ\ëõ‹õJ
+›\úô[ù
+HOà
+»ããò›\úô[ù[\ﬁYYP€ŸNàKù\ôŸ]ùò[YKù’\\êÿ\ŸJ
+HJJ_HXŸZ€\èH∏.`8."∏.b8.&HT‘Hàô\]Z\ôYœè€Xô[ÇàXô[è‹[è∏."∏.-¯.b8.+x.'8..x.bx.`¯."∏.bx.!¯.,∏.&H
+è‹‹[èè[ú]ò[YO^›\Ÿ\ëõ‹õKô\‹^Sò[Y_H€ê⁄[ôŸO^ JHOàŸ]\Ÿ\ëõ‹õJ
+›\úô[ù
+HOà
+»ããò›\úô[ù\‹^Sò[YNàKù\ôŸ]ùò[YHJJ_HXŸZ€\èH∏."∏.-¯.b8.+Kx.&x.,∏.(x.*∏. x..8.)Hàô\]Z\ôYœè€Xô[ÇàXô[è‹[è∏.&∏.%¯.&∏.,∏.%»
+è‹‹[èèŸ[X›ò[YO^›\Ÿ\ëõ‹õKúõ€_H€ê⁄[ôŸO^ JHOà»€€ú›õ€HHKù\ôŸ]ùò[YH\»\Ÿ\îõ€N»Ÿ]\Ÿ\ëõ‹õJ
+›\úô[ù
+HOà
+»ããò›\úô[ùõ€HJJN»_Oè‹[€àò[YOHúõŸX›[€àèîõŸX›[€è€‹[€èè‹[€àò[YOHú›ÿ⁄»èî›ÿ⁄œ€‹[€èè‹[€àò[YOHúX»èîPœ€‹[€èè‹[€àò[YOHô[]ô\ûHèë[]ô\ûO€‹[€èû \Ÿ\ëõ‹õKúõ€HOOHô\‹]⁄\àà\Ÿ\ëõ‹õKúõ€HOOHö[ú‹X›‹àäH	âà‹[€àò[YO^›\Ÿ\ëõ‹õKúõ€_Oû‘ì”W”PëS÷›\Ÿ\ëõ‹õKúõ€W_O€‹[€èüO‹Ÿ[X›è€Xô[ÇàXô[è‹[èû›\Ÿ\ëõ‹õKöY»∏.%x.,x.bx.!»Sà8.`¯.*¯.(x.b
+8.`8.)¯.bx.&x.)¯.b8.,∏.!¯.*¯.,∏. x.a8.(x.b8.`8.&¯.)x.-x.b8.(∏.&JHààîSàà8.*¯.)x.,x. H
+àüO‹‹[èè[ú]\OHú\‹›€‹ôà[ú][ŸOHõù[Y\öX»àX^[ô›^ÕüH]\õèHñÃNW^ÕüHàò[YO^›\Ÿ\ëõ‹õKú[üH€ê⁄[ôŸO^ JHOàŸ]\Ÿ\ëõ‹õJ
+›\úô[ù
+HOà
+»ããò›\úô[ù[éàKù\ôŸ]ùò[YKúô\XŸJ◊ŸÀàäHJJ_Hô\]Z\ôY^»]\Ÿ\ëõ‹õKöYHXŸZ€\èH∏†(∏†(∏†(∏†(∏†(∏†(ààœè€Xô[ÇàXô[€\‹”ò[YOHù⁄YHèè‹[è∏.+x.-x.`8.(x.)H
+8.a8.(x.b8.&∏.,x.!¯.!8.,x.&äO‹‹[èè[ú]\OHô[XZ[àò[YO^›\Ÿ\ëõ‹õKô[XZ[H€ê⁄[ôŸO^ JHOàŸ]\Ÿ\ëõ‹õJ
+›\úô[ù
+HOà
+»ããò›\úô[ù[XZ[àKù\ôŸ]ùò[YHJJ_Hœè€Xô[ÇàŸ]èÇàŸX›[€à€\‹”ò[YOHö[ô]öYX[\\õZ\‹⁄[€ú»èè]à€\‹”ò[YOHú\õZ\‹⁄[€ã]]Hèè]èèè∏.*∏.-8.%¯.&8.-8.c8.`8. ∏.bx.,∏.`¯."∏.bx.!¯.,∏.&x.(¯.,∏.(∏.&∏..8.!8.!8.)Oÿèè∏.`8.)x.-¯.+x. H8†'8.%8..x. ∏.bx.+x.(x..x.)x†'H8.`8.'∏.-¯.b8.+x.`8.&¯.-8.%8.*¯.&x.bx.,à8.`x.)x.,8.`8.)x.-¯.+x. H8†'8.`8.'∏.-8.b8.(H»8.`x. x.bx.a8. ∏†'H8.`8."x.'∏.,∏.,8.'8..x.bx.%¯.-x.b8.%¯.,¯.(¯.,∏.(∏. x.,∏.(¯.a8.%8.bH8. x.,∏.(¯.)x.&∏.*∏.!¯.)¯.&x.a8.)¯.bx.*∏.,¯.*¯.(¯.,x.&àYZ[è‹èŸ]èèŸ]èÇà]à€\‹”ò[YOHú\õZ\‹⁄[€ãY‹öYèû”êUãõX\
+
+][JHOà¬à€€ú›⁄X⁄ŸYH\Ÿ\ëõ‹õKú\õZ\‹⁄[€úÀö[ò€Y\ ][KöŸ^JN¬à€€ú›Y]XõHHQUPìW‘Q—W“—VTÀö[ò€Y\ ][KöŸ^H\»Y]XõTYŸRŸ^JN¬à€€ú›Y]Ÿ^HH	⁄][KöŸ^_KYY]\»Y]\õZ\‹⁄[€é¬à€€ú›ÿ[ëY]HY]XõH	âà\Ÿ\ëõ‹õKú\õZ\‹⁄[€úÀö[ò€Y\ Y]Ÿ^JN¬àô]\õà]àŸ^O^⁄][KöŸ^_H€\‹”ò[YO^ÿ\õZ\‹⁄[€ã[‹[€à\õZ\‹⁄[€ã[‹[€ã[]ô[»	ÿ⁄X⁄ŸY»ò⁄X⁄ŸYàààüXOÇà‹[èû⁄][KöX€€üO‹‹[èè]à€\‹”ò[YOHú\õZ\‹⁄[€ã[‹[€ãX€‹Hèèèû⁄][KõXô[Oÿèè€X[û‘TìRT‘“S”ó“S⁄][KöŸ^W_O‹€X[èŸ]èÇà]à€\‹”ò[YOHú\õZ\‹⁄[€ã[]ô[»èÇàXô[è[ú]\OHò⁄X⁄ÿõﬁà⁄X⁄ŸY^ÿ⁄X⁄ŸYH€ê⁄[ôŸO^ ]ô[ù
+HOàŸ]\Ÿ\ëõ‹õJ
+›\úô[ù
+HOà
+¬àããò›\úô[ùà\õZ\‹⁄[€úŒà]ô[ùù\ôŸ]ò⁄X⁄ŸYà»Àããõô]»Ÿ]
+Àããò›\úô[ùú\õZ\‹⁄[€úÀ][KöŸ^WJWBàà›\úô[ùú\õZ\‹⁄[€úÀôö[\ä
+Ÿ^JHOàŸ^HOOH][KöŸ^H	âàŸ^HOOHY]Ÿ^H	âà
+][KöŸ^HOOHú›ÿ⁄ÀX[àV»ú›ÿ⁄ÀX[Y]Z[»ãú›ÿ⁄ÀX[Y^‹ùóKö[ò€Y\ Ÿ^JJH	âà
+][KöŸ^HOOHú\ù»àŸ^HOOHú\ùÀXYäJKàJJ_Hœà8.%8..x. ∏.bx.+x.(x..x.)O€Xô[ÇàŸY]XõH»Xô[è[ú]\OHò⁄X⁄ÿõﬁà⁄X⁄ŸY^ÿÿ[ëY]H€ê⁄[ôŸO^ ]ô[ù
+HOàŸ]\Ÿ\ëõ‹õJ
+›\úô[ù
+HOà
+¬àããò›\úô[ùà\õZ\‹⁄[€úŒà]ô[ùù\ôŸ]ò⁄X⁄ŸYà»Àããõô]»Ÿ]
+Àããò›\úô[ùú\õZ\‹⁄[€úÀ][KöŸ^KY]Ÿ^WJWBàà›\úô[ùú\õZ\‹⁄[€úÀôö[\ä
+Ÿ^JHOàŸ^HOOHY]Ÿ^H	âà
+][KöŸ^HOOHú\ù»àŸ^HOOHú\ùÀXYäJKàJJ_Hœà8.`8.'∏.-8.b8.(H»8.`x. x.bx.a8. è€Xô[àà[O∏.%8..x. ∏.bx.+x.(x..x.)x.`8.%¯.b8.,∏.&x.,x.bx.&OŸ[OüBàŸ]èÇàŸ]èé¬àJ_OŸ]èÇà]à€\‹”ò[YOHú\õZ\‹⁄[€ãY‹öYèû ﬁ⁄Ÿ^Nàú›ÿ⁄ÀX[Y]Z[»ãXô[àî›ÿ⁄»8.%¯.,x.bx.!¯.*¯.(x.%à8.%8..HY»»õÿà»[›ô[Y[ùüK⁄Ÿ^Nàú›ÿ⁄ÀX[Y^‹ùãXô[àî›ÿ⁄»8.%¯.,x.bx.!¯.*¯.(x.%à8.*∏.b8.!¯.+x.+x. H^Ÿ[üWH\»€€ú›
+KõX\
+
+][JHOàXô[Ÿ^O^⁄][KöŸ^_H€\‹”ò[YOHú\õZ\‹⁄[€ã[‹[€àèè[ú]\OHò⁄X⁄ÿõﬁà\ÿXõY^»]\Ÿ\ëõ‹õKú\õZ\‹⁄[€úÀö[ò€Y\ ú›ÿ⁄ÀX[ä_H⁄X⁄ŸY^›\Ÿ\ëõ‹õKú\õZ\‹⁄[€úÀö[ò€Y\ ][KöŸ^J_H€ê⁄[ôŸO^ ]ô[ù
+HOàŸ]\Ÿ\ëõ‹õJ
+›\úô[ù
+HOà
+Àããò›\úô[ù\õZ\‹⁄[€úŒô]ô[ùù\ôŸ]ò⁄X⁄ŸY»Àããõô]»Ÿ]
+Àããò›\úô[ùú\õZ\‹⁄[€úÀ][KöŸ^WJWHà›\úô[ùú\õZ\‹⁄[€úÀôö[\ä
+Ÿ^JHOàŸ^HOOH][KöŸ^J_JJ_Kœè]èèèû⁄][KõXô[Oÿèè€X[∏.%x.bx.+x.!¯.(x.-x.*∏.-8.%¯.&8.-8.c8.%8..x.*¯.&x.bx.,à›ÿ⁄»8.%¯.,x.bx.!¯.*¯.(x.%8.%8.bx.)¯.(è‹€X[èŸ]èè€Xô[ä_OŸ]èÇà‹ŸX›[€èÇàõ€›\èèù]€à\OHòù]€àà€\‹”ò[YOHòù]€àŸX€€ô\ûHà€ê€X⁄œ^ 
+HOàŸ]\Ÿ\ëY]‹ì‹[äò[ŸJ_O∏.(∏. x.`8.)x.-8. Oÿù]€èèù]€à€\‹”ò[YOHòù]€àö[X\ûHà\ÿXõY^›\Ÿ\îÿ]ö[ô»]\Ÿ\ëõ‹õKú\õZ\‹⁄[€úÀõ[ô›Oû›\Ÿ\îÿ]ö[ô»»∏. x.,¯.)x.,x.!¯.&∏.,x.&x.%¯.-∏. x†)ààà∏.&∏.,x.&x.%¯.-∏. x.'8..x.bx.`¯."∏.bx.!¯.,∏.&x.`x.)x.,8.*∏.-8.%¯.&8.-8.cüOÿù]€èèŸõ€›\èÇàŸõ‹õOèŸ]èüBàŸ]èé¬üBÇ
