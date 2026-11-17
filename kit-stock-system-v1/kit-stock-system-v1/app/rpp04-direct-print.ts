@@ -100,28 +100,36 @@ export async function prepareRpp04Bluetooth(): Promise<Rpp04Session> {
       await wait(700);
       server = device.gatt.connected ? device.gatt : await device.gatt.connect();
     }
-    await wait(300);
-
     // RPP04-B exposes its ESC/POS data channel here. Resolve it directly first;
     // some Android/Chrome versions do not reliably report characteristic
     // properties while enumerating every characteristic in a service.
     let directChannelError = "";
-    try {
-      const rpp04Service = await server.getPrimaryService(RPP04_SERVICE);
-      const rpp04Characteristic = rpp04Service.getCharacteristic
-        ? await rpp04Service.getCharacteristic(RPP04_WRITE_CHARACTERISTIC)
-        : (await rpp04Service.getCharacteristics())[0];
-      if (rpp04Characteristic) {
-        activeSession = { deviceName: device.name || "RPP04-B", characteristic: rpp04Characteristic };
-        return activeSession;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        if (!device.gatt.connected) server = await device.gatt.connect();
+        const rpp04Service = await server.getPrimaryService(RPP04_SERVICE);
+        const rpp04Characteristic = rpp04Service.getCharacteristic
+          ? await rpp04Service.getCharacteristic(RPP04_WRITE_CHARACTERISTIC)
+          : (await rpp04Service.getCharacteristics())[0];
+        if (rpp04Characteristic) {
+          activeSession = { deviceName: device.name || "RPP04-B", characteristic: rpp04Characteristic };
+          return activeSession;
+        }
+      } catch (error) {
+        directChannelError = error instanceof Error ? error.message : String(error);
+        if (attempt < 2) await wait(450 + attempt * 350);
       }
-    } catch (error) {
-      directChannelError = error instanceof Error ? error.message : String(error);
-      // Fall back to discovery for other RPP04 firmware revisions.
     }
 
     // A few Android builds resolve vendor UUIDs only after listing the granted
     // services. Use the UUIDs reported by the printer as a second direct path.
+    if (!device.gatt.connected) {
+      try {
+        server = await device.gatt.connect();
+      } catch (error) {
+        directChannelError = error instanceof Error ? error.message : String(error);
+      }
+    }
     if (server.getPrimaryServices) {
       try {
         const services = await server.getPrimaryServices();
@@ -179,11 +187,13 @@ async function writeEsc(session: Rpp04Session, bytes: Uint8Array) {
     ? characteristic.writeValueWithoutResponse.bind(characteristic)
     : characteristic.writeValue?.bind(characteristic);
   if (!write) throw new Error("เครื่องพิมพ์ไม่รองรับการรับคำสั่ง ESC");
-  const chunkSize = 180;
+  // RPP04-B uses the default BLE ATT payload (20 bytes) on this firmware.
+  // Larger packets can connect successfully but fail as soon as printing starts.
+  const chunkSize = 20;
   for (let offset = 0, index = 0; offset < bytes.length; offset += chunkSize, index += 1) {
     const chunk = bytes.slice(offset, Math.min(offset + chunkSize, bytes.length));
     await write(chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength) as ArrayBuffer);
-    if (index % 8 === 7) await wait(18);
+    if (index % 12 === 11) await wait(8);
   }
 }
 
