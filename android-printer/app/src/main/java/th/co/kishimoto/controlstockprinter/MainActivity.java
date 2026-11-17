@@ -83,7 +83,7 @@ public class MainActivity extends Activity {
         progressParams.setMargins(0, dp(28), 0, dp(12));
         root.addView(progress, progressParams);
 
-        printButton = button("พิมพ์ RPP04", Color.rgb(34, 95, 210));
+        printButton = button("พิมพ์ RT4-E", Color.rgb(34, 95, 210));
         printButton.setEnabled(false);
         printButton.setOnClickListener(v -> requestPermissionAndPrint());
         root.addView(printButton, buttonParams());
@@ -96,7 +96,7 @@ public class MainActivity extends Activity {
         webButton.setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(WEB_URL))));
         root.addView(webButton, buttonParams());
 
-        TextView help = text("ก่อนใช้งานครั้งแรก ให้จับคู่เครื่องชื่อ RPP04-E ในการตั้งค่า Bluetooth ของมือถือ", 14, Color.rgb(105, 67, 15), false);
+        TextView help = text("ก่อนใช้งานครั้งแรก ให้จับคู่เครื่องชื่อ RT4-E ในการตั้งค่า Bluetooth ของมือถือ", 14, Color.rgb(105, 67, 15), false);
         LinearLayout.LayoutParams helpParams = new LinearLayout.LayoutParams(-1, -2);
         helpParams.setMargins(0, dp(28), 0, 0);
         root.addView(help, helpParams);
@@ -124,8 +124,8 @@ public class MainActivity extends Activity {
         printButton.setText("ยืนยันพิมพ์ " + tagCount + " Tag");
         status.setText(valid ? "ได้รับข้อมูลจาก Control Stock KIT" : "ข้อมูล Tag ไม่ถูกต้อง");
         detail.setText(valid
-                ? "ตรวจสอบว่าเปิดเครื่อง RPP04 และจับคู่ RPP04-E แล้ว จากนั้นกดยืนยันพิมพ์"
-                : "กลับไปหน้าเว็บแล้วกดพิมพ์ RPP04 ใหม่อีกครั้ง");
+                ? "ตรวจสอบว่าเปิดเครื่องและจับคู่ RT4-E แล้ว จากนั้นกดยืนยันพิมพ์"
+                : "กลับไปหน้าเว็บแล้วกดพิมพ์ RT4-E ใหม่อีกครั้ง");
     }
 
     private void requestPermissionAndPrint() {
@@ -149,14 +149,14 @@ public class MainActivity extends Activity {
     }
 
     private void printNow() {
-        setBusy(true, "กำลังเชื่อมต่อ RPP04-E…");
+        setBusy(true, "กำลังเชื่อมต่อ RT4-E…");
         executor.execute(() -> {
             BluetoothSocket socket = null;
             try {
                 BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
                 if (adapter == null || !adapter.isEnabled()) throw new Exception("กรุณาเปิด Bluetooth");
                 BluetoothDevice printer = findPairedPrinter(adapter.getBondedDevices());
-                if (printer == null) throw new Exception("ไม่พบ RPP04-E ที่จับคู่ไว้ กรุณากดตั้งค่า / จับคู่ Bluetooth ก่อน");
+                if (printer == null) throw new Exception("ไม่พบ RT4-E ที่จับคู่ไว้ กรุณากดตั้งค่า / จับคู่ Bluetooth ก่อน");
                 adapter.cancelDiscovery();
                 socket = printer.createRfcommSocketToServiceRecord(SPP_UUID);
                 socket.connect();
@@ -170,7 +170,7 @@ public class MainActivity extends Activity {
                 Thread.sleep(900L);
                 runOnUiThread(() -> {
                     setBusy(false, "พิมพ์สำเร็จ " + tagCount + " Tag");
-                    detail.setText("ส่งข้อมูลไปยัง RPP04-E เรียบร้อยแล้ว");
+                    detail.setText("ส่งข้อมูลไปยัง RT4-E เรียบร้อยแล้ว");
                     printButton.setEnabled(false);
                 });
             } catch (Exception error) {
@@ -190,8 +190,9 @@ public class MainActivity extends Activity {
             String name = device.getName();
             if (name == null) continue;
             String upper = name.toUpperCase();
+            if (upper.contains("RT4-E")) return device;
             if (upper.contains("RPP04-E")) return device;
-            if (upper.contains("RPP04")) fallback = device;
+            if (upper.contains("RT4") || upper.contains("RPP04")) fallback = device;
         }
         return fallback;
     }
