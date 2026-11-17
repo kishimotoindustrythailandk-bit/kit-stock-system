@@ -129,10 +129,16 @@ public class MainActivity extends Activity {
     }
 
     private void requestPermissionAndPrint() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-                && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.BLUETOOTH_CONNECT}, REQUEST_BLUETOOTH);
-            return;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            boolean connectDenied = checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED;
+            boolean scanDenied = checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED;
+            if (connectDenied || scanDenied) {
+                requestPermissions(new String[]{
+                        Manifest.permission.BLUETOOTH_CONNECT,
+                        Manifest.permission.BLUETOOTH_SCAN
+                }, REQUEST_BLUETOOTH);
+                return;
+            }
         }
         printNow();
     }
@@ -140,11 +146,16 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == REQUEST_BLUETOOTH && grantResults.length > 0
-                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            printNow();
-        } else if (requestCode == REQUEST_BLUETOOTH) {
-            showError("ต้องอนุญาตอุปกรณ์ใกล้เคียงเพื่อเชื่อมต่อเครื่องพิมพ์");
+        if (requestCode == REQUEST_BLUETOOTH) {
+            boolean granted = grantResults.length == permissions.length;
+            for (int result : grantResults) {
+                granted = granted && result == PackageManager.PERMISSION_GRANTED;
+            }
+            if (granted) {
+                printNow();
+            } else {
+                showError("ต้องอนุญาตอุปกรณ์ใกล้เคียงและการค้นหา Bluetooth เพื่อเชื่อมต่อเครื่องพิมพ์");
+            }
         }
     }
 
