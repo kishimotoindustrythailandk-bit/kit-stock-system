@@ -22,6 +22,7 @@ type BluetoothCharacteristic = {
 
 type BluetoothService = {
   getCharacteristics: () => Promise<BluetoothCharacteristic[]>;
+  getCharacteristic?: (characteristic: string) => Promise<BluetoothCharacteristic>;
 };
 
 type BluetoothServer = {
@@ -96,6 +97,23 @@ export async function prepareRpp04Bluetooth(): Promise<Rpp04Session> {
       server = device.gatt.connected ? device.gatt : await device.gatt.connect();
     }
     await wait(300);
+
+    // RPP04-B exposes its ESC/POS data channel here. Resolve it directly first;
+    // some Android/Chrome versions do not reliably report characteristic
+    // properties while enumerating every characteristic in a service.
+    try {
+      const rpp04Service = await server.getPrimaryService("0000ffe0-0000-1000-8000-00805f9b34fb");
+      const rpp04Characteristic = rpp04Service.getCharacteristic
+        ? await rpp04Service.getCharacteristic("0000ffe1-0000-1000-8000-00805f9b34fb")
+        : (await rpp04Service.getCharacteristics())[0];
+      if (rpp04Characteristic) {
+        activeSession = { deviceName: device.name || "RPP04-B", characteristic: rpp04Characteristic };
+        return activeSession;
+      }
+    } catch {
+      // Fall back to discovery for other RPP04 firmware revisions.
+    }
+
     for (const serviceUuid of SERVICE_UUIDS) {
       try {
         const service = await server.getPrimaryService(serviceUuid);
