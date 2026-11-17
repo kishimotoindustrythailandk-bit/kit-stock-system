@@ -15,6 +15,7 @@ import { createForecastExportWorkbook, createForecastExportBinary } from "./fore
 import { normalizeDueExcelDate } from "./due-excel-date";
 import { speakThaiAlert } from "./voice-alert";
 import VoiceAlertControl from "./voice-alert-control";
+import { prepareRpp04Bluetooth, printRpp04Tags, type Rpp04Tag } from "./rpp04-direct-print";
 
 type PageKey = "stock-all" | "overdue" | "dashboard" | "stock" | "manual-stock" | "stock-count" | "forecast" | "parts" | "tags" | "plan" | "arrange" | "replacement" | "verify" | "dispatch" | "exports" | "reports" | "history" | "settings" | "users";
 
@@ -2815,10 +2816,14 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   async function printStockTags(input: StockTag | StockTag[], paper: "a4" | "100x55" = "a4") {
     const tags = Array.isArray(input) ? input : [input];
     if (!tags.length) return;
-    const popup = window.open("", "_blank", "width=900,height=950");
-    if (!popup) return setNotice({ type: "error", text: "เบราว์เซอร์บล็อกหน้าพิมพ์ กรุณาอนุญาต Pop-up" });
-    popup.document.write('<!doctype html><html lang="th"><head><meta charset="utf-8"><title>กำลังตรวจสอบ Tag</title></head><body style="font-family:Arial,sans-serif;padding:32px"><b>กำลังตรวจสอบสิทธิ์พิมพ์ Tag…</b></body></html>');
-    popup.document.close();
+    const directLabel = paper === "100x55";
+    const rpp04SessionPromise = directLabel
+      ? prepareRpp04Bluetooth().then((session) => ({ session, error: null as unknown })).catch((error: unknown) => ({ session: null, error }))
+      : null;
+    const popup = directLabel ? null : window.open("", "_blank", "width=900,height=950");
+    if (!directLabel && !popup) return setNotice({ type: "error", text: "เบราว์เซอร์บล็อกหน้าพิมพ์ กรุณาอนุญาต Pop-up" });
+    popup?.document.write('<!doctype html><html lang="th"><head><meta charset="utf-8"><title>กำลังตรวจสอบ Tag</title></head><body style="font-family:Arial,sans-serif;padding:32px"><b>กำลังตรวจสอบสิทธิ์พิมพ์ Tag…</b></body></html>');
+    popup?.document.close();
     try {
       const authorization = await fetch("/api/stock", {
         method: "POST", headers: { "content-type": "application/json" },
@@ -2826,14 +2831,14 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       });
       const result = await authorization.json() as { allowed?: boolean; error?: string; blockedTagId?: string; splitLabelId?: string };
       if (!authorization.ok || !result.allowed) {
-        popup.close();
+        popup?.close();
         if (result.splitLabelId) setSplitTagRequest({ labelId: result.splitLabelId });
         setNotice({ type: "error", text: result.error || "Tag นี้ไม่สามารถพิมพ์ได้" });
         await loadStock();
         return;
       }
     } catch (caught) {
-      popup.close();
+      popup?.close();
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบสิทธิ์พิมพ์ Tag ไม่สำเร็จ" });
       return;
     }
@@ -2869,19 +2874,53 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       const deliveryQty = tag.deliveryQty || stock.tags
         .filter((item) => item.tagId.replace(/-B\d+OF\d+$/, "") === batchCode)
         .reduce((sum, item) => sum + Number(item.qty), 0) || tag.qty;
-      return `<section class="tag"><header><div class="brand">KiT<small>CONTROL STOCK KIT</small></div><div class="tag-title"><b>STOCK RECEIVING TAG</b><small>TAG รับงานเข้า STOCK</small></div></header>
+      const markup = `<section class="tag"><header><div class="brand">KiT<small>CONTROL STOCK KIT</small></div><div class="tag-title"><b>STOCK RECEIVING TAG</b><small>TAG รับงานเข้า STOCK</small></div></header>
         <div class="product"><div class="photo-wrap">${imageUrl ? `<img class="photo" src="${imageUrl}" alt="รูปชิ้นงาน ${html(tag.materialCode)}" />` : `<div class="photo-fallback"><strong>◇</strong>ยังไม่มีรูปชิ้นงาน</div>`}</div><div class="qr-wrap"><img class="qr" src="${qr}" alt="QR"><small>QR / BARCODE</small></div><div class="main"><small>CUSTOMER</small><p class="customer">${html(tag.customer || "—")}</p><small>PART NO. / MATERIAL</small><b>${html(tag.materialCode)}</b><small>PART NAME</small><p>${html(tag.partName)}</p></div></div>
         <div class="grid"><div><small>DELIVERY QTY / จำนวนงานรวม</small><b class="qty">${fmt(deliveryQty)}</b> <span class="unit">PC</span></div><div><small>QTY IN BOX / จำนวนในกล่อง</small><b class="qty">${fmt(tag.qty)}</b> <span class="unit">PC</span></div><div class="box-cell"><small>BOX / กล่อง</small><b>${fmt(boxNo)} / ${fmt(boxCount)}</b><span class="box-type ${isFullBox ? "full" : "remainder"}"><strong>${boxTypeThai}</strong><small>${boxTypeEnglish}</small></span></div><div><small>JOB NO.</small><b>${html(tag.jobNo)}</b></div><div><small>TAG ISSUE DATE / วันที่ออก TAG</small><b>${html(formatDateOnly(tag.createdAt))}</b></div><div><small>LOCATION / ตำแหน่งจัดเก็บ</small><b>${html(location)}</b></div></div>
         <footer><b class="code">${html(tag.tagId)}</b><p class="payload">${html(payloadValue)}</p><div class="hint">ยิง QR เพื่อรับงานเข้า Stock</div></footer>
       </section>`;
+      const rpp04Tag: Rpp04Tag = {
+        customer: tag.customer || "—",
+        materialCode: tag.materialCode,
+        partName: tag.partName,
+        deliveryQty,
+        qty: tag.qty,
+        boxNo,
+        boxCount,
+        isFullBox,
+        jobNo: tag.jobNo,
+        issueDate: formatDateOnly(tag.createdAt),
+        location,
+        tagId: tag.tagId,
+        payload: payloadValue,
+        qrDataUrl: qr,
+        imageDataUrl: imageUrl || undefined,
+      };
+      return { markup, rpp04Tag };
     }));
-    const directLabel = paper === "100x55";
-    const tagsPerPage = directLabel ? 1 : 10;
+    if (directLabel) {
+      const connection = await rpp04SessionPromise;
+      if (!connection?.session) {
+        setNotice({ type: "error", text: connection?.error instanceof Error ? connection.error.message : "เชื่อมต่อ RPP04 ไม่สำเร็จ" });
+        return;
+      }
+      try {
+        setNotice({ type: "success", text: `เชื่อมต่อ ${connection.session.deviceName} แล้ว · กำลังพิมพ์ 0 / ${fmt(tagMarkups.length)} Tag` });
+        await printRpp04Tags(connection.session, tagMarkups.map((item) => item.rpp04Tag), (completed, total) => {
+          setNotice({ type: "success", text: `กำลังพิมพ์ RPP04 ${fmt(completed)} / ${fmt(total)} Tag` });
+        });
+        setNotice({ type: "success", text: `พิมพ์ RPP04 สำเร็จ ${fmt(tagMarkups.length)} Tag · ขนาด 100 × 55 มม.` });
+      } catch (caught) {
+        setNotice({ type: "error", text: caught instanceof Error ? caught.message : "พิมพ์ RPP04 ไม่สำเร็จ" });
+      }
+      return;
+    }
+    const tagsPerPage = 10;
     const pages = Array.from({ length: Math.ceil(tagMarkups.length / tagsPerPage) }, (_, pageIndex) =>
-      `<div class="sheet">${tagMarkups.slice(pageIndex * tagsPerPage, pageIndex * tagsPerPage + tagsPerPage).join("")}</div>`,
+      `<div class="sheet">${tagMarkups.slice(pageIndex * tagsPerPage, pageIndex * tagsPerPage + tagsPerPage).map((item) => item.markup).join("")}</div>`,
     ).join("");
-    popup.document.open();
-    popup.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${html(tags[0].jobNo)} · ${fmt(tags.length)} Tag</title><style>
+    popup?.document.open();
+    popup?.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${html(tags[0].jobNo)} · ${fmt(tags.length)} Tag</title><style>
       @page{size:${directLabel ? "100mm 55mm" : "A4 portrait"};margin:${directLabel ? "0" : "5mm"}}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;font-family:Arial,"Noto Sans Thai",sans-serif;color:#071a35;font-weight:500}
       .sheet{width:${directLabel ? "100mm" : "200mm"};height:${directLabel ? "55mm" : "283mm"};display:grid;grid-template-columns:${directLabel ? "100mm" : "repeat(2,100mm)"};grid-template-rows:${directLabel ? "55mm" : "repeat(5,55mm)"};column-gap:0;row-gap:${directLabel ? "0" : "2mm"};break-after:page}.sheet:last-child{break-after:auto}.tag{width:100mm;height:55mm;min-width:0;min-height:0;border:1.6px solid #003f98;border-radius:2mm;overflow:hidden;display:grid;grid-template-rows:auto auto 1fr auto;break-inside:avoid;background:#fff;box-shadow:inset 0 0 0 .25mm #c5d7ed}
       header{display:flex;justify-content:space-between;align-items:center;padding:.8mm 1.6mm;color:#fff;background:#003f98}.brand{font-size:15px;font-weight:900;line-height:.78}.brand small{display:block;margin-top:.5mm;font-size:3.8px;font-weight:800;letter-spacing:.55px;color:#fff}.tag-title{text-align:right}.tag-title b{display:block;font-size:6.8px;font-weight:900;letter-spacing:.2px}.tag-title small{font-size:4.7px;font-weight:800;color:#fff}
@@ -2892,7 +2931,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       @media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
       ${directLabel ? ".tag{break-after:page}.tag:last-child{break-after:auto}" : ""}
     </style></head><body>${pages}<script>window.onload=()=>{const images=[...document.images];Promise.all(images.map((image)=>image.complete?Promise.resolve():new Promise((resolve)=>{image.onload=resolve;image.onerror=resolve}))).finally(()=>setTimeout(()=>window.print(),250))}<\/script></body></html>`);
-    popup.document.close();
+    popup?.document.close();
   }
 
   const dates = useMemo(() => [...new Set(payload.dues.map((due) => due.deliveryDate))].sort().reverse(), [payload.dues]);
@@ -3620,7 +3659,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
           </div>
           <button className="button primary tag-create-submit" disabled={stockSaving || !selectedStockPart || selectedStockPart.standardQty <= 0}>▣ สร้าง Tag ตามจำนวนกล่อง</button>
         </form>
-        {createdStockTags.length > 0 && <div className="tag-created-banner"><PartImage materialCode={createdStockTags[0].materialCode} compact /><div><small>สร้างสำเร็จ · Tag ขนาด 10 × 5.5 ซม.</small><b>{fmt(createdStockTags.length)} Tag / {fmt(createdStockTags.reduce((sum, item) => sum + item.qty, 0))} ชิ้น</b><p>{createdStockTags[0].materialCode} · Job {createdStockTags[0].jobNo}</p></div><div className="tag-print-actions"><button className="button secondary" onClick={() => void printStockTags(createdStockTags, "a4")}>▤ A4 (10 Tag)</button><button className="button primary" onClick={() => void printStockTags(createdStockTags, "100x55")}>▤ RPP04 (100×55)</button></div></div>}
+        {createdStockTags.length > 0 && <div className="tag-created-banner"><PartImage materialCode={createdStockTags[0].materialCode} compact /><div><small>สร้างสำเร็จ · Tag ขนาด 10 × 5.5 ซม.</small><b>{fmt(createdStockTags.length)} Tag / {fmt(createdStockTags.reduce((sum, item) => sum + item.qty, 0))} ชิ้น</b><p>{createdStockTags[0].materialCode} · Job {createdStockTags[0].jobNo}</p></div><div className="tag-print-actions"><button className="button secondary" onClick={() => void printStockTags(createdStockTags, "a4")}>▤ A4 (10 Tag)</button><button className="button primary" onClick={() => void printStockTags(createdStockTags, "100x55")}>Bluetooth · RPP04 พิมพ์ตรง</button></div></div>}
       </Card>}
 
       {canPrintTags && <Card className="tag-list-card" title="Tag ที่สร้างแล้ว" action={<button className="button secondary" onClick={() => void loadStock()}>↻ รีเฟรช</button>}>
@@ -3640,7 +3679,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
               <span><b>{item.jobNo}</b></span>
               <span><b>ออก Tag: {formatDateOnly(item.createdAt)}</b><small>{item.receivedAt ? `รับเข้า Stock: ${formatDateTime(item.receivedAt)}` : "วันที่ผลิต: รอรับเข้า Stock"}</small></span>
               <span><em className={`status ${statusClass}`}>{statusText}</em></span>
-              <span className="tag-row-actions">{item.status === "cancelled" ? <small>ห้ามใช้ Tag ใบนี้</small> : item.splitLabelId ? <button className="tiny-button" type="button" onClick={() => setSplitTagRequest({ labelId: item.splitLabelId })}>▤ ดู Tag แบ่ง</button> : <><button className="tiny-button" onClick={() => void printStockTags(item, "a4")}>A4</button><button className="tiny-button" onClick={() => void printStockTags(item, "100x55")}>RPP04</button></>}{user.role === "admin" && item.status === "printed" && <button type="button" className="tiny-button danger-outline" disabled={Boolean(deletingStockTagId)} onClick={() => void deleteStockTag(item)}>{deletingStockTagId === item.tagId ? "กำลังลบ…" : "♲ ลบ"}</button>}</span>
+              <span className="tag-row-actions">{item.status === "cancelled" ? <small>ห้ามใช้ Tag ใบนี้</small> : item.splitLabelId ? <button className="tiny-button" type="button" onClick={() => setSplitTagRequest({ labelId: item.splitLabelId })}>▤ ดู Tag แบ่ง</button> : <><button className="tiny-button" onClick={() => void printStockTags(item, "a4")}>A4</button><button className="tiny-button" onClick={() => void printStockTags(item, "100x55")}>RPP04 ตรง</button></>}{user.role === "admin" && item.status === "printed" && <button type="button" className="tiny-button danger-outline" disabled={Boolean(deletingStockTagId)} onClick={() => void deleteStockTag(item)}>{deletingStockTagId === item.tagId ? "กำลังลบ…" : "♲ ลบ"}</button>}</span>
             </div>;
           })}</div>
           <footer>
@@ -4920,3 +4959,4 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     </form></div>}
   </div>;
 }
+
