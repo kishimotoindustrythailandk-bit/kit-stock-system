@@ -232,7 +232,10 @@ async function renderTag(tag: Rpp04Tag) {
   context.fillRect(0, 0, DOTS_WIDE, DOTS_HIGH);
   context.strokeStyle = "#000";
   context.lineWidth = 3;
-  context.strokeRect(2, 2, DOTS_WIDE - 4, DOTS_HIGH - 4);
+  // Keep the visible border and all important content above the printer's
+  // final raster rows. Older RPP04/RT4 firmware can drop a few trailing rows
+  // while changing from raster printing back to paper feed mode.
+  context.strokeRect(2, 2, DOTS_WIDE - 4, 422);
 
   context.fillStyle = "#000";
   context.fillRect(3, 3, DOTS_WIDE - 6, 56);
@@ -286,12 +289,12 @@ async function renderTag(tag: Rpp04Tag) {
 
   context.fillStyle = "#000";
   context.font = "900 18px Arial, sans-serif";
-  context.fillText(fitText(context, tag.tagId, 520), 16, 387);
+  context.fillText(fitText(context, tag.tagId, 520), 16, 382);
   context.font = "700 12px Arial, sans-serif";
-  context.fillText(fitText(context, tag.payload, 760), 16, 411);
+  context.fillText(fitText(context, tag.payload, 760), 16, 414);
   context.font = '800 14px Arial, "Noto Sans Thai", sans-serif';
   context.textAlign = "right";
-  context.fillText("ยิง QR เพื่อรับงานเข้า Stock", 782, 431);
+  context.fillText("ยิง QR เพื่อรับงานเข้า Stock", 782, 382);
   context.textAlign = "left";
 
   const pixels = context.getImageData(0, 0, DOTS_WIDE, DOTS_HIGH).data;
@@ -319,10 +322,18 @@ export function buildEscPosRaster(raster: Uint8Array, width = DOTS_WIDE, height 
     widthBytes & 0xff, (widthBytes >> 8) & 0xff,
     height & 0xff, (height >> 8) & 0xff,
   ]);
-  const output = new Uint8Array(header.length + raster.length + 1);
+  // Use a short controlled feed instead of form-feed. It gives the thermal
+  // head enough time/paper travel to finish the bottom rows before the socket
+  // is closed, without adding a large blank tail to the 55 mm label.
+  const trailer = new Uint8Array([
+    0x1b, 0x33, 0x0c,
+    0x0a, 0x0a, 0x0a, 0x0a,
+    0x1b, 0x32,
+  ]);
+  const output = new Uint8Array(header.length + raster.length + trailer.length);
   output.set(header, 0);
   output.set(raster, header.length);
-  output[output.length - 1] = 0x0c;
+  output.set(trailer, header.length + raster.length);
   return output;
 }
 
