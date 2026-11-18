@@ -10,7 +10,7 @@ const [api, app] = await Promise.all([
 test("dispatch requires a previously arranged KIT Tag before customer Tag", () => {
   assert.match(api, /mode === "dispatch_kit_verify"/);
   assert.match(api, /กรุณาสแกน KIT Tag ที่จัดงานแล้วก่อนสแกน Tag ลูกค้า/);
-  assert.match(api, /p\.id = \?3 AND t\.tag_id = \?4/);
+  assert.match(api, /\(\?3 = 0 OR p\.id = \?3\) AND t\.tag_id = \?4/);
   assert.match(api, /p\.due_line_id = \?1/);
   assert.match(app, /ขั้นตอนที่ 1: สแกน KIT Tag ที่จัดงานแล้ว/);
   assert.match(app, /ขั้นตอนที่ 2: สแกน Tag ลูกค้า/);
@@ -33,4 +33,12 @@ test("successful dispatch records the exact scanned KIT and customer Tag pair", 
   assert.match(api, /selectedKit\.stockTagCode/);
   assert.match(app, /pickId: dispatchKitSelection\.pickId/);
   assert.match(app, /stockTagCode: dispatchKitSelection\.stockTagCode/);
+});
+
+test("split remainder tags can resolve duplicate picks inside the selected round", () => {
+  assert.match(api, /pickId: 0/);
+  assert.match(api, /ระบบจะจับคู่จาก Tag ลูกค้า/);
+  assert.match(api, /\(\?1 = 0 OR p\.id = \?1\)/);
+  assert.match(api, /Number\(row\.waitingQty\) === Number\(tag\.qty\)/);
+  assert.match(api, /const selectedPicks = \[matchingPicks\[0\]\]/);
 });

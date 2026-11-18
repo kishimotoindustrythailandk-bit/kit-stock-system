@@ -106,7 +106,21 @@ async function verifyKitTag(rawPayload: string, scope: DispatchScope) {
     return Response.json({ action: "dispatch_kit_verify", verdict: "not_arranged", message: `ไม่พบ KIT Tag ${stockTagCode} ในงานที่จัดรอขายของ ${dispatchScopeText(scope)}` });
   }
   if (rows.results.length > 1) {
-    return Response.json({ action: "dispatch_kit_verify", verdict: "ambiguous", message: "KIT Tag นี้อยู่ในงานจัดมากกว่า 1 รายการ กรุณาเลือกรอบและ FAC ให้เฉพาะเจาะจง" });
+    // Tag เศษยังคงใช้รหัส KIT Tag ต้นทาง จึงอาจถูกจัดเข้า Due เดียวกัน
+    // มากกว่าหนึ่งครั้งได้ แม้ผู้ใช้เลือกวัน / รอบ / FAC ครบแล้ว ยังไม่ควร
+    // เดาว่าเป็น Pick ใดในขั้นตอนนี้ ให้ใช้ pickId = 0 เป็นตัวบอกว่า
+    // ต้องเลือก Pick ที่ Due และจำนวนตรงกับ Tag ลูกค้าในขั้นตอนถัดไป
+    const first = rows.results[0];
+    return Response.json({
+      action: "dispatch_kit_verify", verdict: "ready",
+      message: `พบ KIT Tag ที่จัดไว้ ${rows.results.length} รายการ ระบบจะจับคู่จาก Tag ลูกค้า`,
+      kit: {
+        ...first,
+        pickId: 0,
+        waitingQty: rows.results.reduce((sum, row) => sum + Number(row.waitingQty || 0), 0),
+        candidateCount: rows.results.length,
+      },
+    });
   }
   return Response.json({ action: "dispatch_kit_verify", verdict: "ready", message: "พบ KIT Tag ที่จัดงานแล้ว กรุณาสแกน Tag ลูกค้า", kit: rows.results[0] });
 }
@@ -274,22 +288,27 @@ async function verifyCustomerTag(rawPayload: string, scope?: DispatchScope | nul
 
   let pairedKit: Record<string, unknown> | null = null;
   if (selectedKit) {
-    const pair = await DB.prepare(`
+    const pairRows = await DB.prepare(`
       SELECT p.id AS pickId, p.due_line_id AS dueLineId,
         p.picked_qty - p.dispatched_qty AS waitingQty,
         t.id AS stockTagId, t.tag_id AS stockTagCode, t.material_code AS materialCode,
         t.job_no AS jobNo, t.production_date AS productionDate
       FROM stock_picks p
       INNER JOIN stock_tags t ON t.id = p.stock_tag_id
-      WHERE p.id = ?1 AND t.tag_id = ?2
+      WHERE (?1 = 0 OR p.id = ?1) AND t.tag_id = ?2
+        AND p.due_line_id = ?3
         AND p.status IN ('staged', 'partial') AND p.picked_qty > p.dispatched_qty
-      LIMIT 1
-    `).bind(selectedKit.pickId, selectedKit.stockTagCode).first<{
+      ORDER BY p.id
+      LIMIT 20
+    `).bind(selectedKit.pickId, selectedKit.stockTagCode, due.id).all<{
       pickId: number; dueLineId: number; waitingQty: number; stockTagId: number;
       stockTagCode: string; materialCode: string; jobNo: string; productionDate: string;
     }>();
+    const pair = (pairRows.results || []).find((row) => Number(row.waitingQty) === Number(tag.qty));
     if (!pair) {
-      return Response.json({ action: "verify", verdict: "pair_mismatch", tag, master, due: dueInfo, message: "KIT Tag ที่เลือกไม่มีงานรอขายแล้ว กรุณาสแกน KIT Tag ใหม่" });
+      const quantities = (pairRows.results || []).map((row) => Number(row.waitingQty)).filter((qty) => qty > 0);
+      const detail = quantities.length ? ` งานที่จัดไว้มีจำนวน ${quantities.join(", ")} ชิ้น` : "";
+      return Response.json({ action: "verify", verdict: "pair_mismatch", tag, master, due: dueInfo, message: `ไม่พบงานจัดของ KIT Tag ที่จำนวนตรงกับ Tag ลูกค้า ${tag.qty} ชิ้น${detail}` });
     }
     pairedKit = pair;
     stagedAvail = Number(pair.waitingQty);
@@ -400,7 +419,7 @@ export async function POST(request: Request) {
       pickId: Number(payload.pickId),
       stockTagCode: String(payload.stockTagCode ?? "").trim().toUpperCase(),
     };
-    if (!Number.isSafeInteger(selectedKit.pickId) || selectedKit.pickId <= 0 || !selectedKit.stockTagCode) {
+    if (!Number.isSafeInteger(selectedKit.pickId) || selectedKit.pickId < 0 || !selectedKit.stockTagCode) {
       return Response.json({ error: "กรุณาสแกน KIT Tag ที่จัดงานแล้วก่อนสแกน Tag ลูกค้า" }, { status: 400 });
     }
     if (payload.mode === "dispatch_verify") return await verifyCustomerTag(payload.rawPayload ?? "", dispatchScope, selectedKit);
@@ -456,26 +475,32 @@ export async function POST(request: Request) {
         t.production_date AS productionDate, t.received_at AS receivedAt
       FROM stock_picks p
       INNER JOIN stock_tags t ON t.id = p.stock_tag_id
-      WHERE p.id = ?3 AND t.tag_id = ?4
+      WHERE (?3 = 0 OR p.id = ?3) AND t.tag_id = ?4
         AND p.due_line_id = ?1
         AND p.status IN ('staged', 'partial') AND p.picked_qty > p.dispatched_qty
         AND t.material_code = ?2
-      LIMIT 1
+      ORDER BY p.id
+      LIMIT 20
     `).bind(due.id, due.materialCode, selectedKit.pickId, selectedKit.stockTagCode).all<{
       id: number; stockTagId: number; pickedQty: number; dispatchedQty: number;
       pickedByName: string; pickedAt: string; stockTagCode: string; materialCode: string;
       jobNo: string; productionDate: string; receivedAt: string | null;
     }>();
-    if (staged.results.length !== 1) {
+    const matchingPicks = (staged.results || []).filter((pick) =>
+      Number(pick.pickedQty) - Number(pick.dispatchedQty) === Number(tag.qty));
+    if (!matchingPicks.length) {
       return Response.json({ error: "KIT Tag ที่สแกนไม่ตรงกับ Due นี้ หรือไม่มีงานรอขายแล้ว กรุณาสแกนใหม่" }, { status: 409 });
     }
-    const selectedWaitingQty = Number(staged.results[0].pickedQty) - Number(staged.results[0].dispatchedQty);
+    // หาก Tag ต้นทางถูกแบ่งและจัดซ้ำในขอบเขตเดียวกัน เลือก Pick แรกที่
+    // จำนวนรอขายตรงกับ Tag ลูกค้า เพื่อคง Traceability แบบหนึ่งคู่ต่อหนึ่ง
+    const selectedPicks = [matchingPicks[0]];
+    const selectedWaitingQty = Number(selectedPicks[0].pickedQty) - Number(selectedPicks[0].dispatchedQty);
     if (selectedWaitingQty !== tag.qty) {
       return Response.json({ error: `จำนวนไม่ตรงกัน: KIT Tag รอขาย ${selectedWaitingQty} ชิ้น แต่ Tag ลูกค้า ${tag.qty} ชิ้น` }, { status: 409 });
     }
     let needed = tag.qty;
     const consumed: Array<(typeof staged.results)[number] & { qty: number }> = [];
-    for (const pick of staged.results) {
+    for (const pick of selectedPicks) {
       const available = Math.max(Number(pick.pickedQty) - Number(pick.dispatchedQty), 0);
       if (!available) continue;
       const qty = Math.min(available, needed);
