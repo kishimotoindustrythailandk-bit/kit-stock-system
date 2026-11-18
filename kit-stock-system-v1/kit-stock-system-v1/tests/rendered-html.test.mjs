@@ -511,7 +511,8 @@ test("keeps the Stock receiving popup Actual and Master sources on their labelle
   const stockPopup = sourceSection(appSource, "{stockReceivePreview &&", "{dispatchConfirmation &&");
 
   assert.match(pair, /projectionVersion = EFFECTIVE_IMAGE_PROJECTION_VERSION/);
-  assert.match(pair, /รูปตัวอย่าง \\(Master\\)[\\s\\S]*slot="master" version=\\{masterVersion \\|\\| projectionVersion\\}[\\s\\S]*รูปชิ้นงานในกล่อง[\\s\\S]*slot="actual" version=\\{actualVersion \\|\\| projectionVersion\\}/);
+  assert.match(pair, /flexDirection: "row-reverse"/);
+  assert.match(pair, /รูปชิ้นงานในกล่อง[\\s\\S]*slot="actual" version=\\{actualVersion \\|\\| projectionVersion\\}[\\s\\S]*รูปตัวอย่าง \\(Master\\)[\\s\\S]*slot="master" version=\\{masterVersion \\|\\| projectionVersion\\}/);
   assert.match(stockPopup, /<PartImagePair materialCode=\{stockReceivePreview\.tag\.materialCode\}/);
   assert.match(stockPopup, /masterVersion=\{partImages\.find\(\(item\) => item\.materialCode === stockReceivePreview\.tag\.materialCode\)\?\.updatedAt\}/);
   assert.match(stockPopup, /actualVersion=\{partActualImages\.find\(\(item\) => item\.materialCode === stockReceivePreview\.tag\.materialCode\)\?\.updatedAt\}/);
@@ -525,7 +526,8 @@ test("keeps the ตรวจและขายออก popup Actual and Master 
   const dispatchPopup = sourceSection(appSource, "{dispatchConfirmation &&", "{cameraOpen &&");
 
   assert.match(pair, /projectionVersion = EFFECTIVE_IMAGE_PROJECTION_VERSION/);
-  assert.match(pair, /รูปตัวอย่าง \\(Master\\)[\\s\\S]*slot="master" version=\\{masterVersion \\|\\| projectionVersion\\}[\\s\\S]*รูปชิ้นงานในกล่อง[\\s\\S]*slot="actual" version=\\{actualVersion \\|\\| projectionVersion\\}/);
+  assert.match(pair, /flexDirection: "row-reverse"/);
+  assert.match(pair, /รูปชิ้นงานในกล่อง[\\s\\S]*slot="actual" version=\\{actualVersion \\|\\| projectionVersion\\}[\\s\\S]*รูปตัวอย่าง \\(Master\\)[\\s\\S]*slot="master" version=\\{masterVersion \\|\\| projectionVersion\\}/);
   assert.match(dispatchPopup, /<PartImagePair materialCode=\{dispatchConfirmation\.tag\?\.materialCode \|\| dispatchConfirmation\.master\?\.materialCode \|\| ""\}/);
   assert.match(dispatchPopup, /masterVersion=\{partImages\.find/);
   assert.match(dispatchPopup, /actualVersion=\{partActualImages\.find/);

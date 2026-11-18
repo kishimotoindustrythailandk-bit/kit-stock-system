@@ -688,7 +688,8 @@ function PartImage({ materialCode, compact = false, version, slot = "master", st
 const EFFECTIVE_IMAGE_PROJECTION_VERSION = "separate-image-slots-v4";
 
 /**
- * เรียงรูปให้ตรงกับหน้าทะเบียน Part: รูปตัวอย่าง Master อยู่ซ้าย และรูปในกล่องอยู่ขวา
+ * คงลำดับ component เดิมไว้เพื่อไม่ให้ React นำสถานะโหลดรูปของคนละ slot มาใช้ร่วมกัน
+ * แล้วสลับเฉพาะการจัดวางด้วย row-reverse: Master อยู่ซ้าย และรูปในกล่องอยู่ขวา
  * ใช้ตอนสแกนเพื่อให้ผู้ตรวจเทียบว่าชิ้นงานในกล่องตรงกับตัวอย่างจริง
  *
  * ผู้ใช้ Stock/Delivery ไม่มีสิทธิ์โหลด metadata รูป จึงไม่มี updatedAt สำหรับ cache busting
@@ -698,9 +699,9 @@ function PartImagePair({ materialCode, masterVersion, actualVersion, masterAvail
   const capStyle: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: "#6b7787", marginBottom: 5, textAlign: "center", letterSpacing: "0.02em" };
   const figStyle: React.CSSProperties = { margin: 0, flex: "1 1 130px", minWidth: 0 };
   const fallback = <div className="part-photo-fallback"><span>◈</span><small>ยังไม่มีรูป</small></div>;
-  return <div className="part-image-pair" style={{ display: "flex", gap: 12, flexWrap: "wrap", width: "100%" }}>
-    <figure style={figStyle}><figcaption style={capStyle}>รูปตัวอย่าง (Master)</figcaption>{masterAvailable ? <PartImage materialCode={materialCode} slot="master" version={masterVersion || projectionVersion} strict={strictSlots} /> : fallback}</figure>
+  return <div className="part-image-pair" style={{ display: "flex", flexDirection: "row-reverse", gap: 12, flexWrap: "wrap", width: "100%" }}>
     <figure style={figStyle}><figcaption style={capStyle}>รูปชิ้นงานในกล่อง</figcaption>{actualAvailable ? <PartImage materialCode={materialCode} slot="actual" version={actualVersion || projectionVersion} strict={strictSlots} /> : fallback}</figure>
+    <figure style={figStyle}><figcaption style={capStyle}>รูปตัวอย่าง (Master)</figcaption>{masterAvailable ? <PartImage materialCode={materialCode} slot="master" version={masterVersion || projectionVersion} strict={strictSlots} /> : fallback}</figure>
   </div>;
 }
 
