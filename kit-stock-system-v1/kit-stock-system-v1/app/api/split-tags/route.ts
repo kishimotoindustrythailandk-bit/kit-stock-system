@@ -7,10 +7,19 @@ import {createSplitLabels,type SplitLabelKind,type SplitTagSnapshot} from '../..
 const allowed=(user:Parameters<typeof hasPermission>[0])=>['arrange','dispatch','tags','stock'].some(page=>hasPermission(user,page as Parameters<typeof hasPermission>[1]));
 const allowedToIssue=(user:Parameters<typeof hasPermission>[0])=>['arrange','dispatch','tags','stock'].some(page=>hasPermission(user,page as Parameters<typeof hasPermission>[1])&&hasPermission(user,`${page}-edit` as Parameters<typeof hasPermission>[1]));
 export async function readSplitSnapshot(DB:D1Database,pickId:number,stockTagCode:string):Promise<SplitTagSnapshot|null>{
+ const availableSql=pickId>0?`MAX(t.remaining_qty
+  + coalesce((SELECT sum(later.dispatched_qty) FROM stock_picks later
+      WHERE later.stock_tag_id=t.id AND later.id>p.id),0)
+  - coalesce((SELECT sum(MAX(prior.picked_qty-prior.dispatched_qty,0)) FROM stock_picks prior
+      WHERE prior.stock_tag_id=t.id AND prior.id<=p.id AND prior.status IN ('staged','partial')),0)
+  - coalesce((SELECT sum(allocation.qty) FROM stock_allocations allocation
+      WHERE allocation.stock_tag_id=t.id AND allocation.status='reserved'),0),0)`
+  :AVAILABLE_STOCK_SQL.replaceAll('tag.','t.');
  const row=await DB.prepare(`SELECT t.tag_id AS tagId,t.material_code AS materialCode,
   coalesce(m.part_name,'') AS partName,coalesce(m.customer,'') AS customer,coalesce(m.location,'') AS location,
   t.job_no AS jobNo,t.production_date AS productionDate,t.remaining_qty AS remainingQty,t.status AS tagStatus,
-  ${AVAILABLE_STOCK_SQL.replaceAll("tag.","t.")} AS availableQty,
+  ${availableSql} AS availableQty,
+  (SELECT max(latest.id) FROM stock_picks latest WHERE latest.stock_tag_id=t.id) AS latestPickId,
   p.id AS pickId,p.due_line_id AS dueLineId,p.picked_qty AS pickedQty,p.dispatched_qty AS dispatchedQty,p.status AS pickStatus,
   d.delivery_date AS deliveryDate,d.delivery_time AS deliveryTime,d.fact,d.do_no AS doNo
  FROM stock_tags t LEFT JOIN stock_parts m ON m.material_code=t.material_code
@@ -21,7 +30,9 @@ export async function readSplitSnapshot(DB:D1Database,pickId:number,stockTagCode
  return {tag:{tagId:String(row.tagId),materialCode:String(row.materialCode),partName:String(row.partName),customer:String(row.customer),location:String(row.location),jobNo:String(row.jobNo),productionDate:String(row.productionDate),remainingQty:Number(row.remainingQty),status:String(row.tagStatus)},
   pick:row.pickId?{id:Number(row.pickId),dueLineId:Number(row.dueLineId),pickedQty:Number(row.pickedQty),dispatchedQty:Number(row.dispatchedQty),status:String(row.pickStatus),deliveryDate:String(row.deliveryDate),deliveryTime:String(row.deliveryTime),fact:String(row.fact),doNo:String(row.doNo)}:null,
   availableQty:['in_stock','depleted'].includes(String(row.tagStatus))?Number(row.availableQty):0,
-  waitingQty:['staged','partial'].includes(String(row.pickStatus))?Math.max(Number(row.pickedQty)-Number(row.dispatchedQty),0):0,loadedAt:new Date().toISOString()};
+  waitingQty:['staged','partial'].includes(String(row.pickStatus))?Math.max(Number(row.pickedQty)-Number(row.dispatchedQty),0):0,
+  latestPickId:row.latestPickId==null?null:Number(row.latestPickId),
+  canPrintRemaining:pickId===0||row.latestPickId==null||Number(row.latestPickId)===Number(row.pickId),loadedAt:new Date().toISOString()};
 }
 export async function GET(request:Request){
  try{

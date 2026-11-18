@@ -38,6 +38,16 @@ test('100 stock arranged 50 creates two 50 labels without changing stock or acti
 });
 test('stale quantities are rejected and no label is issued',async()=>{const {db,logs,call}=fixture();try{db.exec('UPDATE stock_picks SET picked_qty=60');const r=await call('POST','',issueBody);assert.equal(r.status,409);assert.equal(logs.length,0);assert.equal(db.prepare('SELECT remaining_qty FROM stock_tags').get().remaining_qty,100);}finally{db.close();}});
 test('partial dispatch and legacy reservation use current stock quantities',async()=>{const {db,call}=fixture();try{db.exec("UPDATE stock_tags SET remaining_qty=80;UPDATE stock_picks SET dispatched_qty=20,status='partial';INSERT INTO stock_allocations VALUES(1,10,'reserved')");const r=await call('GET','?pickId=1');assert.equal(r.data.snapshot.availableQty,40);assert.equal(r.data.snapshot.waitingQty,30);}finally{db.close();}});
+test('each split round keeps its own remainder and only the latest remainder can print',async()=>{const {db,call}=fixture();try{
+ db.exec("UPDATE stock_tags SET remaining_qty=79;UPDATE stock_picks SET picked_qty=21,dispatched_qty=21,status='dispatched';INSERT INTO stock_picks VALUES(2,1,1,25,0,'staged')");
+ const first=await call('GET','?pickId=1'),second=await call('GET','?pickId=2');
+ assert.equal(first.data.snapshot.availableQty,79);assert.equal(first.data.snapshot.canPrintRemaining,false);assert.equal(first.data.snapshot.latestPickId,2);
+ assert.equal(second.data.snapshot.availableQty,54);assert.equal(second.data.snapshot.waitingQty,25);assert.equal(second.data.snapshot.canPrintRemaining,true);
+ const oldRemainder=await call('POST','',{pickId:1,expectedAvailableQty:79,expectedWaitingQty:0,kinds:['remaining']});assert.equal(oldRemainder.status,400);assert.match(oldRemainder.data.error,/ถูกแทนที่/);
+ const latest=await call('POST','',{pickId:2,expectedAvailableQty:54,expectedWaitingQty:25,kinds:['delivery','remaining']});assert.equal(latest.status,201);assert.deepEqual(latest.data.labels.map(label=>label.qty),[25,54]);
+ db.exec("UPDATE stock_tags SET remaining_qty=54;UPDATE stock_picks SET dispatched_qty=25,status='dispatched' WHERE id=2");
+ const afterDispatchFirst=await call('GET','?pickId=1'),afterDispatchSecond=await call('GET','?pickId=2');assert.equal(afterDispatchFirst.data.snapshot.availableQty,79);assert.equal(afterDispatchSecond.data.snapshot.availableQty,54);
+ }finally{db.close();}});
 test('zero remaining and completed picks cannot create zero labels',async()=>{const {db,call}=fixture();try{db.exec("UPDATE stock_tags SET remaining_qty=0,status='depleted';UPDATE stock_picks SET dispatched_qty=50,status='completed'");const r=await call('POST','',{...issueBody,expectedAvailableQty:0,expectedWaitingQty:0});assert.equal(r.status,400);}finally{db.close();}});
 test('print-only source tag request emits remainder at current available quantity',async()=>{const {db,call}=fixture();try{const preview=await call('GET','?stockTagCode=KITSTK-TEST');assert.equal(preview.data.snapshot.pick,null);const issue=await call('POST','',{stockTagCode:'KITSTK-TEST',expectedAvailableQty:50,expectedWaitingQty:0,kinds:['remaining']});assert.equal(issue.status,201);assert.equal(issue.data.labels[0].qty,50);}finally{db.close();}});
 test('login and permissions are checked for reading and issuing tags',async()=>{for(const options of [{user:null},{permitted:false}]){const{db,call,logs}=fixture(options);try{for(const method of ['GET','POST']){const r=await call(method,method==='GET'?'?pickId=1':'',method==='POST'?issueBody:undefined);assert.equal(r.status,options.user===null?401:403);}assert.equal(logs.length,0);}finally{db.close();}}});
@@ -50,4 +60,6 @@ test('mobile print flow renders an in-app preview and prints its iframe without 
  assert.match(source,/previewFrame\.current/);
  assert.match(source,/contentWindow\.print\(\)/);
  assert.match(source,/เตรียมและดูตัวอย่าง Tag/);
+ assert.match(source,/พิมพ์ Tag ส่งงานซ้ำ/);
+ assert.match(source,/!snapshot\.canPrintRemaining/);
 });

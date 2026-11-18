@@ -1,7 +1,7 @@
 export type SplitTagSnapshot = {
  tag: { tagId:string; materialCode:string; partName:string; customer:string; location:string; jobNo:string; productionDate:string; remainingQty:number; status:string };
  pick: { id:number; dueLineId:number; pickedQty:number; dispatchedQty:number; status:string; deliveryDate:string; deliveryTime:string; fact:string; doNo:string } | null;
- availableQty:number; waitingQty:number; loadedAt:string;
+ availableQty:number; waitingQty:number; latestPickId:number|null; canPrintRemaining:boolean; loadedAt:string;
 };
 export type SplitLabelKind = 'delivery' | 'remaining';
 export type SplitTagLabel = { kind:SplitLabelKind; qty:number; sourceTagId:string; materialCode:string; jobNo:string; productionDate:string; partName:string; customer:string; location:string; pickId:number|null; dueDate:string; dueTime:string; fact:string; doNo:string };
@@ -10,6 +10,7 @@ export function createSplitLabels(snapshot:SplitTagSnapshot,kinds:SplitLabelKind
  return [...new Set(kinds)].map(kind=>{
   const qty=kind==='delivery'?snapshot.waitingQty:snapshot.availableQty;
   if(kind==='delivery' && !snapshot.pick)throw new Error('ไม่พบรายการจัดงานสำหรับ Tag ส่งพร้อมงาน');
+  if(kind==='remaining' && !snapshot.canPrintRemaining)throw new Error('Tag คงเหลือของรอบนี้ถูกแทนที่ด้วยรอบจัดงานล่าสุดแล้ว ไม่สามารถพิมพ์ซ้ำได้');
   if(!Number.isSafeInteger(qty)||qty<=0)throw new Error(kind==='delivery'?'ไม่มีงานรอส่งเหลือสำหรับพิมพ์ Tag':'ไม่มี Stock พร้อมใช้เหลือสำหรับพิมพ์ Tag คงเหลือ');
   return {kind,qty,sourceTagId:snapshot.tag.tagId,materialCode:snapshot.tag.materialCode,jobNo:snapshot.tag.jobNo,productionDate:snapshot.tag.productionDate,partName:snapshot.tag.partName,customer:snapshot.tag.customer,location:snapshot.tag.location,pickId:kind==='delivery'?snapshot.pick!.id:null,dueDate:kind==='delivery'?snapshot.pick!.deliveryDate:'',dueTime:kind==='delivery'?snapshot.pick!.deliveryTime:'',fact:kind==='delivery'?snapshot.pick!.fact:'',doNo:kind==='delivery'?snapshot.pick!.doNo:''};
  });
