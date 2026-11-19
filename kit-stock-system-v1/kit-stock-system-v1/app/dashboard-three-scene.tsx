@@ -381,6 +381,8 @@ const DashboardThreeScene = forwardRef<ThreeSceneHandle, {
       frame = requestAnimationFrame(render);
       const elapsed = clock.getElapsedTime();
       const liveStations = stationsRef.current;
+      scene.updateMatrixWorld(true);
+      camera.updateMatrixWorld(true);
       animated.forEach((item, number) => {
         const active = Boolean(animationRef.current && liveStations.find((station) => station.number === number)?.active);
         const speed = elapsed * (1 + number * .035);
