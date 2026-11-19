@@ -86,7 +86,7 @@ export default function DashboardOperationsFloor({ data, canOpen, onOpen }: {
 
   return <section className={styles.shell} aria-labelledby="operations-floor-title">
     <header className={styles.heading}>
-      <div><small>KIT 3D OPERATIONS FLOOR</small><h3 id="operations-floor-title">ภาพรวมกระบวนการทำงานแบบเรียลไทม์</h3><p>สถานะเคลื่อนไหวอ้างอิงข้อมูลระบบ · เลือกสถานีเพื่อเปิดหน้าการทำงาน</p></div>
+      <div><small>KIT 3D OPERATIONS FLOOR</small><h3 id="operations-floor-title">ภาพรวมกระบวนการทำงาน Smart Factory</h3><p>สถานะเคลื่อนไหวอ้างอิงข้อมูลระบบ · เลือกสถานีเพื่อเปิดหน้าการทำงาน</p></div>
       <div className={styles.headingActions}>
         <span className={styles.systemStatus}><i /> สถานะจากข้อมูลระบบ</span>
         <button type="button" className={styles.animationToggle} aria-pressed={animationEnabled} onClick={changeAnimation}><span>{animationEnabled ? "Ⅱ" : "▶"}</span>{animationEnabled ? "ปิด Animation" : "เปิด Animation"}</button>
