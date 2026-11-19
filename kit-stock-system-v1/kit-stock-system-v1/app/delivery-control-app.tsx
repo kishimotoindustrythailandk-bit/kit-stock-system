@@ -355,7 +355,7 @@ const PAGE_SUBTITLE: Record<PageKey, string> = {
   users: "ผู้ใช้งานที่มีสิทธิ์เข้าถึงระบบ",
 };
 
-type VerifyVerdict = "ready" | "ready_noimg" | "short" | "over" | "no_due" | "ambiguous" | "already" | "bad_tag" | "pair_mismatch";
+type VerifyVerdict = "ready" | "ready_noimg" | "need_more_kit" | "short" | "over" | "no_due" | "ambiguous" | "already" | "bad_tag" | "pair_mismatch";
 type DispatchKitSelection = {
   pickId: number; dueLineId: number; waitingQty: number; pickedByName: string; pickedAt: string;
   stockTagId: number; stockTagCode: string; materialCode: string; jobNo: string;
@@ -370,7 +370,9 @@ type VerifyResult = {
   master?: { materialCode: string; partName: string; customer: string; hasImage: boolean };
   due?: { id: number; doNo: string; seq: number; materialCode: string; materialDescription: string; fact: string; line: string; shop: string; site: string; reqQty: number; deliveryDate: string; deliveryTime: string; alreadyQty: number; remainingDue: number; projectedQty: number; remainingAfter: number };
   stagedAvail?: number;
+  missingQty?: number;
   pairedKit?: { pickId?: number; stockTagId?: number; stockTagCode?: string; materialCode?: string; jobNo?: string; productionDate?: string; waitingQty?: number };
+  pairedKits?: Array<{ pickId?: number; stockTagId?: number; stockTagCode?: string; materialCode?: string; jobNo?: string; productionDate?: string; waitingQty?: number }>;
 };
 
 function number(value: unknown) {
@@ -787,7 +789,9 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   const [rawTag, setRawTag] = useState("");
   const [tagPreview, setTagPreview] = useState<TagPreview | null>(null);
   const [dispatchConfirmation, setDispatchConfirmation] = useState<VerifyResult | null>(null);
+  const [dispatchPendingCustomer, setDispatchPendingCustomer] = useState<VerifyResult | null>(null);
   const [dispatchKitSelection, setDispatchKitSelection] = useState<DispatchKitSelection | null>(null);
+  const [dispatchAdditionalKitSelections, setDispatchAdditionalKitSelections] = useState<DispatchKitSelection[]>([]);
   const [dispatchDueDate, setDispatchDueDate] = useState("");
   const [dispatchDueTime, setDispatchDueTime] = useState("");
   const [dispatchDueFact, setDispatchDueFact] = useState("");
@@ -1445,7 +1449,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
           import("@zxing/library"),
         ]);
         if (stopped) return;
-        const customerTagMode = page === "dispatch" && Boolean(dispatchKitSelection);
+        const customerTagMode = page === "dispatch" && Boolean(dispatchKitSelection) && !dispatchPendingCustomer;
         const hints = new Map();
         hints.set(DecodeHintType.POSSIBLE_FORMATS, customerTagMode ? [BarcodeFormat.QR_CODE] : [
           BarcodeFormat.QR_CODE, BarcodeFormat.DATA_MATRIX, BarcodeFormat.CODE_128, BarcodeFormat.CODE_39,
@@ -1558,7 +1562,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       const stream = videoElement?.srcObject;
       if (stream instanceof MediaStream) stream.getTracks().forEach((track) => track.stop());
     };
-  }, [cameraOpen, cameraPurpose, page, dispatchKitSelection, stockLocation]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cameraOpen, cameraPurpose, page, dispatchKitSelection, dispatchPendingCustomer, stockLocation]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const scannerPage = page === "stock" || page === "stock-count" || page === "dispatch" || (page === "replacement" && canIssueReplacement);
@@ -1835,7 +1839,9 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
   }
 
   function handleDispatchScan(value?: string | FormEvent) {
-    return dispatchKitSelection ? previewDispatchTag(value) : previewDispatchKitTag(value);
+    return dispatchKitSelection && !dispatchPendingCustomer
+      ? previewDispatchTag(value)
+      : previewDispatchKitTag(value);
   }
 
   async function previewDispatchKitTag(value?: string | FormEvent) {
@@ -1853,9 +1859,12 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     if (!scannedValue || dispatchScanRequestRef.current) return;
     dispatchScanRequestRef.current = true;
     setCheckingTag(true);
+    const pendingCustomer = dispatchPendingCustomer;
     setDispatchConfirmation(null);
     setTagPreview(null);
     setNotice(null);
+    let retryCustomerPayload = "";
+    let retrySelections: DispatchKitSelection[] = [];
     try {
       const response = await fetch("/api/due", {
         method: "POST", headers: { "content-type": "application/json" },
@@ -1863,9 +1872,24 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       });
       const result = await response.json() as { verdict?: string; message?: string; kit?: DispatchKitSelection; error?: string };
       if (!response.ok || result.verdict !== "ready" || !result.kit) throw new Error(result.error || result.message || "ไม่พบ KIT Tag ที่จัดงานแล้ว");
-      setDispatchKitSelection(result.kit);
+      const currentSelections = dispatchKitSelection
+        ? [dispatchKitSelection, ...dispatchAdditionalKitSelections]
+        : [];
+      if (result.kit.pickId > 0 && currentSelections.some((item) => item.pickId === result.kit?.pickId)) {
+        throw new Error("KIT Tag ใบนี้ถูกยิงไว้แล้ว กรุณายิงอีกใบที่จัดมาด้วยกัน");
+      }
+      const nextSelections = [...currentSelections, result.kit];
+      setDispatchKitSelection(nextSelections[0]);
+      setDispatchAdditionalKitSelections(nextSelections.slice(1));
       setRawTag("");
-      setNotice({ type: "success", text: `พบ KIT Tag ${result.kit.stockTagCode} · ${result.kit.materialCode} · ${fmt(result.kit.waitingQty)} ชิ้น กรุณาสแกน Tag ลูกค้า` });
+      if (pendingCustomer?.tag?.rawPayload) {
+        retryCustomerPayload = pendingCustomer.tag.rawPayload;
+        retrySelections = nextSelections;
+        setDispatchPendingCustomer(null);
+        setNotice({ type: "success", text: `รับ KIT Tag เพิ่มแล้ว กำลังตรวจยอดรวม ${fmt(pendingCustomer.tag.qty)} ชิ้น` });
+      } else {
+        setNotice({ type: "success", text: `พบ KIT Tag ${result.kit.stockTagCode} · ${result.kit.materialCode} · ${fmt(result.kit.waitingQty)} ชิ้น กรุณาสแกน Tag ลูกค้า` });
+      }
       window.setTimeout(() => tagInput.current?.focus(), 80);
     } catch (caught) {
       setNotice({ type: "error", text: caught instanceof Error ? caught.message : "ตรวจสอบ KIT Tag ไม่สำเร็จ" });
@@ -1874,9 +1898,10 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       dispatchScanRequestRef.current = false;
       setCheckingTag(false);
     }
+    if (retryCustomerPayload) void previewDispatchTag(retryCustomerPayload, retrySelections);
   }
 
-  async function previewDispatchTag(value?: string | FormEvent) {
+  async function previewDispatchTag(value?: string | FormEvent, selectionsOverride?: DispatchKitSelection[]) {
     const event = typeof value === "object" ? value : undefined;
     event?.preventDefault();
     if (dispatchScanTimerRef.current !== null) {
@@ -1888,7 +1913,8 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       setNotice({ type: "error", text: "กรุณาเลือกวันที่ส่งงานก่อนสแกน Tag ลูกค้า" });
       return;
     }
-    if (!dispatchKitSelection) {
+    const selectedKits = selectionsOverride || (dispatchKitSelection ? [dispatchKitSelection, ...dispatchAdditionalKitSelections] : []);
+    if (!selectedKits.length) {
       setNotice({ type: "error", text: "กรุณาสแกน KIT Tag ที่จัดงานแล้วก่อน" });
       return;
     }
@@ -1904,7 +1930,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       const response = await fetch("/api/due", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ rawPayload: scannedValue, mode: "dispatch_verify", pickId: dispatchKitSelection.pickId, stockTagCode: dispatchKitSelection.stockTagCode, deliveryDate: effectiveDispatchDueDate, deliveryTime: dispatchDueTime, fact: dispatchDueFact }),
+        body: JSON.stringify({ rawPayload: scannedValue, mode: "dispatch_verify", selectedKits: selectedKits.map(({ pickId, stockTagCode }) => ({ pickId, stockTagCode })), deliveryDate: effectiveDispatchDueDate, deliveryTime: dispatchDueTime, fact: dispatchDueFact }),
         signal: controller.signal,
       });
       const contentType = response.headers.get("content-type") || "";
@@ -1916,6 +1942,13 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       if (!response.ok || !contentType.includes("application/json")) throw new Error(responseError || responseMessage || "ตรวจสอบ Tag ไม่สำเร็จ");
       setRawTag(scannedValue);
       setDispatchConfirmation(result);
+      if (result.verdict === "need_more_kit") {
+        setDispatchPendingCustomer(result);
+        setNotice({ type: "error", text: result.message || "จำนวน KIT Tag ยังไม่ครบ กรุณายิง KIT Tag เพิ่ม" });
+        window.setTimeout(() => tagInput.current?.focus(), 80);
+      } else {
+        setDispatchPendingCustomer(null);
+      }
       if(result.verdict !== "ready" && result.verdict !== "ready_noimg") reportOperationWarning({page:'dispatch',message:result.message || 'ข้อมูลไม่พร้อมขายออก',showPopup:false,context:{verdict:result.verdict,tagId:result.tag?.tagId || '',materialCode:result.tag?.materialCode || ''}});
     } catch (caught) {
       const message = caught instanceof DOMException && caught.name === "AbortError"
@@ -1941,7 +1974,8 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     const event = typeof value === "object" ? value : undefined;
     event?.preventDefault();
     const scannedValue = typeof value === "string" ? value.trim() : rawTag.trim();
-    if (!scannedValue || checkingTag) return;
+    const primaryKit = dispatchKitSelection;
+    if (!scannedValue || checkingTag || !primaryKit) return;
     setCheckingTag(true);
     setTagPreview(null);
     setNotice(null);
@@ -1949,13 +1983,15 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       const response = await fetch("/api/due", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ rawPayload: scannedValue, pickId: dispatchKitSelection?.pickId, stockTagCode: dispatchKitSelection?.stockTagCode, deliveryDate: scope?.deliveryDate || effectiveDispatchDueDate, deliveryTime: scope?.deliveryTime ?? dispatchDueTime, fact: scope?.fact ?? dispatchDueFact }),
+        body: JSON.stringify({ rawPayload: scannedValue, selectedKits: [primaryKit, ...dispatchAdditionalKitSelections].map(({ pickId, stockTagCode }) => ({ pickId, stockTagCode })), deliveryDate: scope?.deliveryDate || effectiveDispatchDueDate, deliveryTime: scope?.deliveryTime ?? dispatchDueTime, fact: scope?.fact ?? dispatchDueFact }),
       });
       const result = await response.json() as TagPreview & { action?: string; error?: string };
       if (!response.ok) throw new Error(result.error || "บันทึก Tag ไม่สำเร็จ");
       setTagPreview(result);
       setRawTag("");
       setDispatchKitSelection(null);
+      setDispatchAdditionalKitSelections([]);
+      setDispatchPendingCustomer(null);
       setNotice({ type: "success", text: `ขายออก ตัด Stock และ Due ${result.due.materialCode} สำเร็จ เหลือ Due ${fmt(result.due.remainingAfter)} ชิ้น` });
       await Promise.all([loadDue(), loadStock()]);
       window.setTimeout(() => {
@@ -4152,18 +4188,18 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       <section className="dispatch-scope-panel">
         <header><span>▤</span><div><h3>เลือก Due ที่จะตรวจและขายออก</h3><p>เลือกวันที่ รอบส่งงาน และ FAC ก่อนสแกน Tag ลูกค้า ระบบจะตรวจเฉพาะงานในขอบเขตนี้</p></div></header>
         <div className="dispatch-scope-grid">
-          <label><span>วันที่ส่งงาน *</span><select aria-label="วันที่ส่งงานสำหรับตรวจและขายออก" disabled={checkingTag} value={effectiveDispatchDueDate} onChange={(event) => { setDispatchDueDate(event.target.value); setDispatchDueTime(""); setDispatchDueFact(""); setRawTag(""); setDispatchKitSelection(null); setDispatchConfirmation(null); setTagPreview(null); }}><option value="">เลือกวันที่ส่งงาน</option>{dispatchDueDates.map((date) => <option key={date} value={date}>{formatDate(date)} · {fmt(dispatchableDues.filter((due) => due.deliveryDate === date).length)} รายการรอขาย</option>)}</select></label>
-          <label><span>รอบส่งงาน</span><select aria-label="รอบส่งงานสำหรับตรวจและขายออก" disabled={checkingTag || !effectiveDispatchDueDate} value={dispatchDueTime} onChange={(event) => { setDispatchDueDate(effectiveDispatchDueDate); setDispatchDueTime(event.target.value); setDispatchDueFact(""); setRawTag(""); setDispatchKitSelection(null); setDispatchConfirmation(null); setTagPreview(null); }}><option value="">ทุกรอบ</option>{dispatchDueTimes.map((time) => <option key={time} value={time}>{time}</option>)}</select></label>
-          <label><span>FAC</span><select aria-label="FAC สำหรับตรวจและขายออก" disabled={checkingTag || !effectiveDispatchDueDate} value={dispatchDueFact} onChange={(event) => { setDispatchDueDate(effectiveDispatchDueDate); setDispatchDueFact(event.target.value); setRawTag(""); setDispatchKitSelection(null); setDispatchConfirmation(null); setTagPreview(null); }}><option value="">ทุก FAC</option>{dispatchDueFacts.map((fact) => <option key={fact} value={fact}>{fact}</option>)}</select></label>
+          <label><span>วันที่ส่งงาน *</span><select aria-label="วันที่ส่งงานสำหรับตรวจและขายออก" disabled={checkingTag} value={effectiveDispatchDueDate} onChange={(event) => { setDispatchDueDate(event.target.value); setDispatchDueTime(""); setDispatchDueFact(""); setRawTag(""); setDispatchKitSelection(null); setDispatchAdditionalKitSelections([]); setDispatchPendingCustomer(null); setDispatchConfirmation(null); setTagPreview(null); }}><option value="">เลือกวันที่ส่งงาน</option>{dispatchDueDates.map((date) => <option key={date} value={date}>{formatDate(date)} · {fmt(dispatchableDues.filter((due) => due.deliveryDate === date).length)} รายการรอขาย</option>)}</select></label>
+          <label><span>รอบส่งงาน</span><select aria-label="รอบส่งงานสำหรับตรวจและขายออก" disabled={checkingTag || !effectiveDispatchDueDate} value={dispatchDueTime} onChange={(event) => { setDispatchDueDate(effectiveDispatchDueDate); setDispatchDueTime(event.target.value); setDispatchDueFact(""); setRawTag(""); setDispatchKitSelection(null); setDispatchAdditionalKitSelections([]); setDispatchPendingCustomer(null); setDispatchConfirmation(null); setTagPreview(null); }}><option value="">ทุกรอบ</option>{dispatchDueTimes.map((time) => <option key={time} value={time}>{time}</option>)}</select></label>
+          <label><span>FAC</span><select aria-label="FAC สำหรับตรวจและขายออก" disabled={checkingTag || !effectiveDispatchDueDate} value={dispatchDueFact} onChange={(event) => { setDispatchDueDate(effectiveDispatchDueDate); setDispatchDueFact(event.target.value); setRawTag(""); setDispatchKitSelection(null); setDispatchAdditionalKitSelections([]); setDispatchPendingCustomer(null); setDispatchConfirmation(null); setTagPreview(null); }}><option value="">ทุก FAC</option>{dispatchDueFacts.map((fact) => <option key={fact} value={fact}>{fact}</option>)}</select></label>
           <div className="dispatch-scope-summary"><small>ขอบเขตที่เลือก</small><b>{effectiveDispatchDueDate ? `${formatDate(effectiveDispatchDueDate)} · รอบ ${dispatchDueTime || "ทั้งหมด"} · ${dispatchDueFact || "ทุก FAC"}` : "ยังไม่มีงานจัดรอขาย"}</b><span>{fmt(dispatchScopeDues.length)} รายการ · รอขาย {fmt(dispatchScopeDues.reduce((sum, due) => sum + Number(due.arrangedQty || 0), 0))} ชิ้น</span></div>
         </div>
       </section>
       {canEditPage("dispatch") && <div className="scan-layout">
         <section className="scanner-card">
-          <div className="scanner-title"><div><h3>{dispatchKitSelection ? "ขั้นตอนที่ 2: สแกน Tag ลูกค้า" : "ขั้นตอนที่ 1: สแกน KIT Tag ที่จัดงานแล้ว"}</h3><p>{dispatchKitSelection ? "ระบบจะตรวจ Part จำนวน Due รอบ และ FAC ให้ตรงกับ KIT Tag ก่อนขายออก" : "ต้องเป็น KIT Tag ที่เคยสแกนในหน้าจัดงานและยังมีจำนวนรอขาย"}</p></div><button className="camera-button" disabled={!effectiveDispatchDueDate || checkingTag} onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>▣ เปิดกล้อง</button></div>
-          {dispatchKitSelection && <div className="dispatch-staged-note"><b>✓ KIT Tag: {dispatchKitSelection.stockTagCode}</b> · Part {dispatchKitSelection.materialCode} · Job {dispatchKitSelection.jobNo || "—"} · รอขาย {fmt(dispatchKitSelection.waitingQty)} ชิ้น <button type="button" className="text-button" onClick={() => { setDispatchKitSelection(null); setRawTag(""); setDispatchConfirmation(null); window.setTimeout(() => tagInput.current?.focus(), 50); }}>เปลี่ยน KIT Tag</button></div>}
-          <button type="button" className="scanner-visual" aria-label={dispatchKitSelection ? "เปิดกล้องสแกน Tag ลูกค้า" : "เปิดกล้องสแกน KIT Tag"} disabled={!effectiveDispatchDueDate || checkingTag} onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}><span className="scan-frame"><span className="qr-symbol">▦</span><b>{checkingTag ? "กำลังตรวจสอบ…" : effectiveDispatchDueDate ? dispatchKitSelection ? "พร้อมรับ Tag ลูกค้า" : "พร้อมรับ KIT Tag" : "กรุณาเลือกวันที่ส่งงาน"}</b><small>{dispatchKitSelection ? "สแกน Tag ลูกค้าที่ติดกับงานกล่องเดียวกัน" : "สแกน KIT Tag ที่จัดงานไว้ก่อน"}</small><i /></span></button>
-          <form className="manual-scan" onSubmit={handleDispatchScan}><label><span>{dispatchKitSelection ? "Tag ลูกค้า / ข้อมูลจาก QR" : "KIT Tag / ข้อมูลจาก QR"}</span><input ref={tagInput} value={rawTag} disabled={!effectiveDispatchDueDate} onChange={(e) => updateDispatchScannerValue(e.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void handleDispatchScan(value); } }} placeholder={effectiveDispatchDueDate ? dispatchKitSelection ? "ยิง Tag ลูกค้า" : "ยิง KIT Tag ที่จัดงานแล้ว" : "เลือกวันที่ส่งงานก่อน"} autoComplete="off" /></label><button className="button primary" disabled={!effectiveDispatchDueDate || !rawTag.trim() || checkingTag}>{checkingTag ? "กำลังตรวจสอบ…" : dispatchKitSelection ? "ตรวจสอบคู่ Tag" : "ตรวจสอบ KIT Tag"}</button></form>
+          <div className="scanner-title"><div><h3>{dispatchPendingCustomer ? "ขั้นตอนเพิ่มเติม: สแกน KIT Tag ให้ครบ" : dispatchKitSelection ? "ขั้นตอนที่ 2: สแกน Tag ลูกค้า" : "ขั้นตอนที่ 1: สแกน KIT Tag ที่จัดงานแล้ว"}</h3><p>{dispatchPendingCustomer ? `Tag ลูกค้า ${fmt(dispatchPendingCustomer.tag?.qty || 0)} ชิ้น · KIT รวม ${fmt(dispatchPendingCustomer.stagedAvail || 0)} ชิ้น · ยังขาด ${fmt(dispatchPendingCustomer.missingQty || 0)} ชิ้น` : dispatchKitSelection ? "ระบบจะตรวจ Part จำนวน Due รอบ และ FAC ให้ตรงกับ KIT Tag ก่อนขายออก" : "ต้องเป็น KIT Tag ที่เคยสแกนในหน้าจัดงานและยังมีจำนวนรอขาย"}</p></div><button className="camera-button" disabled={!effectiveDispatchDueDate || checkingTag} onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}>▣ เปิดกล้อง</button></div>
+          {dispatchKitSelection && <div className="dispatch-staged-note"><b>✓ KIT Tag ที่ยิงแล้ว {[dispatchKitSelection, ...dispatchAdditionalKitSelections].length} ใบ:</b> {[dispatchKitSelection, ...dispatchAdditionalKitSelections].map((item) => item.stockTagCode).join(" + ")} · Part {dispatchKitSelection.materialCode} <button type="button" className="text-button" onClick={() => { setDispatchKitSelection(null); setDispatchAdditionalKitSelections([]); setDispatchPendingCustomer(null); setRawTag(""); setDispatchConfirmation(null); window.setTimeout(() => tagInput.current?.focus(), 50); }}>ล้าง KIT Tag</button></div>}
+          <button type="button" className="scanner-visual" aria-label={dispatchKitSelection && !dispatchPendingCustomer ? "เปิดกล้องสแกน Tag ลูกค้า" : "เปิดกล้องสแกน KIT Tag"} disabled={!effectiveDispatchDueDate || checkingTag} onClick={() => { setCameraPurpose("scan"); setCameraOpen(true); }}><span className="scan-frame"><span className="qr-symbol">▦</span><b>{checkingTag ? "กำลังตรวจสอบ…" : effectiveDispatchDueDate ? dispatchPendingCustomer ? "รอ KIT Tag เพิ่ม" : dispatchKitSelection ? "พร้อมรับ Tag ลูกค้า" : "พร้อมรับ KIT Tag" : "กรุณาเลือกวันที่ส่งงาน"}</b><small>{dispatchPendingCustomer ? `กรุณายิง KIT Tag อีกใบให้ครบ ${fmt(dispatchPendingCustomer.tag?.qty || 0)} ชิ้น` : dispatchKitSelection ? "สแกน Tag ลูกค้าที่ติดกับงานชุดเดียวกัน" : "สแกน KIT Tag ที่จัดงานไว้ก่อน"}</small><i /></span></button>
+          <form className="manual-scan" onSubmit={handleDispatchScan}><label><span>{dispatchKitSelection && !dispatchPendingCustomer ? "Tag ลูกค้า / ข้อมูลจาก QR" : "KIT Tag / ข้อมูลจาก QR"}</span><input ref={tagInput} value={rawTag} disabled={!effectiveDispatchDueDate} onChange={(e) => updateDispatchScannerValue(e.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); const value = event.currentTarget.value.trim(); if (value) void handleDispatchScan(value); } }} placeholder={effectiveDispatchDueDate ? dispatchPendingCustomer ? "ยิง KIT Tag ใบถัดไป" : dispatchKitSelection ? "ยิง Tag ลูกค้า" : "ยิง KIT Tag ที่จัดงานแล้ว" : "เลือกวันที่ส่งงานก่อน"} autoComplete="off" /></label><button className="button primary" disabled={!effectiveDispatchDueDate || !rawTag.trim() || checkingTag}>{checkingTag ? "กำลังตรวจสอบ…" : dispatchPendingCustomer ? "เพิ่ม KIT Tag" : dispatchKitSelection ? "ตรวจสอบคู่ Tag" : "ตรวจสอบ KIT Tag"}</button></form>
         </section>
         <section className="tag-result" ref={tagResultRef}>
           <header><div><p>Customer Tag / Due</p><h3>{tagPreview?.due.materialCode || "รอการสแกน"}</h3></div><span className={`status ${tagPreview ? "completed" : "pending"}`}>{tagPreview ? "ขายออกสำเร็จ" : "ยังไม่มี Tag"}</span></header>
@@ -4187,6 +4223,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     const TONE: Record<VerifyVerdict, { tone: "pass" | "warn" | "fail"; icon: string; title: string }> = {
       ready: { tone: "pass", icon: "✓", title: "ตรงกับงานที่ต้องส่งออก" },
       ready_noimg: { tone: "pass", icon: "✓", title: "ตรงกับงาน (ยังไม่มีรูป master)" },
+      need_more_kit: { tone: "warn", icon: "!", title: "ต้องสแกน KIT Tag เพิ่ม" },
       short: { tone: "warn", icon: "!", title: "งานที่จัดรอไว้ไม่พอ" },
       over: { tone: "warn", icon: "!", title: "จำนวนเกินแผน Due" },
       no_due: { tone: "fail", icon: "✕", title: "ไม่พบงานที่ตรงกับ Tag นี้" },
@@ -4880,12 +4917,12 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
         <section className="dispatch-confirm-images"><PartImagePair materialCode={dispatchConfirmation.tag?.materialCode || dispatchConfirmation.master?.materialCode || ""} masterVersion={partImages.find((item) => item.materialCode === (dispatchConfirmation.tag?.materialCode || dispatchConfirmation.master?.materialCode))?.updatedAt} actualVersion={partActualImages.find((item) => item.materialCode === (dispatchConfirmation.tag?.materialCode || dispatchConfirmation.master?.materialCode))?.updatedAt} /></section>
         <section className="dispatch-confirm-info">
           <div className="dispatch-confirm-part"><small>PART / MATERIAL</small><b>{dispatchConfirmation.tag?.materialCode || dispatchConfirmation.master?.materialCode || "—"}</b><p>{dispatchConfirmation.master?.partName || dispatchConfirmation.due?.materialDescription || "ไม่ระบุชื่อชิ้นงาน"}</p></div>
-          <div className="dispatch-confirm-details"><div><small>KIT Tag</small><b>{dispatchKitSelection?.stockTagCode || "—"}</b></div><div><small>Tag ลูกค้า</small><b>{dispatchConfirmation.tag?.tagId || "—"}</b></div><div><small>FAC / Line</small><b>{dispatchConfirmation.due ? dispatchConfirmation.due.fact + " / " + (dispatchConfirmation.due.line || "—") : "—"}</b></div><div><small>DO / Seq</small><b>{dispatchConfirmation.due ? dispatchConfirmation.due.doNo + " / " + dispatchConfirmation.due.seq : "—"}</b></div><div><small>กำหนดส่ง</small><b>{dispatchConfirmation.due ? formatDate(dispatchConfirmation.due.deliveryDate) + " " + dispatchConfirmation.due.deliveryTime : "—"}</b></div><div><small>Job / จำนวน KIT</small><b>{dispatchKitSelection ? `${dispatchKitSelection.jobNo || "—"} / ${fmt(dispatchKitSelection.waitingQty)} ชิ้น` : "—"}</b></div></div>
+          <div className="dispatch-confirm-details"><div><small>KIT Tag ({[dispatchKitSelection, ...dispatchAdditionalKitSelections].filter(Boolean).length} ใบ)</small><b>{[dispatchKitSelection, ...dispatchAdditionalKitSelections].filter(Boolean).map((item) => item?.stockTagCode).join(" + ") || "—"}</b></div><div><small>Tag ลูกค้า</small><b>{dispatchConfirmation.tag?.tagId || "—"}</b></div><div><small>FAC / Line</small><b>{dispatchConfirmation.due ? dispatchConfirmation.due.fact + " / " + (dispatchConfirmation.due.line || "—") : "—"}</b></div><div><small>DO / Seq</small><b>{dispatchConfirmation.due ? dispatchConfirmation.due.doNo + " / " + dispatchConfirmation.due.seq : "—"}</b></div><div><small>กำหนดส่ง</small><b>{dispatchConfirmation.due ? formatDate(dispatchConfirmation.due.deliveryDate) + " " + dispatchConfirmation.due.deliveryTime : "—"}</b></div><div><small>จำนวน KIT รวม</small><b>{fmt(dispatchConfirmation.stagedAvail || 0)} ชิ้น</b></div></div>
           <div className="dispatch-confirm-qty"><div><small>Due ทั้งหมด</small><b>{fmt(dispatchConfirmation.due?.reqQty || 0)}</b><em>ชิ้น</em></div><div><small>ขายออกแล้ว</small><b>{fmt(dispatchConfirmation.due?.alreadyQty || 0)}</b><em>ชิ้น</em></div><div className="current"><small>ขายครั้งนี้</small><b>{fmt(dispatchConfirmation.tag?.qty || 0)}</b><em>{dispatchConfirmation.tag?.unit || "ชิ้น"}</em></div><div><small>คงเหลือหลังขาย</small><b>{fmt(dispatchConfirmation.due?.remainingAfter || 0)}</b><em>ชิ้น</em></div></div>
           {dispatchConfirmation.stagedAvail !== undefined && <p className="dispatch-staged-note">งานที่จัดรอขายไว้ {fmt(dispatchConfirmation.stagedAvail)} ชิ้น</p>}
         </section>
       </div>
-      {(dispatchConfirmation.verdict === "ready" || dispatchConfirmation.verdict === "ready_noimg") ? <footer><button type="button" className="button secondary" onClick={() => { setDispatchConfirmation(null); setRawTag(""); }}>ยกเลิก / สแกน Tag ลูกค้าใหม่</button><button type="button" className="button confirm-dispatch-button" disabled={checkingTag} onClick={() => void confirmDispatch()}>{checkingTag ? "กำลังขายออก…" : "✓ ยืนยันขายออกและตัดยอด"}</button></footer> : <footer className="dispatch-confirm-blocked"><p>ไม่สามารถขายออกได้: {dispatchConfirmation.message || "ข้อมูลไม่พร้อมขายออก"}</p><button type="button" className="button secondary" onClick={() => { setDispatchConfirmation(null); setRawTag(""); window.setTimeout(() => tagInput.current?.focus(), 50); }}>เก็บ KIT Tag / สแกนลูกค้าใหม่</button><button type="button" className="button secondary" onClick={() => { setDispatchConfirmation(null); setDispatchKitSelection(null); setRawTag(""); window.setTimeout(() => tagInput.current?.focus(), 50); }}>ล้างทั้งคู่ / เริ่มใหม่</button></footer>}
+      {(dispatchConfirmation.verdict === "ready" || dispatchConfirmation.verdict === "ready_noimg") ? <footer><button type="button" className="button secondary" onClick={() => { setDispatchConfirmation(null); setRawTag(""); }}>ยกเลิก / สแกน Tag ลูกค้าใหม่</button><button type="button" className="button confirm-dispatch-button" disabled={checkingTag} onClick={() => void confirmDispatch()}>{checkingTag ? "กำลังขายออก…" : "✓ ยืนยันขายออกและตัดยอด"}</button></footer> : dispatchConfirmation.verdict === "need_more_kit" ? <footer className="dispatch-confirm-blocked"><p>{dispatchConfirmation.message}</p><button type="button" className="button confirm-dispatch-button" onClick={() => { setDispatchConfirmation(null); setRawTag(""); window.setTimeout(() => tagInput.current?.focus(), 50); }}>สแกน KIT Tag เพิ่มอีกใบ</button><button type="button" className="button secondary" onClick={() => { setDispatchConfirmation(null); setDispatchPendingCustomer(null); setDispatchKitSelection(null); setDispatchAdditionalKitSelections([]); setRawTag(""); window.setTimeout(() => tagInput.current?.focus(), 50); }}>ยกเลิก / เริ่มใหม่</button></footer> : <footer className="dispatch-confirm-blocked"><p>ไม่สามารถขายออกได้: {dispatchConfirmation.message || "ข้อมูลไม่พร้อมขายออก"}</p><button type="button" className="button secondary" onClick={() => { setDispatchConfirmation(null); setRawTag(""); window.setTimeout(() => tagInput.current?.focus(), 50); }}>เก็บ KIT Tag / สแกนลูกค้าใหม่</button><button type="button" className="button secondary" onClick={() => { setDispatchConfirmation(null); setDispatchPendingCustomer(null); setDispatchKitSelection(null); setDispatchAdditionalKitSelections([]); setRawTag(""); window.setTimeout(() => tagInput.current?.focus(), 50); }}>ล้างทั้งหมด / เริ่มใหม่</button></footer>}
     </div></div>}
     {jobQtyAdjustment && <div className="modal-backdrop job-qty-adjust-backdrop" role="dialog" aria-modal="true" aria-labelledby="job-qty-adjust-title"><section className="job-qty-adjust-modal">
       <header><div><span>±</span><div><small>ก่อนปิดรับเข้า Job</small><h3 id="job-qty-adjust-title">ปรับจำนวนผลิตจริง</h3></div></div><button type="button" disabled={jobQtySaving} onClick={closeJobQuantityAdjustment} aria-label="ปิด">×</button></header>
@@ -4907,7 +4944,7 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
       </div>
       <footer>{!jobQtyPreview && !jobQtyAdjusted ? <><button type="button" className="button secondary" onClick={closeJobQuantityAdjustment}>ยกเลิก</button><button type="submit" form="job-qty-adjust-form" className="button primary" disabled={jobQtySaving}>{jobQtySaving ? "กำลังตรวจสอบ…" : "ตรวจสอบ Tag ที่จะเปลี่ยน"}</button></> : jobQtyAdjusted ? <><button type="button" className="button secondary" onClick={closeJobQuantityAdjustment}>ปิด</button>{jobQtyCreatedTags.length > 0 && <><button type="button" className="button secondary" onClick={() => void printStockTags(jobQtyCreatedTags, "a4")}>▤ A4</button><button type="button" className="button primary" onClick={() => void printStockTags(jobQtyCreatedTags, "100x55")}>▤ RPP04</button></>}</> : <><button type="button" className="button secondary" disabled={jobQtySaving} onClick={() => setJobQtyPreview(null)}>กลับไปแก้ไข</button><button type="button" className="button primary" disabled={jobQtySaving} onClick={() => void confirmJobQuantityAdjustment()}>{jobQtySaving ? "กำลังบันทึก…" : "✓ ยืนยันปรับจำนวนผลิตจริง"}</button></>}</footer>
     </section></div>}
-    {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>{cameraPurpose === "stock" ? stockLocation ? `สแกน KIT Tag รับเข้าชั้น ${stockLocation.code}` : "สแกน QR หน้าชั้นจัดเก็บ" : cameraPurpose === "stock-count" ? "สแกน Tag ตรวจนับสิ้นเดือน" : page === "dispatch" && dispatchKitSelection ? "สแกน QR Tag ลูกค้า (โหมดละเอียด)" : "สแกน Tag ด้วยกล้อง"}</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className={`camera-view ${page === "dispatch" && dispatchKitSelection ? "customer-qr-camera" : ""}`}><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div>{page === "dispatch" && dispatchKitSelection ? <p className="camera-customer-hint"><b>นำเฉพาะช่อง QR เข้าในกรอบสีเขียว</b><span>ไม่ต้องให้ป้ายทั้งใบอยู่ในภาพ · ถือให้นิ่งประมาณ 1 วินาที</span></p> : <p className="camera-format-hint">รองรับ QR · Data Matrix · Code 128 · Code 39</p>}{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
+    {cameraOpen && <div className="modal-backdrop"><div className="camera-modal"><header><h3>{cameraPurpose === "stock" ? stockLocation ? `สแกน KIT Tag รับเข้าชั้น ${stockLocation.code}` : "สแกน QR หน้าชั้นจัดเก็บ" : cameraPurpose === "stock-count" ? "สแกน Tag ตรวจนับสิ้นเดือน" : page === "dispatch" && dispatchKitSelection && !dispatchPendingCustomer ? "สแกน QR Tag ลูกค้า (โหมดละเอียด)" : page === "dispatch" && dispatchPendingCustomer ? "สแกน KIT Tag เพิ่มให้ครบ" : "สแกน Tag ด้วยกล้อง"}</h3><button onClick={() => setCameraOpen(false)}>×</button></header><div className={`camera-view ${page === "dispatch" && dispatchKitSelection && !dispatchPendingCustomer ? "customer-qr-camera" : ""}`}><video ref={videoRef} playsInline muted /><div className="camera-frame" /></div>{page === "dispatch" && dispatchKitSelection && !dispatchPendingCustomer ? <p className="camera-customer-hint"><b>นำเฉพาะช่อง QR เข้าในกรอบสีเขียว</b><span>ไม่ต้องให้ป้ายทั้งใบอยู่ในภาพ · ถือให้นิ่งประมาณ 1 วินาที</span></p> : <p className="camera-format-hint">รองรับ QR · Data Matrix · Code 128 · Code 39</p>}{cameraError && <p className="camera-error">{cameraError}</p>}<button className="button secondary full" onClick={() => setCameraOpen(false)}>ปิดกล้อง</button></div></div>}
     {splitTagRequest&&<SplitTagPopup {...splitTagRequest} page={page} onClose={closeSplitTag}/>}
     <OperationWarningPopup voiceEnabled={settings.sound}/>
     {userEditorOpen && <div className="modal-backdrop"><form className="user-modal permission-modal" onSubmit={saveUser}>

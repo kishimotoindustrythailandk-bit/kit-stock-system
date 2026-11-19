@@ -429,7 +429,9 @@ function toBase64Url(bytes: Uint8Array) {
 
 async function gzip(bytes: Uint8Array) {
   if (!("CompressionStream" in window)) return { bytes, encoding: "raw" } as const;
-  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"));
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  const stream = new Blob([copy.buffer]).stream().pipeThrough(new CompressionStream("gzip"));
   return { bytes: new Uint8Array(await new Response(stream).arrayBuffer()), encoding: "gzip" } as const;
 }
 
