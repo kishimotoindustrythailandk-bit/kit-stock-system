@@ -22,33 +22,39 @@ test("3D floor exposes all seven stations and routes Tag work through Production
 });
 
 test("each 3D station pauses when idle and the user can disable animation", async () => {
-  const [source, css] = await Promise.all([
+  const [source, scene, css] = await Promise.all([
     read("app/dashboard-operations-floor.tsx"),
+    read("app/dashboard-three-scene.tsx"),
     read("app/dashboard-operations-floor.module.css"),
   ]);
   assert.match(source, /setAnimationEnabled\(\(current\) => !current\)/);
-  assert.match(source, /animationEnabled && station\.active/);
   assert.match(source, /motion: "forklift"/);
   assert.match(source, /เปิด Animation/);
   assert.match(source, /ปิด Animation/);
-  assert.match(css, /animation-play-state:paused/);
-  assert.match(css, /@keyframes forkliftDrive/);
+  assert.match(scene, /animationRef\.current && liveStations\.find/);
+  assert.match(scene, /if \(active\)/);
   assert.match(css, /@media\(prefers-reduced-motion:reduce\)/);
 });
 
-test("interactive 3D floor supports drag rotation, zoom, reset, and keyboard control", async () => {
-  const [source, css] = await Promise.all([
+test("real WebGL 3D floor supports drag rotation, zoom, reset, keyboard, and station raycasting", async () => {
+  const [source, scene, css] = await Promise.all([
     read("app/dashboard-operations-floor.tsx"),
+    read("app/dashboard-three-scene.tsx"),
     read("app/dashboard-operations-floor.module.css"),
   ]);
-  assert.match(source, /beginCameraDrag/);
-  assert.match(source, /moveCamera/);
-  assert.match(source, /wheelCamera/);
-  assert.match(source, /keyboardCamera/);
-  assert.match(source, /resetCamera/);
-  assert.match(source, /360° Interactive/);
-  assert.match(source, /perspective\(1150px\).*rotateX.*rotateY.*scale/);
-  assert.match(css, /transform-style:preserve-3d/);
+  assert.match(source, /WebGL 3D จริง/);
+  assert.match(source, /<DashboardThreeScene/);
+  assert.match(scene, /import \* as THREE from "three"/);
+  assert.match(scene, /new THREE\.WebGLRenderer/);
+  assert.match(scene, /new THREE\.Raycaster/);
+  assert.match(scene, /pointerdown/);
+  assert.match(scene, /pointermove/);
+  assert.match(scene, /wheel/);
+  assert.match(scene, /keydown/);
+  assert.match(scene, /createWorker/);
+  assert.match(scene, /createForklift/);
+  assert.match(scene, /createTruck/);
+  assert.match(scene, /createRack/);
   assert.match(css, /cursor:grab/);
   assert.match(css, /touch-action:none/);
 });
@@ -73,10 +79,15 @@ test("dashboard API derives total Stock without double counting", async () => {
   assert.match(source, /forecastQty - coalesce\(dispatched\.dispatchedQty, 0\)/);
 });
 
-test("responsive floor uses a compressed static WebP and horizontal mobile viewport", async () => {
-  const css = await read("app/dashboard-operations-floor.module.css");
-  const image = await readFile(new URL("public/dashboard/kit-operations-floor-v2.webp", root));
-  assert.match(css, /kit-operations-floor-v2\.webp/);
-  assert.match(css, /overflow-x:auto/);
-  assert.ok(image.byteLength < 300_000, `dashboard asset is too large: ${image.byteLength} bytes`);
+test("dashboard no longer renders the static factory picture and keeps a mobile WebGL fallback", async () => {
+  const [source, scene, css] = await Promise.all([
+    read("app/dashboard-operations-floor.tsx"),
+    read("app/dashboard-three-scene.tsx"),
+    read("app/dashboard-operations-floor.module.css"),
+  ]);
+  assert.doesNotMatch(source, /kit-operations-floor-v2\.webp/);
+  assert.doesNotMatch(css, /kit-operations-floor-v2\.webp/);
+  assert.match(scene, /อุปกรณ์นี้ไม่รองรับ WebGL 3D/);
+  assert.match(scene, /Math\.min\(window\.devicePixelRatio, 1\.6\)/);
+  assert.match(css, /@media\(max-width:600px\)/);
 });
