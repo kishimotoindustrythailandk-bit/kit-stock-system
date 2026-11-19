@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
 import styles from "./dashboard-operations-floor.module.css";
 
 export type DashboardTargetPage = "plan" | "tags" | "stock" | "stock-all" | "arrange" | "dispatch" | "exports" | "forecast" | "history" | "overdue";
@@ -26,6 +27,11 @@ type Station = {
   active: boolean;
   motion: "office" | "machine" | "scanner" | "forklift" | "packing" | "verify" | "loading";
 };
+
+type CameraView = { yaw: number; pitch: number; zoom: number };
+
+const DEFAULT_CAMERA: CameraView = { yaw: 0, pitch: 0, zoom: 1 };
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
 function Worker({ task }: { task: Station["motion"] }) {
   return <svg className={`${styles.worker} ${styles[task]}`} viewBox="0 0 90 92" aria-hidden="true">
@@ -72,7 +78,47 @@ export default function DashboardOperationsFloor({ data, canOpen, onOpen }: {
   onOpen: (page: DashboardTargetPage) => void;
 }) {
   const [animationEnabled, setAnimationEnabled] = useState(true);
+  const [camera, setCamera] = useState<CameraView>(DEFAULT_CAMERA);
+  const [dragging, setDragging] = useState(false);
+  const dragRef = useRef<{ pointerId: number; x: number; y: number; yaw: number; pitch: number } | null>(null);
   const changeAnimation = () => setAnimationEnabled((current) => !current);
+  const resetCamera = () => setCamera(DEFAULT_CAMERA);
+  const rotateCamera = (amount: number) => setCamera((current) => ({ ...current, yaw: clamp(current.yaw + amount, -16, 16) }));
+  const zoomCamera = (amount: number) => setCamera((current) => ({ ...current, zoom: clamp(current.zoom + amount, .78, 1.28) }));
+  const beginCameraDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest("button")) return;
+    dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, yaw: camera.yaw, pitch: camera.pitch };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDragging(true);
+  };
+  const moveCamera = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    setCamera((current) => ({
+      ...current,
+      yaw: clamp(drag.yaw + (event.clientX - drag.x) * .035, -16, 16),
+      pitch: clamp(drag.pitch - (event.clientY - drag.y) * .025, -8, 8),
+    }));
+  };
+  const endCameraDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    setDragging(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+  const wheelCamera = (event: ReactWheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    zoomCamera(event.deltaY > 0 ? -.06 : .06);
+  };
+  const keyboardCamera = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "ArrowLeft") rotateCamera(-2);
+    else if (event.key === "ArrowRight") rotateCamera(2);
+    else if (event.key === "+" || event.key === "=") zoomCamera(.06);
+    else if (event.key === "-") zoomCamera(-.06);
+    else if (event.key === "0") resetCamera();
+    else return;
+    event.preventDefault();
+  };
   const printedWaiting = Math.max(Number(data.process.tagQty || 0) - Number(data.process.receivedQty || 0), 0);
   const stations = useMemo<Station[]>(() => [
     { number: 1, label: "Forecast", sub: "วางแผนความต้องการ (Forecast / Due)", page: "forecast", tone: "blue", value: `${fmt(data.alerts.shortagePartCount)} Part เสี่ยงขาด`, active: data.forecast.length > 0, motion: "office" },
@@ -89,12 +135,35 @@ export default function DashboardOperationsFloor({ data, canOpen, onOpen }: {
       <div><small>KIT 3D OPERATIONS FLOOR</small><h3 id="operations-floor-title">ภาพรวมกระบวนการทำงาน Smart Factory</h3><p>สถานะเคลื่อนไหวอ้างอิงข้อมูลระบบ · เลือกสถานีเพื่อเปิดหน้าการทำงาน</p></div>
       <div className={styles.headingActions}>
         <span className={styles.systemStatus}><i /> สถานะจากข้อมูลระบบ</span>
+        <span className={styles.interactiveBadge}>360° Interactive</span>
         <button type="button" className={styles.animationToggle} aria-pressed={animationEnabled} onClick={changeAnimation}><span>{animationEnabled ? "Ⅱ" : "▶"}</span>{animationEnabled ? "ปิด Animation" : "เปิด Animation"}</button>
       </div>
     </header>
 
-    <div className={styles.viewport}>
-      <div className={styles.floor} role="img" aria-label="โรงงานสามมิติแบบเคลื่อนไหว แสดงกระบวนการ Forecast ถึง Delivery จำนวน 7 สถานี">
+    <div className={styles.cameraToolbar} aria-label="ตัวควบคุมมุมมองโรงงานสามมิติ">
+      <span>ลากพื้นที่ว่างเพื่อหมุน · เลื่อนเมาส์หรือกดปุ่มเพื่อซูม</span>
+      <div>
+        <button type="button" onClick={() => rotateCamera(-3)} aria-label="หมุนมุมมองไปทางซ้าย">↶</button>
+        <button type="button" onClick={() => zoomCamera(-.08)} aria-label="ซูมออก">−</button>
+        <button type="button" onClick={resetCamera} aria-label="คืนมุมมองเริ่มต้น">⌂</button>
+        <button type="button" onClick={() => zoomCamera(.08)} aria-label="ซูมเข้า">＋</button>
+        <button type="button" onClick={() => rotateCamera(3)} aria-label="หมุนมุมมองไปทางขวา">↷</button>
+      </div>
+    </div>
+
+    <div
+      className={`${styles.viewport} ${dragging ? styles.dragging : ""}`}
+      tabIndex={0}
+      onPointerDown={beginCameraDrag}
+      onPointerMove={moveCamera}
+      onPointerUp={endCameraDrag}
+      onPointerCancel={endCameraDrag}
+      onWheel={wheelCamera}
+      onKeyDown={keyboardCamera}
+      aria-label="โรงงานสามมิติแบบโต้ตอบ ใช้ปุ่มลูกศรซ้ายขวาเพื่อหมุน ปุ่มบวกและลบเพื่อซูม และเลขศูนย์เพื่อคืนมุมมอง"
+    >
+      <div className={styles.cameraFrame} style={{ transform: `perspective(1150px) rotateX(${camera.pitch}deg) rotateY(${camera.yaw}deg) scale(${camera.zoom})` }}>
+      <div className={`${styles.floor} ${animationEnabled ? styles.sceneAlive : ""}`} role="img" aria-label="โรงงานสามมิติแบบเคลื่อนไหว แสดงกระบวนการ Forecast ถึง Delivery จำนวน 7 สถานี">
         <div className={styles.motionLayer}>{stations.map((station) => <MotionScene key={station.number} station={station} running={animationEnabled && station.active} />)}</div>
         {stations.map((station) => {
           const enabled = canOpen(station.page);
@@ -111,7 +180,8 @@ export default function DashboardOperationsFloor({ data, canOpen, onOpen }: {
           </button>;
         })}
       </div>
+      </div>
     </div>
-    <div className={styles.floorLegend}><span><i className={styles.legendActive} />มีงาน — Animation ทำงาน</span><span><i />ไม่มีงาน — หยุดอัตโนมัติ</span><small>เลื่อนซ้าย–ขวาเพื่อดูครบทุกจุดบนมือถือ</small></div>
+    <div className={styles.floorLegend}><span><i className={styles.legendActive} />มีงาน — Animation ทำงาน</span><span><i />ไม่มีงาน — หยุดอัตโนมัติ</span><small>มือถือใช้ปุ่มควบคุมมุมมอง หรือใช้นิ้วลากบริเวณพื้นที่ว่าง</small></div>
   </section>;
 }

@@ -9,3 +9,25 @@
 @media(max-width:900px){.heading{align-items:flex-start}.headingActions{max-width:240px}.floor{min-width:940px}.hotspot{min-width:118px;padding:6px 8px}.hotspot strong{font-size:10px}}
 @media(max-width:600px){.shell{border-radius:17px}.heading{display:grid;padding:12px}.heading h3{font-size:17px}.heading p{font-size:9px}.headingActions{justify-content:flex-start;max-width:none}.systemStatus,.animationToggle{font-size:8px}.floor{min-width:860px;aspect-ratio:2.35/1}.floorLegend{gap:10px;flex-wrap:wrap;padding:8px 11px}.floorLegend small{width:100%;margin-left:0}.motion{transform:scale(.9);transform-origin:bottom}.hotspot{max-width:158px}}
 @media(prefers-reduced-motion:reduce){.systemStatus i,.motion *{animation:none!important}.hotspot{transition:none}}
+
+/* Lightweight interactive 3D camera: no runtime 3D library, so scanning pages stay fast. */
+.interactiveBadge{padding:7px 10px;border:1px solid #cbc8fa;border-radius:999px;background:linear-gradient(135deg,#f1f1ff,#ecf8ff);color:#5146c9;font-size:9px;font-weight:900}
+.cameraToolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 14px;border-bottom:1px solid #d9e7f7;background:linear-gradient(90deg,#f8fbff,#eff6ff);color:#68809f;font-size:9px;font-weight:800}
+.cameraToolbar>div{display:flex;align-items:center;gap:5px}
+.cameraToolbar button{display:grid;place-items:center;width:28px;height:26px;border:1px solid #c5daf3;border-radius:8px;background:#fff;color:#176bc8;font-size:15px;font-weight:900;cursor:pointer;box-shadow:0 3px 8px rgba(16,83,158,.08)}
+.cameraToolbar button:hover,.cameraToolbar button:focus-visible{border-color:#4e95e8;background:#eaf4ff;outline:2px solid rgba(41,125,222,.18)}
+.viewport{position:relative;overflow:hidden;min-height:418px;background:radial-gradient(circle at 50% 38%,#e4f2ff,#c8ddf2 68%,#b6cbe0);cursor:grab;touch-action:none;outline:none;perspective:1150px}
+.viewport:focus-visible{box-shadow:inset 0 0 0 3px rgba(29,119,224,.35)}
+.dragging{cursor:grabbing}
+.cameraFrame{position:relative;min-width:1040px;transform-style:preserve-3d;transform-origin:50% 64%;transition:transform .22s ease;will-change:transform}
+.dragging .cameraFrame{transition:none}
+.floor{transform-style:preserve-3d;transform-origin:50% 70%;will-change:transform}
+.sceneAlive{animation:sceneBreathe 7s ease-in-out infinite}
+.motionLayer{transform:translateZ(22px)}
+.hotspot{transform:translate3d(-50%,-100%,40px)}
+.hotspot:hover:not(:disabled),.hotspot:focus-visible{transform:translate3d(-50%,-108%,55px) scale(1.04)}
+@keyframes sceneBreathe{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
+
+@media(max-width:900px){.headingActions{max-width:300px}.cameraToolbar>span{display:none}.cameraToolbar{justify-content:flex-end}.cameraFrame{min-width:940px}}
+@media(max-width:600px){.interactiveBadge{font-size:8px}.cameraToolbar{justify-content:center}.cameraToolbar button{width:34px;height:30px}.viewport{min-height:350px}.cameraFrame{min-width:860px}}
+@media(prefers-reduced-motion:reduce){.sceneAlive{animation:none!important}.cameraFrame{transition:none}}

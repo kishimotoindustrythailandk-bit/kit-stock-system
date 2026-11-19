@@ -36,6 +36,23 @@ test("each 3D station pauses when idle and the user can disable animation", asyn
   assert.match(css, /@media\(prefers-reduced-motion:reduce\)/);
 });
 
+test("interactive 3D floor supports drag rotation, zoom, reset, and keyboard control", async () => {
+  const [source, css] = await Promise.all([
+    read("app/dashboard-operations-floor.tsx"),
+    read("app/dashboard-operations-floor.module.css"),
+  ]);
+  assert.match(source, /beginCameraDrag/);
+  assert.match(source, /moveCamera/);
+  assert.match(source, /wheelCamera/);
+  assert.match(source, /keyboardCamera/);
+  assert.match(source, /resetCamera/);
+  assert.match(source, /360° Interactive/);
+  assert.match(source, /perspective\(1150px\).*rotateX.*rotateY.*scale/);
+  assert.match(css, /transform-style:preserve-3d/);
+  assert.match(css, /cursor:grab/);
+  assert.match(css, /touch-action:none/);
+});
+
 test("hybrid dashboard retains the requested operational panels and voice control", async () => {
   const [dashboard, app, voice] = await Promise.all([
     read("app/dashboard-control-center.tsx"),
