@@ -7,10 +7,8 @@ const read = (path) => readFile(new URL(path, root), "utf8");
 
 test("home dashboard omits the top KPI card strip", async () => {
   const source = await read("app/dashboard-control-center.tsx");
-  for (const label of ["Stock พร้อมใช้", "จัดงานรอส่ง", "คงเหลือรวม", "Part เสี่ยงขาด"]) {
-    assert.doesNotMatch(source, new RegExp(label));
-  }
   assert.doesNotMatch(source, /styles\.kpis/);
+  assert.doesNotMatch(source, /สรุป KPI Stock/);
   assert.match(source, /<DashboardOperationsFloor data=\{data\}/);
 });
 
@@ -21,6 +19,34 @@ test("3D floor exposes all seven stations and routes Tag work through Production
   assert.match(source, /number: 2, label: "Production \/ ออก Tag"[^\n]+page: "tags"/);
   assert.match(source, /number: 3, label: "รับเข้า Stock"[^\n]+page: "stock"/);
   assert.match(source, /page: "stock-all"/);
+});
+
+test("each 3D station pauses when idle and the user can disable animation", async () => {
+  const [source, css] = await Promise.all([
+    read("app/dashboard-operations-floor.tsx"),
+    read("app/dashboard-operations-floor.module.css"),
+  ]);
+  assert.match(source, /setAnimationEnabled\(\(current\) => !current\)/);
+  assert.match(source, /animationEnabled && station\.active/);
+  assert.match(source, /motion: "forklift"/);
+  assert.match(source, /เปิด Animation/);
+  assert.match(source, /ปิด Animation/);
+  assert.match(css, /animation-play-state:paused/);
+  assert.match(css, /@keyframes forkliftDrive/);
+  assert.match(css, /@media\(prefers-reduced-motion:reduce\)/);
+});
+
+test("hybrid dashboard retains the requested operational panels and voice control", async () => {
+  const [dashboard, app, voice] = await Promise.all([
+    read("app/dashboard-control-center.tsx"),
+    read("app/delivery-control-app.tsx"),
+    read("app/voice-alert-control.tsx"),
+  ]);
+  for (const label of ["แนวโน้ม Stock (7 วัน)", "งาน Due วันนี้", "แจ้งเตือนสำคัญ", "กิจกรรมล่าสุด", "เมนูการทำงานหลัก"]) {
+    assert.match(dashboard, new RegExp(label.replace(/[()]/g, "\\$&")));
+  }
+  assert.match(app, /<VoiceAlertControl enabled=\{settings\.sound\}/);
+  assert.match(voice, /เปิด \/ ทดสอบเสียงพูด/);
 });
 
 test("dashboard API derives total Stock without double counting", async () => {
