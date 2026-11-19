@@ -12,7 +12,6 @@ type DashboardData = {
 };
 
 type DetailFilter = { date?: string; fact?: string; status?: "all" | "completed" | "pending" | "over" };
-const fmt = (value: unknown) => new Intl.NumberFormat("th-TH").format(Number(value || 0));
 const today = () => new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
 const thaiUpdated = (value: string) => new Intl.DateTimeFormat("th-TH", {
   day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit",
@@ -54,20 +53,7 @@ export default function DashboardControlCenter({ canOpen, onNavigate }: {
   if (!data) return <div className={styles.state}><b>ยังไม่มีข้อมูลสำหรับแสดงผล</b></div>;
 
   const open = (page: DashboardTargetPage, filter?: DetailFilter) => canOpen(page) && onNavigate(page, filter);
-  const kpis = [
-    { label: "Stock พร้อมใช้", value: data.stock.availableQty, unit: "ชิ้น", tone: "blue", icon: "▣", page: "stock-all" as DashboardTargetPage, note: "อยู่ในพื้นที่ Stock และยังไม่ถูกจัดงาน" },
-    { label: "จัดงานรอส่ง", value: data.stock.arrangedQty, unit: "ชิ้น", tone: "orange", icon: "▤", page: "stock-all" as DashboardTargetPage, note: "ถูกจัดงานแล้ว แต่ยังไม่ขายออก" },
-    { label: "คงเหลือรวม", value: data.stock.totalQty, unit: "ชิ้น", tone: "red", icon: "▦", page: "stock-all" as DashboardTargetPage, note: "Stock พร้อมใช้ + จัดงานรอส่ง" },
-    { label: "Part เสี่ยงขาด", value: data.alerts.shortagePartCount, unit: "Part", tone: "purple", icon: "!", page: "forecast" as DashboardTargetPage, note: "Forecast คงค้างมากกว่า Stock พร้อมใช้" },
-  ];
-
   return <div className={styles.dashboard}>
-    <section className={styles.kpis} aria-label="สรุป KPI Stock">
-      {kpis.map((kpi) => <button key={kpi.label} type="button" className={styles[kpi.tone]} onClick={() => open(kpi.page)} disabled={!canOpen(kpi.page)}>
-        <i>{kpi.icon}</i><span><small>{kpi.label}</small><b>{fmt(kpi.value)}</b><em>{kpi.unit}</em><p>{kpi.note}</p></span><strong>›</strong>
-      </button>)}
-    </section>
-
     <DashboardOperationsFloor data={data} canOpen={canOpen} onOpen={open} />
 
     <footer className={styles.updated}>

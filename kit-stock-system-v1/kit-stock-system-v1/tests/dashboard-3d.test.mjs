@@ -5,13 +5,13 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 const read = (path) => readFile(new URL(path, root), "utf8");
 
-test("home dashboard keeps exactly four real-data KPI cards", async () => {
+test("home dashboard omits the top KPI card strip", async () => {
   const source = await read("app/dashboard-control-center.tsx");
   for (const label of ["Stock พร้อมใช้", "จัดงานรอส่ง", "คงเหลือรวม", "Part เสี่ยงขาด"]) {
-    assert.match(source, new RegExp(label));
+    assert.doesNotMatch(source, new RegExp(label));
   }
-  assert.match(source, /data\.stock\.totalQty/);
-  assert.match(source, /data\.alerts\.shortagePartCount/);
+  assert.doesNotMatch(source, /styles\.kpis/);
+  assert.match(source, /<DashboardOperationsFloor data=\{data\}/);
 });
 
 test("3D floor exposes all seven stations and routes Tag work through Production", async () => {
