@@ -22,17 +22,19 @@ test("3D floor exposes all seven stations and routes Tag work through Production
 });
 
 test("each 3D station pauses when idle and the user can disable animation", async () => {
-  const [source, css] = await Promise.all([
+  const [source, engine, css] = await Promise.all([
     read("app/dashboard-operations-floor.tsx"),
+    read("app/dashboard-operations-floor-3d.ts"),
     read("app/dashboard-operations-floor.module.css"),
   ]);
   assert.match(source, /setAnimationEnabled\(\(current\) => !current\)/);
   assert.match(source, /animationEnabled && station\.active/);
+  assert.match(source, /setActive\(stations\.map\(\(station\) => station\.active\)\)/);
   assert.match(source, /motion: "forklift"/);
   assert.match(source, /เปิด Animation/);
   assert.match(source, /ปิด Animation/);
-  assert.match(css, /animation-play-state:paused/);
-  assert.match(css, /@keyframes forkliftDrive/);
+  assert.match(source, /prefers-reduced-motion: reduce/);
+  assert.match(engine, /if \(!this\.st\.active \|\| dt === 0\)/);
   assert.match(css, /@media\(prefers-reduced-motion:reduce\)/);
 });
 
@@ -56,10 +58,16 @@ test("dashboard API derives total Stock without double counting", async () => {
   assert.match(source, /forecastQty - coalesce\(dispatched\.dispatchedQty, 0\)/);
 });
 
-test("responsive floor uses a compressed static WebP and horizontal mobile viewport", async () => {
-  const css = await read("app/dashboard-operations-floor.module.css");
-  const image = await readFile(new URL("public/dashboard/kit-operations-floor-v2.webp", root));
-  assert.match(css, /kit-operations-floor-v2\.webp/);
-  assert.match(css, /overflow-x:auto/);
-  assert.ok(image.byteLength < 300_000, `dashboard asset is too large: ${image.byteLength} bytes`);
+test("3D floor loads three.js lazily, falls back without WebGL and cleans up", async () => {
+  const [source, engine, pkg] = await Promise.all([
+    read("app/dashboard-operations-floor.tsx"),
+    read("app/dashboard-operations-floor-3d.ts"),
+    read("package.json"),
+  ]);
+  assert.match(source, /import\("\.\/dashboard-operations-floor-3d"\)/);
+  assert.doesNotMatch(source, /^import \* as THREE/m);
+  assert.match(source, /setWebglFailed\(true\)/);
+  assert.match(source, /engineRef\.current\?\.dispose\(\)/);
+  assert.match(engine, /renderer\.dispose\(\)/);
+  assert.match(JSON.parse(pkg).dependencies.three, /\d/);
 });
