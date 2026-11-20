@@ -3896,10 +3896,6 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     const receivedStockTags = stock.tags.filter((item) => item.status === "in_stock" || item.status === "depleted");
     const reserved = receivedStockTags.reduce((sum, item) => sum + Number(item.reservedQty), 0);
     const available = receivedStockTags.reduce((sum, item) => sum + Math.max(Number(item.remainingQty) - Number(item.reservedQty), 0), 0);
-    const awaitingReceipt = stock.tags.filter((item) => item.status === "printed").length;
-    const abnormalTags = stock.tags.filter((item) => item.status === "ng"
-      || Number(item.remainingQty) < 0 || Number(item.remainingQty) > Number(item.qty)
-      || Number(item.reservedQty) < 0 || Number(item.reservedQty) > Number(item.remainingQty));
     const ngQty = stock.tags.reduce((sum, item) => sum + Number(item.ngQty || 0), 0);
     const todayKey = bangkokDateTimeKey().slice(0, 10);
     const todayMovement = stock.movementDays.find((item) => item.date === todayKey) || { date: todayKey, receivedQty: 0, arrangedQty: 0, adjustedQty: 0 };
@@ -3916,12 +3912,6 @@ export default function DeliveryControlApp({ user, signOutPath, monitorMode = fa
     }));
     const trendMax = Math.max(...trendDays.flatMap((item) => [item.receivedQty, item.arrangedQty, Math.abs(item.adjustedQty)]), 1);
     return <div className="stock-home">
-      <div className="stock-stat-row page-summary">
-        <article className="stock-stat blue"><span>▦</span><div><small>Tag รอรับเข้า</small><b>{fmt(awaitingReceipt)}</b><em>ใบ</em></div><button onClick={() => { setTagSearch(""); setStockListExpanded(true); }}>ดูรายการ →</button></article>
-        <article className="stock-stat green"><span>▣</span><div><small>Stock พร้อมใช้</small><b>{fmt(available)}</b><em>ชิ้น · อยู่ในพื้นที่ Stock จริง</em></div><button onClick={() => { setTagSearch(""); setStockListExpanded(true); }}>ดูรายการ →</button></article>
-        <article className="stock-stat orange"><span>⇥</span><div><small>ถูกจัดงานแล้ว</small><b>{fmt(reserved)}</b><em>ชิ้น · ออกจากพื้นที่ Stock แล้ว</em></div><button onClick={() => go("arrange")}>ดูรายการ →</button></article>
-        <article className="stock-stat red"><span>!</span><div><small>Stock ผิดปกติ</small><b>{fmt(abnormalTags.length)}</b><em>รายการ</em></div><button onClick={() => { setTagSearch(""); setStockListExpanded(true); }}>ตรวจสอบ →</button></article>
-      </div>
       <div className="stock-main-grid">
         {canEditPage("stock") && <Card className="stock-receive-card" title={<span className="stock-card-title"><i>⌗</i> รับเข้า Stock (ชั้นวาง + Tag)</span>} action={<span className="stock-scanner-ready"><i /> {stockLocation ? `ชั้น ${stockLocation.code}` : "รอสแกนชั้น"}</span>}>
           {stockLocation ? <div className="stock-location-session"><div><small>ชั้นจัดเก็บที่กำลังรับเข้า</small><b>{stockLocation.code}</b><span>รองรับ {fmt(stockLocation.partCount)} Part · สแกน KIT Tag ทุกใบทีละใบ</span></div><button type="button" onClick={() => { setStockLocation(null); setStockLocationActivity(0); setStockScan(""); setLastStockReceipt(null); window.setTimeout(() => stockScanInputRef.current?.focus(), 50); }}>เปลี่ยนชั้นวาง</button></div> : <div className="stock-location-guide"><b>ขั้นตอนที่ 1 · สแกน QR หน้าชั้นวาง 1 ครั้ง</b><span>เมื่อเลือกชั้นแล้ว ให้สแกน KIT Tag ทุกกล่องทีละใบ ระบบจะรับเข้าเฉพาะ Tag ที่สแกนสำเร็จ</span><button type="button" onClick={() => void printStockLocationQrs()}>▦ พิมพ์ QR ชั้นวาง</button></div>}
