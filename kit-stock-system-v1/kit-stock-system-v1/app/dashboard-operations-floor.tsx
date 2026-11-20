@@ -1,7 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useRef, useState } from "react";
 import styles from "./dashboard-operations-floor.module.css";
+import type { ThreeSceneHandle } from "./dashboard-three-scene";
+
+const DashboardThreeScene = lazy(() => import("./dashboard-three-scene"));
 
 export type DashboardTargetPage = "plan" | "tags" | "stock" | "stock-all" | "arrange" | "dispatch" | "exports" | "forecast" | "history" | "overdue";
 
@@ -27,51 +30,16 @@ type Station = {
   motion: "office" | "machine" | "scanner" | "forklift" | "packing" | "verify" | "loading";
 };
 
-function Worker({ task }: { task: Station["motion"] }) {
-  return <svg className={`${styles.worker} ${styles[task]}`} viewBox="0 0 90 92" aria-hidden="true">
-    <ellipse className={styles.shadow} cx="45" cy="86" rx="24" ry="5" />
-    <g className={styles.workerBody}>
-      <circle className={styles.helmet} cx="45" cy="19" r="10" />
-      <path className={styles.helmetRim} d="M32 18h26" />
-      <rect className={styles.shirt} x="34" y="29" width="22" height="30" rx="8" />
-      <path className={styles.legLeft} d="M40 57 35 80" />
-      <path className={styles.legRight} d="M50 57 56 80" />
-      <path className={styles.armLeft} d="M36 35 22 50" />
-      <path className={styles.armRight} d="M54 35 68 49" />
-    </g>
-    {(task === "scanner" || task === "verify") && <><rect className={styles.handScanner} x="66" y="45" width="10" height="6" rx="2" /><path className={styles.scanBeam} d="M76 48h13" /></>}
-    {task === "machine" && <><rect className={styles.machineUnit} x="63" y="42" width="24" height="34" rx="4" /><rect className={styles.machineScreen} x="68" y="47" width="14" height="8" rx="1" /><path className={styles.tagPaper} d="M70 76v12h14V76" /></>}
-    {task === "office" && <><rect className={styles.desk} x="3" y="56" width="31" height="7" rx="2" /><rect className={styles.monitor} x="9" y="34" width="22" height="17" rx="2" /><path className={styles.chartLine} d="m12 47 5-5 4 3 7-7" /></>}
-    {(task === "packing" || task === "loading") && <rect className={styles.movingBox} x="66" y="53" width="20" height="18" rx="2" />}
-  </svg>;
-}
-
-function Forklift() {
-  return <svg className={styles.forklift} viewBox="0 0 132 74" aria-hidden="true">
-    <ellipse className={styles.shadow} cx="64" cy="67" rx="53" ry="5" />
-    <path className={styles.forkBody} d="M22 33h51l12 22H17z" />
-    <path className={styles.forkCab} d="M48 12h27l11 32H47z" />
-    <path className={styles.forkWindow} d="M54 17h16l8 21H53z" />
-    <circle className={styles.wheel} cx="35" cy="57" r="10" /><circle className={styles.wheel} cx="77" cy="57" r="10" />
-    <path className={styles.mast} d="M94 6v52m7-52v52m0-8h27" />
-    <rect className={styles.forkBox} x="106" y="30" width="22" height="20" rx="2" />
-  </svg>;
-}
-
-function MotionScene({ station, running }: { station: Station; running: boolean }) {
-  const motionClass = `${styles.motion} ${styles[`motion${station.number}`]} ${station.active ? styles.motionActive : styles.motionIdle} ${running ? styles.motionRunning : styles.motionStopped}`;
-  return <div className={motionClass} aria-hidden="true">
-    <span className={styles.activityGlow} />
-    {station.motion === "forklift" ? <Forklift /> : <Worker task={station.motion} />}
-  </div>;
-}
-
 export default function DashboardOperationsFloor({ data, canOpen, onOpen }: {
   data: FloorData;
   canOpen: (page: DashboardTargetPage) => boolean;
   onOpen: (page: DashboardTargetPage) => void;
 }) {
   const [animationEnabled, setAnimationEnabled] = useState(true);
+  const [animationSpeed, setAnimationSpeed] = useState<.5 | 1 | 2>(1);
+  const [tourEnabled, setTourEnabled] = useState(false);
+  const [labelsVisible, setLabelsVisible] = useState(true);
+  const sceneRef = useRef<ThreeSceneHandle>(null);
   const changeAnimation = () => setAnimationEnabled((current) => !current);
   const printedWaiting = Math.max(Number(data.process.tagQty || 0) - Number(data.process.receivedQty || 0), 0);
   const stations = useMemo<Station[]>(() => [
@@ -83,35 +51,52 @@ export default function DashboardOperationsFloor({ data, canOpen, onOpen }: {
     { number: 6, label: "ตรวจและขายออก", sub: "สแกน KIT Tag + Customer Tag", page: "dispatch", tone: "red", value: data.stock.arrangedQty ? `${fmt(data.stock.arrangedQty)} ชิ้นรอขายออก` : undefined, active: data.stock.arrangedQty > 0, motion: "verify" },
     { number: 7, label: "Delivery", sub: "ส่งมอบงานให้ลูกค้า", page: "exports", tone: "violet", value: data.kpis.completed ? `${fmt(data.kpis.completed)} Due ส่งแล้ว` : undefined, active: data.kpis.completed > 0, motion: "loading" },
   ], [data, printedWaiting]);
+  const activeStations = stations.filter((station) => station.active).length;
+  const activeWorkers = stations.filter((station) => station.active && station.motion !== "forklift").length;
 
   return <section className={styles.shell} aria-labelledby="operations-floor-title">
     <header className={styles.heading}>
       <div><small>KIT 3D OPERATIONS FLOOR</small><h3 id="operations-floor-title">ภาพรวมกระบวนการทำงาน Smart Factory</h3><p>สถานะเคลื่อนไหวอ้างอิงข้อมูลระบบ · เลือกสถานีเพื่อเปิดหน้าการทำงาน</p></div>
       <div className={styles.headingActions}>
         <span className={styles.systemStatus}><i /> สถานะจากข้อมูลระบบ</span>
-        <button type="button" className={styles.animationToggle} aria-pressed={animationEnabled} onClick={changeAnimation}><span>{animationEnabled ? "Ⅱ" : "▶"}</span>{animationEnabled ? "ปิด Animation" : "เปิด Animation"}</button>
+        <span className={styles.interactiveBadge}>WebGL 3D จริง</span>
       </div>
     </header>
 
-    <div className={styles.viewport}>
-      <div className={styles.floor} role="img" aria-label="โรงงานสามมิติแบบเคลื่อนไหว แสดงกระบวนการ Forecast ถึง Delivery จำนวน 7 สถานี">
-        <div className={styles.motionLayer}>{stations.map((station) => <MotionScene key={station.number} station={station} running={animationEnabled && station.active} />)}</div>
-        {stations.map((station) => {
-          const enabled = canOpen(station.page);
-          return <button
-            key={station.number}
-            type="button"
-            className={`${styles.hotspot} ${styles[`station${station.number}`]} ${styles[station.tone]} ${station.active ? styles.stationActive : styles.stationIdle}`}
-            disabled={!enabled}
-            onClick={() => onOpen(station.page)}
-            aria-label={`เปิดหน้า ${station.label} · ${station.active ? "มีงาน" : "ไม่มีงานขณะนี้"}`}
-          >
-            <b>{station.number}</b>
-            <span><strong>{station.label}</strong><small>{station.sub}</small>{station.value && <em>{station.value}</em>}<i>{station.active ? "● กำลังทำงาน" : "○ หยุดรอ"}</i></span>
-          </button>;
-        })}
+    <div className={styles.sceneStats} aria-label="สถานะโรงงานสามมิติ">
+      <div><small>สถานีที่มีงาน</small><b>{activeStations}<em> / 7 สถานี</em></b></div>
+      <div><small>พนักงานในพื้นที่</small><b>{activeWorkers}<em> คน</em></b></div>
+      <div><small>Stock คงคลัง</small><b>{fmt(data.stock.totalQty)}<em> ชิ้น</em></b></div>
+      <div><small>Due สำเร็จ</small><b>{fmt(data.kpis.completed)}<em> งาน</em></b></div>
+    </div>
+
+    <div className={styles.cameraToolbar} aria-label="ตัวควบคุมมุมมองโรงงานสามมิติ">
+      <div className={styles.playControls}>
+        <button type="button" className={styles.textControl} aria-pressed={!animationEnabled} onClick={changeAnimation}><span>{animationEnabled ? "Ⅱ" : "▶"}</span>{animationEnabled ? "หยุดชั่วคราว" : "เล่นต่อ"}</button>
+        <div className={styles.speedControls} aria-label="ความเร็ว Animation">{([.5, 1, 2] as const).map((speed) => <button type="button" key={speed} className={animationSpeed === speed ? styles.controlActive : ""} onClick={() => setAnimationSpeed(speed)}>{speed}×</button>)}</div>
+      </div>
+      <div className={styles.viewControls}>
+        <button type="button" className={styles.textControl} onClick={() => { sceneRef.current?.reset(); setTourEnabled(false); }}>⌂ ภาพรวม</button>
+        <button type="button" className={styles.textControl} onClick={() => { sceneRef.current?.top(); setTourEnabled(false); }}>▦ มุมบน</button>
+        <button type="button" className={`${styles.textControl} ${tourEnabled ? styles.controlActive : ""}`} aria-pressed={tourEnabled} onClick={() => setTourEnabled((current) => !current)}>◉ ทัวร์อัตโนมัติ</button>
+        <button type="button" className={`${styles.textControl} ${labelsVisible ? styles.controlActive : ""}`} aria-pressed={labelsVisible} onClick={() => setLabelsVisible((current) => !current)}>◇ ป้าย</button>
+        <button type="button" onClick={() => sceneRef.current?.zoom(-1)} aria-label="ซูมออก">−</button>
+        <button type="button" onClick={() => sceneRef.current?.zoom(1)} aria-label="ซูมเข้า">＋</button>
       </div>
     </div>
-    <div className={styles.floorLegend}><span><i className={styles.legendActive} />มีงาน — Animation ทำงาน</span><span><i />ไม่มีงาน — หยุดอัตโนมัติ</span><small>เลื่อนซ้าย–ขวาเพื่อดูครบทุกจุดบนมือถือ</small></div>
+
+    <Suspense fallback={<div className={styles.webglLoading}><span /><b>กำลังเตรียมโรงงาน 3D…</b></div>}>
+      <DashboardThreeScene
+        ref={sceneRef}
+        stations={stations}
+        animationEnabled={animationEnabled}
+        animationSpeed={animationSpeed}
+        tourEnabled={tourEnabled}
+        labelsVisible={labelsVisible}
+        canOpen={(page) => canOpen(page as DashboardTargetPage)}
+        onOpen={(page) => onOpen(page as DashboardTargetPage)}
+      />
+    </Suspense>
+    <div className={styles.floorLegend}><span><i className={styles.legendActive} />มีงาน — Animation ทำงาน</span><span><i />ไม่มีงาน — หยุดอัตโนมัติ</span><small>ลาก = หมุน · คลิกขวาลาก = เลื่อน · ล้อ = ซูม · คลิกสถานี = เปิดหน้าทำงาน</small></div>
   </section>;
 }
