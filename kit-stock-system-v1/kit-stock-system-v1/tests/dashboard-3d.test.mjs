@@ -29,8 +29,8 @@ test("each 3D station pauses when idle and the user can disable animation", asyn
   ]);
   assert.match(source, /setAnimationEnabled\(\(current\) => !current\)/);
   assert.match(source, /motion: "forklift"/);
-  assert.match(source, /เปิด Animation/);
-  assert.match(source, /ปิด Animation/);
+  assert.match(source, /หยุดชั่วคราว/);
+  assert.match(source, /เล่นต่อ/);
   assert.match(scene, /animationRef\.current && liveStations\.find/);
   assert.match(scene, /if \(active\)/);
   assert.match(css, /@media\(prefers-reduced-motion:reduce\)/);
@@ -55,6 +55,10 @@ test("real WebGL 3D floor supports drag rotation, zoom, reset, keyboard, and sta
   assert.match(scene, /createForklift/);
   assert.match(scene, /createTruck/);
   assert.match(scene, /createRack/);
+  assert.match(scene, /tourRef\.current/);
+  assert.match(scene, /pointer\.button === 2/);
+  assert.match(source, /\(\[\.5, 1, 2\] as const\)/);
+  for (const label of ["ภาพรวม", "มุมบน", "ทัวร์อัตโนมัติ", "ป้าย"]) assert.match(source, new RegExp(label));
   assert.match(css, /cursor:grab/);
   assert.match(css, /touch-action:none/);
 });

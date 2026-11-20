@@ -19,6 +19,7 @@ export type ThreeSceneHandle = {
   rotate: (amount: number) => void;
   zoom: (amount: number) => void;
   reset: () => void;
+  top: () => void;
 };
 
 type AnimatedStation = {
@@ -212,12 +213,17 @@ function createStationScene(station: ThreeStation, position: [number, number, nu
 const DashboardThreeScene = forwardRef<ThreeSceneHandle, {
   stations: ThreeStation[];
   animationEnabled: boolean;
+  animationSpeed: .5 | 1 | 2;
+  tourEnabled: boolean;
+  labelsVisible: boolean;
   canOpen: (page: string) => boolean;
   onOpen: (page: string) => void;
-}>(({ stations, animationEnabled, canOpen, onOpen }, ref) => {
+}>(({ stations, animationEnabled, animationSpeed, tourEnabled, labelsVisible, canOpen, onOpen }, ref) => {
   const hostRef = useRef<HTMLDivElement>(null);
   const stationsRef = useRef(stations);
   const animationRef = useRef(animationEnabled);
+  const speedRef = useRef(animationSpeed);
+  const tourRef = useRef(tourEnabled);
   const permissionsRef = useRef(canOpen);
   const openRef = useRef(onOpen);
   const cameraControlRef = useRef<ThreeSceneHandle | null>(null);
@@ -226,12 +232,15 @@ const DashboardThreeScene = forwardRef<ThreeSceneHandle, {
 
   stationsRef.current = stations;
   animationRef.current = animationEnabled;
+  speedRef.current = animationSpeed;
+  tourRef.current = tourEnabled;
   permissionsRef.current = canOpen;
   openRef.current = onOpen;
   useImperativeHandle(ref, () => ({
     rotate: (amount) => cameraControlRef.current?.rotate(amount),
     zoom: (amount) => cameraControlRef.current?.zoom(amount),
     reset: () => cameraControlRef.current?.reset(),
+    top: () => cameraControlRef.current?.top(),
   }), []);
 
   useEffect(() => {
@@ -273,7 +282,8 @@ const DashboardThreeScene = forwardRef<ThreeSceneHandle, {
     cameraControlRef.current = {
       rotate: (amount) => { orbit.theta += amount * .08; applyCamera(); },
       zoom: (amount) => { orbit.radius = THREE.MathUtils.clamp(orbit.radius - amount * 12, 18, 39); applyCamera(); },
-      reset: () => { Object.assign(orbit, CAMERA_HOME); applyCamera(); },
+      reset: () => { Object.assign(orbit, CAMERA_HOME); target.set(.7, 1.1, .4); applyCamera(); },
+      top: () => { orbit.theta = .01; orbit.phi = .22; orbit.radius = 35; target.set(.7, 0, .4); applyCamera(); },
     };
 
     scene.add(new THREE.HemisphereLight(0xffffff, 0x52749a, 2.4));
@@ -311,7 +321,7 @@ const DashboardThreeScene = forwardRef<ThreeSceneHandle, {
       scene.add(item.root);
     });
 
-    const pointer = { active: false, moved: false, id: -1, x: 0, y: 0, theta: 0, phi: 0 };
+    const pointer = { active: false, moved: false, id: -1, button: 0, x: 0, y: 0, theta: 0, phi: 0, targetX: 0, targetZ: 0 };
     const raycaster = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
     const setPointer = (event: PointerEvent) => {
@@ -322,10 +332,13 @@ const DashboardThreeScene = forwardRef<ThreeSceneHandle, {
       pointer.active = true;
       pointer.moved = false;
       pointer.id = event.pointerId;
+      pointer.button = event.button;
       pointer.x = event.clientX;
       pointer.y = event.clientY;
       pointer.theta = orbit.theta;
       pointer.phi = orbit.phi;
+      pointer.targetX = target.x;
+      pointer.targetZ = target.z;
       renderer.domElement.setPointerCapture(event.pointerId);
       renderer.domElement.classList.add(styles.webglDragging);
     };
@@ -334,13 +347,18 @@ const DashboardThreeScene = forwardRef<ThreeSceneHandle, {
       const dx = event.clientX - pointer.x;
       const dy = event.clientY - pointer.y;
       if (Math.abs(dx) + Math.abs(dy) > 5) pointer.moved = true;
-      orbit.theta = pointer.theta - dx * .007;
-      orbit.phi = THREE.MathUtils.clamp(pointer.phi + dy * .006, .52, 1.28);
+      if (pointer.button === 2) {
+        target.x = THREE.MathUtils.clamp(pointer.targetX - dx * .018, -5, 5);
+        target.z = THREE.MathUtils.clamp(pointer.targetZ - dy * .018, -3, 3);
+      } else {
+        orbit.theta = pointer.theta - dx * .007;
+        orbit.phi = THREE.MathUtils.clamp(pointer.phi + dy * .006, .52, 1.28);
+      }
       applyCamera();
     };
     const pointerUp = (event: PointerEvent) => {
       if (!pointer.active || pointer.id !== event.pointerId) return;
-      if (!pointer.moved) {
+      if (!pointer.moved && pointer.button === 0) {
         setPointer(event);
         raycaster.setFromCamera(ndc, camera);
         const hit = raycaster.intersectObjects([...stationRoots.values()], true).find((item) => item.object.userData.station);
@@ -357,6 +375,7 @@ const DashboardThreeScene = forwardRef<ThreeSceneHandle, {
       orbit.radius = THREE.MathUtils.clamp(orbit.radius + event.deltaY * .018, 18, 39);
       applyCamera();
     };
+    const contextMenu = (event: MouseEvent) => event.preventDefault();
     const keydown = (event: KeyboardEvent) => {
       if (event.key === "ArrowLeft") orbit.theta += .11;
       else if (event.key === "ArrowRight") orbit.theta -= .11;
@@ -373,13 +392,20 @@ const DashboardThreeScene = forwardRef<ThreeSceneHandle, {
     renderer.domElement.addEventListener("pointercancel", pointerUp);
     renderer.domElement.addEventListener("wheel", wheel, { passive: false });
     renderer.domElement.addEventListener("keydown", keydown);
+    renderer.domElement.addEventListener("contextmenu", contextMenu);
 
     const clock = new THREE.Clock();
+    let elapsed = 0;
     let frame = 0;
     const labelVector = new THREE.Vector3();
     const render = () => {
       frame = requestAnimationFrame(render);
-      const elapsed = clock.getElapsedTime();
+      const delta = Math.min(clock.getDelta(), .05);
+      elapsed += delta * speedRef.current;
+      if (tourRef.current) {
+        orbit.theta += delta * .17;
+        applyCamera();
+      }
       const liveStations = stationsRef.current;
       scene.updateMatrixWorld(true);
       camera.updateMatrixWorld(true);
@@ -432,6 +458,7 @@ const DashboardThreeScene = forwardRef<ThreeSceneHandle, {
       renderer.domElement.removeEventListener("pointercancel", pointerUp);
       renderer.domElement.removeEventListener("wheel", wheel);
       renderer.domElement.removeEventListener("keydown", keydown);
+      renderer.domElement.removeEventListener("contextmenu", contextMenu);
       cameraControlRef.current = null;
       scene.traverse((object) => {
         if (object instanceof THREE.Mesh) {
@@ -447,7 +474,7 @@ const DashboardThreeScene = forwardRef<ThreeSceneHandle, {
 
   return <div ref={hostRef} className={styles.webglHost}>
     {fallback && <div className={styles.webglFallback}><b>อุปกรณ์นี้ไม่รองรับ WebGL 3D</b><span>กรุณาเปิดด้วย Chrome, Edge หรือ Safari รุ่นล่าสุด</span></div>}
-    <div className={styles.webglLabels} aria-label="สถานีทำงานในโรงงานสามมิติ">
+    {labelsVisible && <div className={styles.webglLabels} aria-label="สถานีทำงานในโรงงานสามมิติ">
       {stations.map((station) => <button
         key={station.number}
         ref={(node) => { if (node) labelRefs.current.set(station.number, node); else labelRefs.current.delete(station.number); }}
@@ -456,7 +483,7 @@ const DashboardThreeScene = forwardRef<ThreeSceneHandle, {
         disabled={!canOpen(station.page)}
         onClick={() => onOpen(station.page)}
       ><b>{station.number}</b><span><strong>{station.label}</strong><small>{station.value || station.sub}</small><i>{station.active ? "● ทำงาน" : "○ หยุดรอ"}</i></span></button>)}
-    </div>
+    </div>}
   </div>;
 });
 

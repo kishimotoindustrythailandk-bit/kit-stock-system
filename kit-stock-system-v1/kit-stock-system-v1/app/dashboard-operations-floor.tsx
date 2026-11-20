@@ -36,6 +36,9 @@ export default function DashboardOperationsFloor({ data, canOpen, onOpen }: {
   onOpen: (page: DashboardTargetPage) => void;
 }) {
   const [animationEnabled, setAnimationEnabled] = useState(true);
+  const [animationSpeed, setAnimationSpeed] = useState<.5 | 1 | 2>(1);
+  const [tourEnabled, setTourEnabled] = useState(false);
+  const [labelsVisible, setLabelsVisible] = useState(true);
   const sceneRef = useRef<ThreeSceneHandle>(null);
   const changeAnimation = () => setAnimationEnabled((current) => !current);
   const printedWaiting = Math.max(Number(data.process.tagQty || 0) - Number(data.process.receivedQty || 0), 0);
@@ -48,6 +51,8 @@ export default function DashboardOperationsFloor({ data, canOpen, onOpen }: {
     { number: 6, label: "ตรวจและขายออก", sub: "สแกน KIT Tag + Customer Tag", page: "dispatch", tone: "red", value: data.stock.arrangedQty ? `${fmt(data.stock.arrangedQty)} ชิ้นรอขายออก` : undefined, active: data.stock.arrangedQty > 0, motion: "verify" },
     { number: 7, label: "Delivery", sub: "ส่งมอบงานให้ลูกค้า", page: "exports", tone: "violet", value: data.kpis.completed ? `${fmt(data.kpis.completed)} Due ส่งแล้ว` : undefined, active: data.kpis.completed > 0, motion: "loading" },
   ], [data, printedWaiting]);
+  const activeStations = stations.filter((station) => station.active).length;
+  const activeWorkers = stations.filter((station) => station.active && station.motion !== "forklift").length;
 
   return <section className={styles.shell} aria-labelledby="operations-floor-title">
     <header className={styles.heading}>
@@ -55,18 +60,28 @@ export default function DashboardOperationsFloor({ data, canOpen, onOpen }: {
       <div className={styles.headingActions}>
         <span className={styles.systemStatus}><i /> สถานะจากข้อมูลระบบ</span>
         <span className={styles.interactiveBadge}>WebGL 3D จริง</span>
-        <button type="button" className={styles.animationToggle} aria-pressed={animationEnabled} onClick={changeAnimation}><span>{animationEnabled ? "Ⅱ" : "▶"}</span>{animationEnabled ? "ปิด Animation" : "เปิด Animation"}</button>
       </div>
     </header>
 
+    <div className={styles.sceneStats} aria-label="สถานะโรงงานสามมิติ">
+      <div><small>สถานีที่มีงาน</small><b>{activeStations}<em> / 7 สถานี</em></b></div>
+      <div><small>พนักงานในพื้นที่</small><b>{activeWorkers}<em> คน</em></b></div>
+      <div><small>Stock คงคลัง</small><b>{fmt(data.stock.totalQty)}<em> ชิ้น</em></b></div>
+      <div><small>Due สำเร็จ</small><b>{fmt(data.kpis.completed)}<em> งาน</em></b></div>
+    </div>
+
     <div className={styles.cameraToolbar} aria-label="ตัวควบคุมมุมมองโรงงานสามมิติ">
-      <span>ลากพื้นที่ว่างเพื่อหมุน · เลื่อนเมาส์หรือกดปุ่มเพื่อซูม</span>
-      <div>
-        <button type="button" onClick={() => sceneRef.current?.rotate(-1)} aria-label="หมุนมุมมองไปทางซ้าย">↶</button>
+      <div className={styles.playControls}>
+        <button type="button" className={styles.textControl} aria-pressed={!animationEnabled} onClick={changeAnimation}><span>{animationEnabled ? "Ⅱ" : "▶"}</span>{animationEnabled ? "หยุดชั่วคราว" : "เล่นต่อ"}</button>
+        <div className={styles.speedControls} aria-label="ความเร็ว Animation">{([.5, 1, 2] as const).map((speed) => <button type="button" key={speed} className={animationSpeed === speed ? styles.controlActive : ""} onClick={() => setAnimationSpeed(speed)}>{speed}×</button>)}</div>
+      </div>
+      <div className={styles.viewControls}>
+        <button type="button" className={styles.textControl} onClick={() => { sceneRef.current?.reset(); setTourEnabled(false); }}>⌂ ภาพรวม</button>
+        <button type="button" className={styles.textControl} onClick={() => { sceneRef.current?.top(); setTourEnabled(false); }}>▦ มุมบน</button>
+        <button type="button" className={`${styles.textControl} ${tourEnabled ? styles.controlActive : ""}`} aria-pressed={tourEnabled} onClick={() => setTourEnabled((current) => !current)}>◉ ทัวร์อัตโนมัติ</button>
+        <button type="button" className={`${styles.textControl} ${labelsVisible ? styles.controlActive : ""}`} aria-pressed={labelsVisible} onClick={() => setLabelsVisible((current) => !current)}>◇ ป้าย</button>
         <button type="button" onClick={() => sceneRef.current?.zoom(-1)} aria-label="ซูมออก">−</button>
-        <button type="button" onClick={() => sceneRef.current?.reset()} aria-label="คืนมุมมองเริ่มต้น">⌂</button>
         <button type="button" onClick={() => sceneRef.current?.zoom(1)} aria-label="ซูมเข้า">＋</button>
-        <button type="button" onClick={() => sceneRef.current?.rotate(1)} aria-label="หมุนมุมมองไปทางขวา">↷</button>
       </div>
     </div>
 
@@ -75,10 +90,13 @@ export default function DashboardOperationsFloor({ data, canOpen, onOpen }: {
         ref={sceneRef}
         stations={stations}
         animationEnabled={animationEnabled}
+        animationSpeed={animationSpeed}
+        tourEnabled={tourEnabled}
+        labelsVisible={labelsVisible}
         canOpen={(page) => canOpen(page as DashboardTargetPage)}
         onOpen={(page) => onOpen(page as DashboardTargetPage)}
       />
     </Suspense>
-    <div className={styles.floorLegend}><span><i className={styles.legendActive} />มีงาน — Animation ทำงาน</span><span><i />ไม่มีงาน — หยุดอัตโนมัติ</span><small>มือถือใช้ปุ่มควบคุมมุมมอง หรือใช้นิ้วลากบริเวณพื้นที่ว่าง</small></div>
+    <div className={styles.floorLegend}><span><i className={styles.legendActive} />มีงาน — Animation ทำงาน</span><span><i />ไม่มีงาน — หยุดอัตโนมัติ</span><small>ลาก = หมุน · คลิกขวาลาก = เลื่อน · ล้อ = ซูม · คลิกสถานี = เปิดหน้าทำงาน</small></div>
   </section>;
 }
